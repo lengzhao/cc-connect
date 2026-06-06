@@ -291,6 +291,8 @@ type = "slack"
 [projects.platforms.options]
 bot_token = "xoxb-your-bot-token"
 app_token = "xapp-your-app-level-token"
+# Optional custom Slack Web API URL.
+api_url = "https://slack.example.com/api/"
 ```
 
 **Detailed guide:** [docs/slack.md](docs/slack.md)

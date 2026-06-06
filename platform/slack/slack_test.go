@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
 
@@ -57,7 +58,7 @@ func TestDownloadSlackFile_HTMLDetection(t *testing.T) {
 		t.Fatal("expected error for HTML response, got nil")
 	}
 	// Should detect HTML prefix
-	if err != nil && err.Error() == "" {
+	if err.Error() == "" {
 		t.Fatal("expected non-empty error message")
 	}
 }
@@ -178,6 +179,46 @@ func TestProcessSlackFileShares_ImageVsDoc(t *testing.T) {
 	}
 	if docs[0].MimeType != "text/plain" || string(docs[0].Data) != "hello" {
 		t.Errorf("unexpected text file: %+v", docs[0])
+	}
+}
+
+func TestNormalizeSlackAPIURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    map[string]any
+		want    string
+		wantErr bool
+	}{
+		{"default", map[string]any{}, slack.APIURL, false},
+		{"custom with api suffix", map[string]any{"api_url": "https://example.slack.com/api/"}, "https://example.slack.com/api/", false},
+		{"custom host only", map[string]any{"api_url": "https://example.slack.com"}, "https://example.slack.com/api/", false},
+		{"invalid scheme", map[string]any{"api_url": "ftp://example.com"}, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeSlackAPIURL(tt.opts)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("normalizeSlackAPIURL() err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewSlackAPIURL(t *testing.T) {
+	plat, err := New(map[string]any{
+		"bot_token": "xoxb-test",
+		"app_token": "xapp-test",
+		"api_url":   "https://corp.example.com",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+	if p.apiURL != "https://corp.example.com/api/" {
+		t.Fatalf("apiURL = %q", p.apiURL)
 	}
 }
 

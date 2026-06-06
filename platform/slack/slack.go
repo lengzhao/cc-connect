@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ type replyContext struct {
 type Platform struct {
 	botToken         string
 	appToken         string
+	apiURL           string
 	allowFrom        string
 	sessionScope     string // "user" (default) | "channel" | "thread"
 	client           *slack.Client
@@ -49,6 +51,10 @@ func New(opts map[string]any) (core.Platform, error) {
 	allowFrom, _ := opts["allow_from"].(string)
 	core.CheckAllowFrom("slack", allowFrom)
 	shareSessionInChannel, _ := opts["share_session_in_channel"].(bool)
+	apiURL, err := normalizeSlackAPIURL(opts)
+	if err != nil {
+		return nil, err
+	}
 	if botToken == "" || appToken == "" {
 		return nil, fmt.Errorf("slack: bot_token and app_token are required")
 	}
@@ -56,10 +62,35 @@ func New(opts map[string]any) (core.Platform, error) {
 	return &Platform{
 		botToken:         botToken,
 		appToken:         appToken,
+		apiURL:           apiURL,
 		allowFrom:        allowFrom,
 		sessionScope:     scope,
 		channelNameCache: make(map[string]string),
 	}, nil
+}
+
+// normalizeSlackAPIURL returns the Slack Web API base URL in the format
+// expected by slack-go. Custom endpoints may be specified as a host or /api URL.
+func normalizeSlackAPIURL(opts map[string]any) (string, error) {
+	raw, _ := opts["api_url"].(string)
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return slack.APIURL, nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return "", fmt.Errorf("slack: invalid api_url %q: must be a valid http(s) URL", raw)
+	}
+	path := strings.TrimSuffix(parsed.Path, "/")
+	if path == "" || !strings.HasSuffix(path, "/api") {
+		if path == "" {
+			path = "/api"
+		} else {
+			path += "/api"
+		}
+	}
+	parsed.Path = path + "/"
+	return parsed.String(), nil
 }
 
 // normalizeSessionScope resolves the configured session_scope option to one of
@@ -124,9 +155,14 @@ func (p *Platform) Name() string { return "slack" }
 func (p *Platform) Start(handler core.MessageHandler) error {
 	p.handler = handler
 
-	p.client = slack.New(p.botToken,
+	clientOpts := []slack.Option{
 		slack.OptionAppLevelToken(p.appToken),
-	)
+	}
+	if p.apiURL != slack.APIURL {
+		clientOpts = append(clientOpts, slack.OptionAPIURL(p.apiURL))
+		slog.Info("slack: using custom API URL", "api_url", p.apiURL)
+	}
+	p.client = slack.New(p.botToken, clientOpts...)
 	p.socket = socketmode.New(p.client)
 
 	ctx, cancel := context.WithCancel(context.Background())

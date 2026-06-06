@@ -173,6 +173,9 @@ type = "slack"
 [projects.platforms.options]
 bot_token = "xoxb-xxxxxxx..."
 app_token = "xapp-xxxxxxx..."
+# Optional: override Slack Web API base URL for proxy/custom deployments.
+# Accepts either "https://slack.example.com" or "https://slack.example.com/api/".
+api_url = "https://slack.example.com/api/"
 ```
 
 ### Token Reference

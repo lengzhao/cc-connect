@@ -67,6 +67,7 @@ The Slack platform was added in commit `eaec71f` with basic functionality:
 |--------|----------|-------------|
 | `bot_token` | Yes | Slack bot OAuth token |
 | `app_token` | Yes | Slack app-level token for Socket Mode |
+| `api_url` | No | Custom Slack Web API base URL. Host-only values are normalized to `/api/` |
 | `allow_from` | No | User allowlist |
 | `share_session_in_channel` | No | Share session across all users in channel |
 
