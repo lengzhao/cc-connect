@@ -71,9 +71,18 @@ The Slack platform was added in commit `eaec71f` with basic functionality:
 | `allow_from` | No | User allowlist |
 | `share_session_in_channel` | No | Share session across all users in channel |
 
+### 7. Block Kit Cards (UI Commands)
+
+- `CardSender` — `/help`, `/list`, `/model`, `/mode`, and other card-based commands render as Slack Block Kit messages instead of plain text
+- `CardNavigable` — button and select interactions update the original message in place via `chat.update`
+- `CardRefresher` — slow card actions (for example delete-mode) refresh asynchronously after the interaction ack
+- Callback values use the same `nav:` / `act:` / `perm:` / `askq:` / `cmd:` prefixes as Feishu cards
+- Requires interactivity enabled in the Slack app manifest (already present in `docs/slack-app-manifest.json`)
+
 ## Architecture Compliance
 
 All Slack-specific code lives in `platform/slack/`. Core uses interface-based capability checks:
+- `CardSender`, `CardNavigable`, `CardRefresher` for rich command UI
 - `ChannelNameResolver` for channel name lookup
 - `StartTyping()` via `TypingIndicator` interface (if implemented)
 - No hardcoded "slack" references in core/

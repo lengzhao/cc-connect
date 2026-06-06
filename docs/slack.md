@@ -237,6 +237,19 @@ cc-connect: Here's the project structure...
 
 ---
 
+## Interactive Command UI
+
+Commands such as `/help`, `/list`, `/model`, `/mode`, and `/lang` render as **Block Kit** messages with buttons and dropdowns instead of plain text. Clicking a button updates the original message in place (same behavior as Feishu interactive cards).
+
+Requirements:
+
+- **Interactivity** must be enabled in your Slack app settings (included in `docs/slack-app-manifest.json`)
+- Socket Mode must be running so `block_actions` callbacks reach cc-connect
+
+Delete-mode multi-select uses toggle buttons on Slack (Feishu uses native checkbox forms).
+
+---
+
 ## Architecture
 
 ```

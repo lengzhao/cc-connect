@@ -1086,6 +1086,8 @@ app_secret = "your-feishu-app-secret"
 #                         # "thread" (one session per Slack thread — a new top-level message starts
 #                         #  a fresh session, replies in the same thread continue it).
 #                         # 会话粒度："user"(默认) | "channel"(整个频道一个会话) | "thread"(每个 Slack 话题串一个会话)
+# reaction_emoji = "eyes"  # Emoji on incoming message (default eyes); set to "none" to disable / 收到消息时添加表情
+# done_emoji = "white_check_mark"  # Emoji when agent finishes (default ✅); set to "none" to disable / 处理完成后添加表情
 
 # A2A server (uncomment to enable / 取消注释以启用)
 # Exposes this project as an A2A JSON-RPC agent server.

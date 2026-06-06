@@ -26,23 +26,32 @@ func init() {
 }
 
 type replyContext struct {
-	channel   string
-	timestamp string // thread_ts for threading replies
+	channel    string
+	timestamp  string // thread_ts for threading replies
+	messageTS  string // triggering user message ts (for emoji reactions)
+	sessionKey string
 }
 
 type Platform struct {
-	botToken         string
-	appToken         string
-	apiURL           string
-	allowFrom        string
-	sessionScope     string // "user" (default) | "channel" | "thread"
-	client           *slack.Client
-	socket           *socketmode.Client
-	handler          core.MessageHandler
-	cancel           context.CancelFunc
-	channelNameCache map[string]string
-	channelCacheMu   sync.RWMutex
-	userNameCache    sync.Map // userID -> display name
+	botToken              string
+	appToken              string
+	apiURL                string
+	allowFrom             string
+	sessionScope          string // "user" (default) | "channel" | "thread"
+	reactionEmoji         string // emoji on incoming message (default eyes)
+	doneEmoji             string // emoji when processing completes (default white_check_mark)
+	client                *slack.Client
+	socket                *socketmode.Client
+	handler               core.MessageHandler
+	cardNavHandler        core.CardNavigationHandler
+	cancel                context.CancelFunc
+	channelNameCache      map[string]string
+	channelCacheMu        sync.RWMutex
+	userNameCache         sync.Map // userID -> display name
+	cardMsgMu             sync.Mutex
+	cardMsgRefs           map[string]cardMessageRef
+	interactiveAckMu      sync.Mutex
+	interactiveAckPayload any
 }
 
 func New(opts map[string]any) (core.Platform, error) {
@@ -59,12 +68,28 @@ func New(opts map[string]any) (core.Platform, error) {
 		return nil, fmt.Errorf("slack: bot_token and app_token are required")
 	}
 	scope := normalizeSessionScope(opts["session_scope"], shareSessionInChannel)
+	reactionEmoji, _ := opts["reaction_emoji"].(string)
+	if reactionEmoji == "" {
+		reactionEmoji = "eyes"
+	}
+	if v, ok := opts["reaction_emoji"].(string); ok && v == "none" {
+		reactionEmoji = ""
+	}
+	doneEmoji, _ := opts["done_emoji"].(string)
+	if doneEmoji == "" {
+		doneEmoji = "white_check_mark"
+	}
+	if v, ok := opts["done_emoji"].(string); ok && v == "none" {
+		doneEmoji = ""
+	}
 	return &Platform{
 		botToken:         botToken,
 		appToken:         appToken,
 		apiURL:           apiURL,
 		allowFrom:        allowFrom,
 		sessionScope:     scope,
+		reactionEmoji:    reactionEmoji,
+		doneEmoji:        doneEmoji,
 		channelNameCache: make(map[string]string),
 	}, nil
 }
@@ -240,6 +265,11 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 				if content == "" && len(images) == 0 && audio == nil && len(docFiles) == 0 {
 					return
 				}
+				rc := replyContext{
+					channel: ev.Channel, timestamp: threadTS,
+					messageTS: ev.TimeStamp, sessionKey: sessionKey,
+				}
+				p.reactReceived(rc)
 				msg := &core.Message{
 					SessionKey: sessionKey, Platform: "slack",
 					UserID: ev.User, UserName: p.resolveUserName(ev.User),
@@ -249,7 +279,7 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 					Files:     docFiles,
 					Audio:     audio,
 					MessageID: ev.TimeStamp,
-					ReplyCtx:  replyContext{channel: ev.Channel, timestamp: threadTS},
+					ReplyCtx:  rc,
 				}
 				p.handler(p, msg)
 
@@ -304,13 +334,18 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 					return
 				}
 
+				rc := replyContext{
+					channel: ev.Channel, timestamp: threadTS,
+					messageTS: ts, sessionKey: sessionKey,
+				}
+				p.reactReceived(rc)
 				msg := &core.Message{
 					SessionKey: sessionKey, Platform: "slack",
 					UserID: ev.User, UserName: p.resolveUserName(ev.User),
 					ChatName: p.resolveChannelNameForMsg(ev.Channel),
 					Content:  ev.Text, Images: images, Files: docFiles, Audio: audio,
 					MessageID: ts,
-					ReplyCtx:  replyContext{channel: ev.Channel, timestamp: threadTS},
+					ReplyCtx:  rc,
 				}
 				p.handler(p, msg)
 			}
@@ -345,10 +380,13 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 			SessionKey: sessionKey, Platform: "slack",
 			UserID: cmd.UserID, UserName: cmd.UserName,
 			Content:  content,
-			ReplyCtx: replyContext{channel: cmd.ChannelID},
+			ReplyCtx: replyContext{channel: cmd.ChannelID, sessionKey: sessionKey},
 		}
 		slog.Debug("slack: slash command", "command", cmd.Command, "text", cmd.Text, "user", cmd.UserID)
 		p.handler(p, msg)
+
+	case socketmode.EventTypeInteractive:
+		p.handleInteractive(evt)
 
 	case socketmode.EventTypeConnecting:
 		slog.Debug("slack: connecting...")
@@ -548,6 +586,11 @@ func (p *Platform) SendImage(ctx context.Context, rctx any, img core.ImageAttach
 }
 
 var _ core.ImageSender = (*Platform)(nil)
+var _ core.CardSender = (*Platform)(nil)
+var _ core.CardNavigable = (*Platform)(nil)
+var _ core.CardRefresher = (*Platform)(nil)
+var _ core.TypingIndicator = (*Platform)(nil)
+var _ core.TypingIndicatorDone = (*Platform)(nil)
 var _ core.ObserverTarget = (*Platform)(nil)
 
 // SendObservation implements core.ObserverTarget for terminal session observation.
@@ -627,7 +670,7 @@ func (p *Platform) ReconstructReplyCtx(sessionKey string) (any, error) {
 	if len(parts) < 2 || parts[0] != "slack" {
 		return nil, fmt.Errorf("slack: invalid session key %q", sessionKey)
 	}
-	rc := replyContext{channel: parts[1]}
+	rc := replyContext{channel: parts[1], sessionKey: sessionKey}
 	// Thread-scoped keys carry the thread root ts as a "t:<ts>" suffix; preserve
 	// it so proactive replies (cron, send-to-session, restart/model/delete
 	// notifications) post into the original thread instead of the channel root.
@@ -701,22 +744,20 @@ func (p *Platform) FormattingInstructions() string {
 - Do NOT use ## headings — Slack does not render them. Use *bold text* on its own line instead.`
 }
 
-// StartTyping adds emoji reactions to the user's message as a heartbeat
-// indicator so the user knows the bot is still working.
-//
-// Timeline:
-//   - Immediately: eyes
-//   - After 2 minutes: clock
-//   - Every 5 minutes after that: one more emoji (sequential from extras list)
-//
-// All reactions are removed when the returned stop function is called.
+// StartTyping adds progressive emoji reactions while the agent is still working.
+// The initial 👀 reaction is added synchronously by reactReceived before the
+// engine handler runs. The stop function removes progress emojis and clears 👀
+// when no done reaction will follow (e.g. rich-card turns).
 func (p *Platform) StartTyping(ctx context.Context, rctx any) (stop func()) {
 	rc, ok := rctx.(replyContext)
-	if !ok || rc.channel == "" || rc.timestamp == "" {
+	if !ok {
+		return func() {}
+	}
+	ref, ok := p.messageReactionRef(rc)
+	if !ok {
 		return func() {}
 	}
 
-	ref := slack.ItemRef{Channel: rc.channel, Timestamp: rc.timestamp}
 	var mu sync.Mutex
 	var added []string
 
@@ -729,9 +770,6 @@ func (p *Platform) StartTyping(ctx context.Context, rctx any) (stop func()) {
 		added = append(added, emoji)
 		mu.Unlock()
 	}
-
-	// Immediately add eyes
-	addReaction("eyes")
 
 	extras := []string{
 		"hourglass_flowing_sand", "hourglass", "gear", "hammer_and_wrench",
@@ -784,7 +822,45 @@ func (p *Platform) StartTyping(ctx context.Context, rctx any) (stop func()) {
 				slog.Debug("slack: remove reaction failed", "emoji", emoji, "error", err)
 			}
 		}
+		if p.reactionEmoji != "" {
+			if err := p.client.RemoveReaction(p.reactionEmoji, ref); err != nil {
+				slog.Debug("slack: remove received reaction failed", "emoji", p.reactionEmoji, "error", err)
+			}
+		}
 	}
+}
+
+// AddDoneReaction adds a completion emoji (default ✅) on the user's message.
+func (p *Platform) AddDoneReaction(rctx any) {
+	if p.doneEmoji == "" {
+		return
+	}
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return
+	}
+	go p.addMessageReaction(rc, p.doneEmoji)
+}
+
+func (p *Platform) messageReactionRef(rc replyContext) (slack.ItemRef, bool) {
+	if rc.channel == "" || rc.messageTS == "" {
+		return slack.ItemRef{}, false
+	}
+	return slack.ItemRef{Channel: rc.channel, Timestamp: rc.messageTS}, true
+}
+
+func (p *Platform) addMessageReaction(rc replyContext, emoji string) {
+	ref, ok := p.messageReactionRef(rc)
+	if !ok || emoji == "" || p.client == nil {
+		return
+	}
+	if err := p.client.AddReaction(emoji, ref); err != nil {
+		slog.Debug("slack: add reaction failed", "emoji", emoji, "error", err)
+	}
+}
+
+func (p *Platform) reactReceived(rc replyContext) {
+	p.addMessageReaction(rc, p.reactionEmoji)
 }
 
 func (p *Platform) Stop() error {
