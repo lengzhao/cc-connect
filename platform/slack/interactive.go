@@ -78,9 +78,20 @@ func (p *Platform) handleBlockAction(callback slack.InteractionCallback, action 
 		return
 	}
 
-	actionVal, sessionKey, _ := decodeActionValue(actionVal)
+	actionVal, sessionKey, lang, _ := decodeActionValue(actionVal)
 	if sessionKey == "" {
 		sessionKey = p.sessionKeyFromInteractive(callback)
+	}
+	if lang == "" {
+		lang = p.langFromActionValue(sessionKey, action.Value)
+	} else {
+		p.setSessionLang(sessionKey, lang)
+	}
+	if lang == "" {
+		if _, userLang := p.cachedUserInfo(callback.User.ID); userLang != "" {
+			lang = userLang
+			p.setSessionLang(sessionKey, lang)
+		}
 	}
 
 	channelID := callback.Channel.ID
@@ -98,15 +109,15 @@ func (p *Platform) handleBlockAction(callback slack.InteractionCallback, action 
 	}
 
 	if strings.HasPrefix(actionVal, "nav:") || strings.HasPrefix(actionVal, "act:") {
-		p.handleNavOrActAction(callback, actionVal, sessionKey, channelID, messageTS, threadTS)
+		p.handleNavOrActAction(callback, actionVal, sessionKey, lang, channelID, messageTS, threadTS)
 		return
 	}
 	if strings.HasPrefix(actionVal, "perm:") {
-		p.handlePermAction(callback, actionVal, sessionKey, channelID, messageTS, threadTS, action.Value)
+		p.handlePermAction(callback, actionVal, sessionKey, lang, channelID, messageTS, threadTS, action.Value)
 		return
 	}
 	if strings.HasPrefix(actionVal, "askq:") {
-		p.handleAskQAction(callback, actionVal, sessionKey, channelID, messageTS, threadTS, action.Value)
+		p.handleAskQAction(callback, actionVal, sessionKey, lang, channelID, messageTS, threadTS, action.Value)
 		return
 	}
 	if strings.HasPrefix(actionVal, "cmd:") {
@@ -124,11 +135,12 @@ func (p *Platform) sessionKeyFromInteractive(callback slack.InteractionCallback)
 
 func (p *Platform) handleNavOrActAction(
 	callback slack.InteractionCallback,
-	actionVal, sessionKey, channelID, messageTS, threadTS string,
+	actionVal, sessionKey, lang, channelID, messageTS, threadTS string,
 ) {
 	if p.cardNavHandler == nil {
 		return
 	}
+	p.syncLangFromCardAction(sessionKey, actionVal)
 
 	done := make(chan *core.Card, 1)
 	go func() {
@@ -141,7 +153,7 @@ func (p *Platform) handleNavOrActAction(
 			return
 		}
 		ref := cardMessageRef{channel: channelID, ts: messageTS, threadTS: threadTS}
-		if err := p.updateCardMessage(context.Background(), ref, card, sessionKey); err != nil {
+		if err := p.updateCardMessage(context.Background(), ref, card, sessionKey, lang); err != nil {
 			slog.Warn("slack: card action update failed", "action", actionVal, "error", err)
 			return
 		}
@@ -158,14 +170,14 @@ func (p *Platform) handleNavOrActAction(
 		}()
 		p.setInteractiveAckPayload(map[string]any{
 			"response_type": "ephemeral",
-			"text":          "⏳ Loading... / 加载中...",
+			"text":          slackCardLoadingText(lang),
 		})
 	}
 }
 
 func (p *Platform) handlePermAction(
 	callback slack.InteractionCallback,
-	actionVal, sessionKey, channelID, messageTS, threadTS, rawValue string,
+	actionVal, sessionKey, lang, channelID, messageTS, threadTS, rawValue string,
 ) {
 	var responseText string
 	switch actionVal {
@@ -179,11 +191,12 @@ func (p *Platform) handlePermAction(
 		return
 	}
 
-	_, _, extra := decodeActionValue(rawValue)
+	_, _, _, extra := decodeActionValue(rawValue)
 	rctx := replyContext{
 		channel:    channelID,
 		timestamp:  threadTS,
 		sessionKey: sessionKey,
+		lang:       lang,
 	}
 	if p.handler != nil {
 		go p.handler(p, &core.Message{
@@ -208,20 +221,21 @@ func (p *Platform) handlePermAction(
 	}
 	card := cb.Build()
 	ref := cardMessageRef{channel: channelID, ts: messageTS, threadTS: threadTS}
-	if err := p.updateCardMessage(context.Background(), ref, card, sessionKey); err != nil {
+	if err := p.updateCardMessage(context.Background(), ref, card, sessionKey, lang); err != nil {
 		slog.Warn("slack: perm card update failed", "error", err)
 	}
 }
 
 func (p *Platform) handleAskQAction(
 	callback slack.InteractionCallback,
-	actionVal, sessionKey, channelID, messageTS, threadTS, rawValue string,
+	actionVal, sessionKey, lang, channelID, messageTS, threadTS, rawValue string,
 ) {
-	_, _, extra := decodeActionValue(rawValue)
+	_, _, _, extra := decodeActionValue(rawValue)
 	rctx := replyContext{
 		channel:    channelID,
 		timestamp:  threadTS,
 		sessionKey: sessionKey,
+		lang:       lang,
 	}
 	if p.handler != nil {
 		go p.handler(p, &core.Message{
@@ -240,14 +254,15 @@ func (p *Platform) handleAskQAction(
 	if answerLabel == "" {
 		answerLabel = actionVal
 	}
+	selected := slackAskQuestionSelectedText(lang)
 	cb := core.NewCard().Title("✅ "+answerLabel, "green")
 	if question != "" {
 		cb.Markdown(question)
 	}
-	cb.Markdown("**→ " + answerLabel + "**")
+	cb.Markdown("**" + selected + " → " + answerLabel + "**")
 	card := cb.Build()
 	ref := cardMessageRef{channel: channelID, ts: messageTS, threadTS: threadTS}
-	if err := p.updateCardMessage(context.Background(), ref, card, sessionKey); err != nil {
+	if err := p.updateCardMessage(context.Background(), ref, card, sessionKey, lang); err != nil {
 		slog.Warn("slack: askq card update failed", "error", err)
 	}
 }
@@ -267,6 +282,7 @@ func (p *Platform) handleCmdAction(
 		channel:    channelID,
 		timestamp:  threadTS,
 		sessionKey: sessionKey,
+		lang:       p.langForSession(sessionKey),
 	}
 	slog.Info("slack: card action dispatched as command", "cmd", cmdText, "user", callback.User.ID)
 	go p.handler(p, &core.Message{

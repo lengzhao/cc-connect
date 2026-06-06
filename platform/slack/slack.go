@@ -30,6 +30,7 @@ type replyContext struct {
 	timestamp  string // thread_ts for threading replies
 	messageTS  string // triggering user message ts (for emoji reactions)
 	sessionKey string
+	lang       string // normalized UI language for this session
 }
 
 type Platform struct {
@@ -47,7 +48,8 @@ type Platform struct {
 	cancel                context.CancelFunc
 	channelNameCache      map[string]string
 	channelCacheMu        sync.RWMutex
-	userNameCache         sync.Map // userID -> display name
+	userInfoCache         sync.Map // userID -> slackUserInfo (display name + Slack locale)
+	sessionLang           sync.Map // sessionKey -> normalized language code
 	cardMsgMu             sync.Mutex
 	cardMsgRefs           map[string]cardMessageRef
 	interactiveAckMu      sync.Mutex
@@ -265,9 +267,10 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 				if content == "" && len(images) == 0 && audio == nil && len(docFiles) == 0 {
 					return
 				}
+				lang := p.rememberSessionLang(sessionKey, ev.User, content)
 				rc := replyContext{
 					channel: ev.Channel, timestamp: threadTS,
-					messageTS: ev.TimeStamp, sessionKey: sessionKey,
+					messageTS: ev.TimeStamp, sessionKey: sessionKey, lang: lang,
 				}
 				p.reactReceived(rc)
 				msg := &core.Message{
@@ -334,9 +337,10 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 					return
 				}
 
+				lang := p.rememberSessionLang(sessionKey, ev.User, ev.Text)
 				rc := replyContext{
 					channel: ev.Channel, timestamp: threadTS,
-					messageTS: ts, sessionKey: sessionKey,
+					messageTS: ts, sessionKey: sessionKey, lang: lang,
 				}
 				p.reactReceived(rc)
 				msg := &core.Message{
@@ -375,12 +379,15 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 		}
 
 		sessionKey := p.buildSessionKey(cmd.ChannelID, cmd.UserID, "")
+		lang := p.rememberSessionLang(sessionKey, cmd.UserID, content)
 
 		msg := &core.Message{
 			SessionKey: sessionKey, Platform: "slack",
 			UserID: cmd.UserID, UserName: cmd.UserName,
-			Content:  content,
-			ReplyCtx: replyContext{channel: cmd.ChannelID, sessionKey: sessionKey},
+			Content: content,
+			ReplyCtx: replyContext{
+				channel: cmd.ChannelID, sessionKey: sessionKey, lang: lang,
+			},
 		}
 		slog.Debug("slack: slash command", "command", cmd.Command, "text", cmd.Text, "user", cmd.UserID)
 		p.handler(p, msg)
@@ -680,23 +687,36 @@ func (p *Platform) ReconstructReplyCtx(sessionKey string) (any, error) {
 	return rc, nil
 }
 
-func (p *Platform) resolveUserName(userID string) string {
-	if cached, ok := p.userNameCache.Load(userID); ok {
-		return cached.(string)
+func (p *Platform) cachedUserInfo(userID string) (name, lang string) {
+	if userID == "" {
+		return "", ""
+	}
+	if cached, ok := p.userInfoCache.Load(userID); ok {
+		info := cached.(slackUserInfo)
+		return info.name, info.lang
+	}
+	if p.client == nil {
+		return userID, ""
 	}
 	user, err := p.client.GetUserInfo(userID)
 	if err != nil {
-		slog.Debug("slack: resolve user name failed", "user", userID, "error", err)
-		return userID
+		slog.Debug("slack: resolve user info failed", "user", userID, "error", err)
+		return userID, ""
 	}
-	name := user.RealName
+	name = user.RealName
 	if name == "" {
 		name = user.Profile.DisplayName
 	}
 	if name == "" {
 		name = userID
 	}
-	p.userNameCache.Store(userID, name)
+	lang = mapSlackUserLocale(user.Locale)
+	p.userInfoCache.Store(userID, slackUserInfo{name: name, lang: lang})
+	return name, lang
+}
+
+func (p *Platform) resolveUserName(userID string) string {
+	name, _ := p.cachedUserInfo(userID)
 	return name
 }
 

@@ -248,6 +248,8 @@ Requirements:
 
 Delete-mode multi-select uses toggle buttons on Slack (Feishu uses native checkbox forms).
 
+Platform UI strings (loading toasts, ask-question confirmations) follow the user's language. Detection priority: explicit `/lang`, natural-language message content, session cache, then Slack `users.info` `locale` (client language setting, not display name). Supported locales match the engine (`en`, `zh`, `zh-TW`, `ja`, `es`).
+
 ---
 
 ## Architecture

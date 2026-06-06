@@ -9,9 +9,9 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func decodeRenderedBlocks(t *testing.T, card *core.Card, sessionKey string) []map[string]any {
+func decodeRenderedBlocks(t *testing.T, card *core.Card, sessionKey, lang string) []map[string]any {
 	t.Helper()
-	blocks := renderCardBlocks(card, sessionKey)
+	blocks := renderCardBlocks(card, sessionKey, lang)
 	raw, err := json.Marshal(blocks)
 	if err != nil {
 		t.Fatalf("marshal blocks: %v", err)
@@ -43,15 +43,18 @@ func TestPlatformImplementsCardInterfaces(t *testing.T) {
 }
 
 func TestEncodeDecodeActionValue(t *testing.T) {
-	raw := encodeActionValue("nav:/help session", "slack:C1:U1", map[string]string{
+	raw := encodeActionValue("nav:/help session", "slack:C1:U1", "zh", map[string]string{
 		"perm_label": "ok",
 	})
-	action, sessionKey, extra := decodeActionValue(raw)
+	action, sessionKey, lang, extra := decodeActionValue(raw)
 	if action != "nav:/help session" {
 		t.Fatalf("action = %q", action)
 	}
 	if sessionKey != "slack:C1:U1" {
 		t.Fatalf("sessionKey = %q", sessionKey)
+	}
+	if lang != "zh" {
+		t.Fatalf("lang = %q", lang)
 	}
 	if extra["perm_label"] != "ok" {
 		t.Fatalf("extra = %#v", extra)
@@ -65,7 +68,7 @@ func TestRenderCardBlocks_HeaderAndButtons(t *testing.T) {
 		Buttons(core.PrimaryBtn("Sessions", "nav:/help session")).
 		Build()
 
-	blocks := decodeRenderedBlocks(t, card, "slack:C1:U1")
+	blocks := decodeRenderedBlocks(t, card, "slack:C1:U1", "en")
 	if len(blocks) < 3 {
 		t.Fatalf("blocks = %#v, want at least 3", blocks)
 	}
@@ -88,9 +91,9 @@ func TestRenderCardBlocks_HeaderAndButtons(t *testing.T) {
 	if !ok {
 		t.Fatalf("button value = %#v", btn["value"])
 	}
-	action, sessionKey, _ := decodeActionValue(value)
-	if action != "nav:/help session" || sessionKey != "slack:C1:U1" {
-		t.Fatalf("decoded = %q %q", action, sessionKey)
+	action, sessionKey, lang, _ := decodeActionValue(value)
+	if action != "nav:/help session" || sessionKey != "slack:C1:U1" || lang != "en" {
+		t.Fatalf("decoded = %q %q %q", action, sessionKey, lang)
 	}
 }
 
@@ -102,7 +105,7 @@ func TestRenderCardBlocks_EqualColumnsSplitRows(t *testing.T) {
 		core.DefaultBtn("D", "nav:/help system"),
 	).Build()
 
-	blocks := decodeRenderedBlocks(t, card, "")
+	blocks := decodeRenderedBlocks(t, card, "", "en")
 	actionCount := 0
 	for _, block := range blocks {
 		if block["type"] == "actions" {
@@ -119,7 +122,7 @@ func TestRenderCardBlocks_ListItemAccessory(t *testing.T) {
 		ListItemBtn("session summary", "#1", "primary", "act:/switch 1").
 		Build()
 
-	blocks := decodeRenderedBlocks(t, card, "slack:C:U")
+	blocks := decodeRenderedBlocks(t, card, "slack:C:U", "zh")
 	if len(blocks) != 1 {
 		t.Fatalf("blocks = %#v", blocks)
 	}

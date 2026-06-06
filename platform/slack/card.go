@@ -27,10 +27,13 @@ func nextCardActionID() string {
 	return fmt.Sprintf("%s%d", cardActionIDPrefix, atomic.AddUint64(&cardActionSeq, 1))
 }
 
-func encodeActionValue(action, sessionKey string, extra map[string]string) string {
+func encodeActionValue(action, sessionKey, lang string, extra map[string]string) string {
 	payload := map[string]string{"action": action}
 	if sessionKey != "" {
 		payload["session_key"] = sessionKey
+	}
+	if lang != "" {
+		payload["lang"] = normalizeSlackLang(lang)
 	}
 	for k, v := range extra {
 		if k == "" || v == "" {
@@ -46,20 +49,21 @@ func encodeActionValue(action, sessionKey string, extra map[string]string) strin
 	return string(b)
 }
 
-func decodeActionValue(raw string) (action, sessionKey string, extra map[string]string) {
+func decodeActionValue(raw string) (action, sessionKey, lang string, extra map[string]string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", "", nil
+		return "", "", "", nil
 	}
 	var payload map[string]string
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return raw, "", nil
+		return raw, "", "", nil
 	}
 	action = payload["action"]
 	sessionKey = payload["session_key"]
+	lang = payload["lang"]
 	extra = make(map[string]string, len(payload))
 	for k, v := range payload {
-		if k == "action" || k == "session_key" {
+		if k == "action" || k == "session_key" || k == "lang" {
 			continue
 		}
 		extra[k] = v
@@ -67,7 +71,7 @@ func decodeActionValue(raw string) (action, sessionKey string, extra map[string]
 	if len(extra) == 0 {
 		extra = nil
 	}
-	return action, sessionKey, extra
+	return action, sessionKey, lang, extra
 }
 
 func slackButtonStyle(btnType string) slack.Style {
@@ -89,10 +93,10 @@ func mrkdwnBlock(text string) *slack.TextBlockObject {
 	return slack.NewTextBlockObject(slack.MarkdownType, core.MarkdownToSlackMrkdwn(text), false, false)
 }
 
-func newButtonElement(text, btnType, action, sessionKey string, extra map[string]string) *slack.ButtonBlockElement {
+func newButtonElement(text, btnType, action, sessionKey, lang string, extra map[string]string) *slack.ButtonBlockElement {
 	btn := slack.NewButtonBlockElement(
 		nextCardActionID(),
-		encodeActionValue(action, sessionKey, extra),
+		encodeActionValue(action, sessionKey, lang, extra),
 		plainTextBlock(text),
 	)
 	if style := slackButtonStyle(btnType); style != "" {
@@ -101,7 +105,10 @@ func newButtonElement(text, btnType, action, sessionKey string, extra map[string
 	return btn
 }
 
-func renderCardBlocks(card *core.Card, sessionKey string) []slack.Block {
+func renderCardBlocks(card *core.Card, sessionKey, lang string) []slack.Block {
+	if lang == "" {
+		lang = "en"
+	}
 	if card == nil {
 		return []slack.Block{
 			slack.NewSectionBlock(mrkdwnBlock(" "), nil, nil),
@@ -123,13 +130,13 @@ func renderCardBlocks(card *core.Card, sessionKey string) []slack.Block {
 		case core.CardDivider:
 			blocks = append(blocks, slack.NewDividerBlock())
 		case core.CardActions:
-			appendActionBlock(&blocks, e, sessionKey)
+			appendActionBlock(&blocks, e, sessionKey, lang)
 		case core.CardListItem:
 			btnType := e.BtnType
 			if btnType == "" {
 				btnType = "default"
 			}
-			accessory := slack.NewAccessory(newButtonElement(e.BtnText, btnType, e.BtnValue, sessionKey, e.Extra))
+			accessory := slack.NewAccessory(newButtonElement(e.BtnText, btnType, e.BtnValue, sessionKey, lang, e.Extra))
 			blocks = append(blocks, slack.NewSectionBlock(mrkdwnBlock(e.Text), nil, accessory))
 		case core.CardSelect:
 			if len(e.Options) == 0 {
@@ -142,7 +149,7 @@ func renderCardBlocks(card *core.Card, sessionKey string) []slack.Block {
 			options := make([]*slack.OptionBlockObject, 0, len(e.Options))
 			for _, opt := range e.Options {
 				options = append(options, slack.NewOptionBlockObject(
-					encodeActionValue(opt.Value, sessionKey, nil),
+					encodeActionValue(opt.Value, sessionKey, lang, nil),
 					plainTextBlock(opt.Text),
 					nil,
 				))
@@ -157,7 +164,7 @@ func renderCardBlocks(card *core.Card, sessionKey string) []slack.Block {
 				for _, opt := range e.Options {
 					if opt.Value == e.InitValue {
 						selectElem = selectElem.WithInitialOption(slack.NewOptionBlockObject(
-							encodeActionValue(opt.Value, sessionKey, nil),
+							encodeActionValue(opt.Value, sessionKey, lang, nil),
 							plainTextBlock(opt.Text),
 							nil,
 						))
@@ -180,7 +187,7 @@ func renderCardBlocks(card *core.Card, sessionKey string) []slack.Block {
 	return blocks
 }
 
-func appendActionBlock(blocks *[]slack.Block, row core.CardActions, sessionKey string) {
+func appendActionBlock(blocks *[]slack.Block, row core.CardActions, sessionKey, lang string) {
 	if len(row.Buttons) == 0 {
 		return
 	}
@@ -197,7 +204,7 @@ func appendActionBlock(blocks *[]slack.Block, row core.CardActions, sessionKey s
 				if btnType == "" {
 					btnType = "default"
 				}
-				elements = append(elements, newButtonElement(btn.Text, btnType, btn.Value, sessionKey, btn.Extra))
+				elements = append(elements, newButtonElement(btn.Text, btnType, btn.Value, sessionKey, lang, btn.Extra))
 			}
 			*blocks = append(*blocks, slack.NewActionBlock("", elements...))
 		}
@@ -217,7 +224,7 @@ func appendActionBlock(blocks *[]slack.Block, row core.CardActions, sessionKey s
 			if btnType == "" {
 				btnType = "default"
 			}
-			elements = append(elements, newButtonElement(btn.Text, btnType, btn.Value, sessionKey, btn.Extra))
+			elements = append(elements, newButtonElement(btn.Text, btnType, btn.Value, sessionKey, lang, btn.Extra))
 		}
 		*blocks = append(*blocks, slack.NewActionBlock("", elements...))
 	}
@@ -251,7 +258,11 @@ func (p *Platform) trackCardMessage(sessionKey, channel, ts, threadTS string) {
 
 func (p *Platform) postCard(ctx context.Context, rc replyContext, card *core.Card) (string, error) {
 	sessionKey := rc.sessionKey
-	blocks := renderCardBlocks(card, sessionKey)
+	lang := rc.lang
+	if lang == "" {
+		lang = p.langForSession(sessionKey)
+	}
+	blocks := renderCardBlocks(card, sessionKey, lang)
 	opts := []slack.MsgOption{
 		slack.MsgOptionBlocks(blocks...),
 		slack.MsgOptionText(cardFallbackText(card), false),
@@ -269,8 +280,11 @@ func (p *Platform) postCard(ctx context.Context, rc replyContext, card *core.Car
 	return ts, nil
 }
 
-func (p *Platform) updateCardMessage(ctx context.Context, ref cardMessageRef, card *core.Card, sessionKey string) error {
-	blocks := renderCardBlocks(card, sessionKey)
+func (p *Platform) updateCardMessage(ctx context.Context, ref cardMessageRef, card *core.Card, sessionKey, lang string) error {
+	if lang == "" {
+		lang = p.langForSession(sessionKey)
+	}
+	blocks := renderCardBlocks(card, sessionKey, lang)
 	_, _, _, err := p.client.UpdateMessageContext(
 		ctx,
 		ref.channel,
@@ -307,5 +321,5 @@ func (p *Platform) RefreshCard(ctx context.Context, sessionKey string, card *cor
 	if !ok || ref.channel == "" || ref.ts == "" {
 		return fmt.Errorf("slack: no tracked card message for session %q", sessionKey)
 	}
-	return p.updateCardMessage(ctx, ref, card, sessionKey)
+	return p.updateCardMessage(ctx, ref, card, sessionKey, p.langForSession(sessionKey))
 }
