@@ -1087,6 +1087,26 @@ app_secret = "your-feishu-app-secret"
 #                         #  a fresh session, replies in the same thread continue it).
 #                         # 会话粒度："user"(默认) | "channel"(整个频道一个会话) | "thread"(每个 Slack 话题串一个会话)
 
+# A2A server (uncomment to enable / 取消注释以启用)
+# Exposes this project as an A2A JSON-RPC agent server.
+# 将当前项目暴露为 A2A JSON-RPC Agent 服务。
+# Connection: HTTP server — remote clients need public_url / HTTP 服务，远程客户端需要 public_url
+#
+# [[projects.platforms]]
+# type = "a2a"
+#
+# [projects.platforms.options]
+# listen_addr = ":8010"
+# path = "/a2a/"
+# public_url = "https://agent.example.com"
+# api_token = "optional-bearer-token"
+# agent_name = "cc-connect"
+# description = "cc-connect A2A bridge"
+# agent_version = "v10.0.0"
+# timeout = "30m"
+# task_ttl = "2h"
+# max_tasks = 1000
+
 # Discord (uncomment to enable / 取消注释以启用)
 # 1. Create an app at https://discord.com/developers/applications / 创建应用
 # 2. Under "Bot", create a bot and copy the token / 创建 Bot 并复制 token
