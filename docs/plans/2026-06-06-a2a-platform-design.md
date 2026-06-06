@@ -96,6 +96,7 @@ Fields:
 | `task_ttl` | No | `2h` | How long an in-flight cc-connect bridge waiter can remain pending |
 | `max_tasks` | No | `1000` | Maximum number of in-flight A2A tasks waiting for cc-connect completion |
 | `skills` | No | default bridge skill | AgentCard skills advertised to A2A clients |
+| `forward_headers` | No | empty | Whitelist of HTTP header names exposed to cc-connect hooks as `headers` / `CC_HOOK_HEADERS_JSON`. Not sent to the coding agent. `Authorization` / `Cookie` are always blocked |
 
 ## Endpoints
 
@@ -156,6 +157,7 @@ The cc-connect message uses:
 - `ChannelKey = contextId`
 - `ReplyCtx = replyContext{taskID, sessionKey}`
 - `UserID = ExecutorContext.User.Name` when available, otherwise `a2a`
+- Hook context includes merged `SendMessageRequest.metadata` and `message.metadata` as `ctx`, plus whitelisted inbound HTTP headers as `headers`; the coding agent prompt is unchanged
 
 ## Reply Mapping
 

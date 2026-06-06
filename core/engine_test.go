@@ -2,8 +2,12 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,6 +88,66 @@ func (p *stubPlatformEngine) clearSent() {
 	p.mu.Lock()
 	p.sent = nil
 	p.mu.Unlock()
+}
+
+type hookContextPlatform struct {
+	stubPlatformEngine
+	ctx HookContext
+}
+
+func (p *hookContextPlatform) HookContext(any) HookContext {
+	return p.ctx
+}
+
+func TestHandleMessageEmitsHookMessageContext(t *testing.T) {
+	var got HookEvent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Errorf("unmarshal body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &hookContextPlatform{
+		stubPlatformEngine: stubPlatformEngine{n: "a2a"},
+		ctx: HookContext{
+			Context: map[string]any{"tenant_id": "acme"},
+			Headers: map[string]string{
+				"X-Tenant-Id": "acme",
+			},
+		},
+	}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetHooks(NewHookManager("test", []HookConfig{{
+		Event: "message.received",
+		Type:  "http",
+		URL:   srv.URL,
+		Async: boolPtr(false),
+	}}))
+
+	e.handleMessage(p, &Message{
+		SessionKey: "a2a:ctx-1",
+		Platform:   "a2a",
+		MessageID:  "msg-1",
+		UserID:     "alice",
+		ChatName:   "agenthub",
+		Content:    "/status",
+	})
+
+	if got.MessageID != "msg-1" || got.ChannelName != "agenthub" {
+		t.Fatalf("hook message context = id:%q channel:%q", got.MessageID, got.ChannelName)
+	}
+	if got.Context["tenant_id"] != "acme" {
+		t.Fatalf("hook context = %#v", got.Context)
+	}
+	if got.Headers["X-Tenant-Id"] != "acme" {
+		t.Fatalf("hook headers = %#v", got.Headers)
+	}
 }
 
 type recallCheckingPlatform struct {

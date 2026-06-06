@@ -17,14 +17,25 @@ import (
 
 func boolPtr(v bool) *bool { return &v }
 
+func envSliceToMap(env []string) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 func TestNewHookManager_ValidatesConfig(t *testing.T) {
 	hooks := []HookConfig{
 		{Event: "message.received", Type: "command", Command: "echo ok"},
-		{Event: "", Type: "command", Command: "echo bad"},         // missing event
-		{Event: "error", Type: "http", URL: ""},                   // missing url
-		{Event: "error", Type: "http", URL: "ftp://bad"},          // bad url scheme
-		{Event: "error", Type: "unknown", Command: "echo"},        // bad type
-		{Event: "error", Type: "command", Command: ""},            // missing command
+		{Event: "", Type: "command", Command: "echo bad"},  // missing event
+		{Event: "error", Type: "http", URL: ""},            // missing url
+		{Event: "error", Type: "http", URL: "ftp://bad"},   // bad url scheme
+		{Event: "error", Type: "unknown", Command: "echo"}, // bad type
+		{Event: "error", Type: "command", Command: ""},     // missing command
 		{Event: "message.sent", Type: "http", URL: "http://ok.com"},
 	}
 	hm := NewHookManager("test", hooks)
@@ -185,6 +196,42 @@ func TestEmit_CommandHookEnvVars(t *testing.T) {
 	}
 }
 
+func TestEventToEnvIncludesMessageContextAndHeaders(t *testing.T) {
+	env := eventToEnv(HookEvent{
+		Event:       HookEventMessageReceived,
+		MessageID:   "msg-123",
+		ChannelName: "general",
+		Context: map[string]any{
+			"tenant_id": "acme",
+			"priority":  float64(2),
+		},
+		Headers: map[string]string{
+			"X-Tenant-Id": "acme",
+		},
+	})
+	got := envSliceToMap(env)
+	if got["CC_HOOK_MESSAGE_ID"] != "msg-123" {
+		t.Fatalf("CC_HOOK_MESSAGE_ID = %q", got["CC_HOOK_MESSAGE_ID"])
+	}
+	if got["CC_HOOK_CHANNEL_NAME"] != "general" {
+		t.Fatalf("CC_HOOK_CHANNEL_NAME = %q", got["CC_HOOK_CHANNEL_NAME"])
+	}
+	var ctx map[string]any
+	if err := json.Unmarshal([]byte(got["CC_HOOK_CTX_JSON"]), &ctx); err != nil {
+		t.Fatalf("unmarshal CC_HOOK_CTX_JSON: %v", err)
+	}
+	if ctx["tenant_id"] != "acme" || ctx["priority"] != float64(2) {
+		t.Fatalf("ctx = %#v", ctx)
+	}
+	var headers map[string]string
+	if err := json.Unmarshal([]byte(got["CC_HOOK_HEADERS_JSON"]), &headers); err != nil {
+		t.Fatalf("unmarshal CC_HOOK_HEADERS_JSON: %v", err)
+	}
+	if headers["X-Tenant-Id"] != "acme" {
+		t.Fatalf("headers = %#v", headers)
+	}
+}
+
 func TestEmit_HTTPHook(t *testing.T) {
 	var received atomic.Int32
 	var mu sync.Mutex
@@ -222,10 +269,18 @@ func TestEmit_HTTPHook(t *testing.T) {
 	hm := NewHookManager("proj-1", hooks)
 
 	hm.Emit(HookEvent{
-		Event:      HookEventError,
-		SessionKey: "tg:1:1",
-		Platform:   "telegram",
-		Error:      "something failed",
+		Event:       HookEventError,
+		SessionKey:  "tg:1:1",
+		Platform:    "telegram",
+		MessageID:   "msg-err",
+		ChannelName: "ops",
+		Error:       "something failed",
+		Context: map[string]any{
+			"tenant_id": "acme",
+		},
+		Headers: map[string]string{
+			"X-Trace-Id": "trace-1",
+		},
 	})
 
 	if received.Load() != 1 {
@@ -242,6 +297,15 @@ func TestEmit_HTTPHook(t *testing.T) {
 	}
 	if lastBody.Error != "something failed" {
 		t.Errorf("expected error=something failed, got %s", lastBody.Error)
+	}
+	if lastBody.MessageID != "msg-err" || lastBody.ChannelName != "ops" {
+		t.Errorf("message context = id:%q channel:%q", lastBody.MessageID, lastBody.ChannelName)
+	}
+	if lastBody.Context["tenant_id"] != "acme" {
+		t.Errorf("context = %#v", lastBody.Context)
+	}
+	if lastBody.Headers["X-Trace-Id"] != "trace-1" {
+		t.Errorf("headers = %#v", lastBody.Headers)
 	}
 }
 

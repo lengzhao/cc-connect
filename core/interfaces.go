@@ -55,6 +55,12 @@ type FormattingInstructionProvider interface {
 	FormattingInstructions() string
 }
 
+// HookContextProvider is an optional interface for platforms that can attach
+// per-message context to cc-connect hooks without exposing it to agent prompts.
+type HookContextProvider interface {
+	HookContext(replyCtx any) HookContext
+}
+
 // PlatformPromptInjector is an optional interface for agents that can receive
 // platform-specific prompt fragments (e.g., formatting instructions).
 // The engine calls this before StartSession when the platform provides formatting.

@@ -44,7 +44,8 @@ type Platform struct {
 	description string
 	skills      []sdka2a.AgentSkill
 
-	agentVersion string
+	agentVersion   string
+	forwardHeaders []string
 
 	server  *http.Server
 	handler core.MessageHandler
@@ -107,18 +108,19 @@ func New(opts map[string]any) (core.Platform, error) {
 	}
 
 	return &Platform{
-		listenAddr:   listenAddr,
-		path:         path,
-		publicURL:    publicURL,
-		apiToken:     strings.TrimSpace(stringOption(opts, "api_token", stringOption(opts, "token", ""))),
-		timeout:      timeout,
-		taskTTL:      taskTTL,
-		maxTasks:     maxTasks,
-		agentName:    stringOption(opts, "agent_name", defaultAgentName),
-		description:  stringOption(opts, "description", stringOption(opts, "agent_description", defaultDescription)),
-		skills:       skills,
-		agentVersion: version,
-		pending:      newPendingStore(maxTasks, taskTTL),
+		listenAddr:     listenAddr,
+		path:           path,
+		publicURL:      publicURL,
+		apiToken:       strings.TrimSpace(stringOption(opts, "api_token", stringOption(opts, "token", ""))),
+		timeout:        timeout,
+		taskTTL:        taskTTL,
+		maxTasks:       maxTasks,
+		agentName:      stringOption(opts, "agent_name", defaultAgentName),
+		description:    stringOption(opts, "description", stringOption(opts, "agent_description", defaultDescription)),
+		skills:         skills,
+		agentVersion:   version,
+		forwardHeaders: normalizeForwardHeaderNames(stringSliceOption(opts, "forward_headers")),
+		pending:        newPendingStore(maxTasks, taskTTL),
 	}, nil
 }
 
@@ -477,6 +479,8 @@ func (p *Platform) toCoreMessage(execCtx *a2asrv.ExecutorContext) (core.Message,
 	}
 
 	sessionKey := sessionKeyFor(execCtx)
+	headers := collectForwardedHeaders(p.forwardHeaders, execCtx.ServiceParams)
+	hookContext := collectHookContext(execCtx.Metadata, execCtx.Message.Metadata)
 	return core.Message{
 		SessionKey: sessionKey,
 		Platform:   "a2a",
@@ -486,7 +490,12 @@ func (p *Platform) toCoreMessage(execCtx *a2asrv.ExecutorContext) (core.Message,
 		UserID:     userID,
 		Content:    content,
 		Files:      files,
-		ReplyCtx:   replyContext{taskID: string(execCtx.TaskID), sessionKey: sessionKey},
+		ReplyCtx: replyContext{
+			taskID:     string(execCtx.TaskID),
+			sessionKey: sessionKey,
+			headers:    headers,
+			context:    hookContext,
+		},
 	}, nil
 }
 
@@ -555,6 +564,32 @@ func statusEvent(execCtx *a2asrv.ExecutorContext, state sdka2a.TaskState, err er
 type replyContext struct {
 	taskID     string
 	sessionKey string
+	headers    map[string]string // whitelisted inbound HTTP headers (cc-connect only, not agent prompt)
+	context    map[string]any    // merged A2A request/message metadata for cc-connect hooks
+}
+
+// HookContext returns whitelisted inbound headers and A2A metadata captured for
+// this turn. The values are delivered only to cc-connect hooks, not to the agent
+// prompt.
+func (p *Platform) HookContext(replyCtx any) core.HookContext {
+	rc, ok := replyCtx.(replyContext)
+	if !ok {
+		return core.HookContext{}
+	}
+	out := core.HookContext{}
+	if len(rc.headers) > 0 {
+		out.Headers = make(map[string]string, len(rc.headers))
+		for k, v := range rc.headers {
+			out.Headers[k] = v
+		}
+	}
+	if len(rc.context) > 0 {
+		out.Context = make(map[string]any, len(rc.context))
+		for k, v := range rc.context {
+			out.Context[k] = v
+		}
+	}
+	return out
 }
 
 type streamingCard struct {
@@ -910,3 +945,4 @@ func init() {
 
 var _ core.Platform = (*Platform)(nil)
 var _ core.StreamingCardPlatform = (*Platform)(nil)
+var _ core.HookContextProvider = (*Platform)(nil)

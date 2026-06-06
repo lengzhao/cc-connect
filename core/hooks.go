@@ -18,13 +18,13 @@ import (
 type HookEventType string
 
 const (
-	HookEventMessageReceived    HookEventType = "message.received"
-	HookEventMessageSent        HookEventType = "message.sent"
-	HookEventSessionStarted     HookEventType = "session.started"
-	HookEventSessionEnded       HookEventType = "session.ended"
-	HookEventCronTriggered      HookEventType = "cron.triggered"
+	HookEventMessageReceived     HookEventType = "message.received"
+	HookEventMessageSent         HookEventType = "message.sent"
+	HookEventSessionStarted      HookEventType = "session.started"
+	HookEventSessionEnded        HookEventType = "session.ended"
+	HookEventCronTriggered       HookEventType = "cron.triggered"
 	HookEventPermissionRequested HookEventType = "permission.requested"
-	HookEventError              HookEventType = "error"
+	HookEventError               HookEventType = "error"
 )
 
 // HookHandlerType is the execution strategy for a hook.
@@ -38,7 +38,7 @@ const (
 // HookConfig is the user-facing configuration for a single hook rule.
 type HookConfig struct {
 	Event   string `toml:"event" json:"event"`
-	Type    string `toml:"type" json:"type"`       // "command" or "http"
+	Type    string `toml:"type" json:"type"` // "command" or "http"
 	Command string `toml:"command" json:"command,omitempty"`
 	URL     string `toml:"url" json:"url,omitempty"`
 	Timeout int    `toml:"timeout" json:"timeout,omitempty"` // seconds; 0 = default (10s cmd, 5s http)
@@ -61,16 +61,27 @@ func (h *HookConfig) timeoutDuration() time.Duration {
 
 // HookEvent is the payload delivered to hook handlers.
 type HookEvent struct {
-	Event      HookEventType  `json:"event"`
-	Timestamp  time.Time      `json:"timestamp"`
-	Project    string         `json:"project"`
-	SessionKey string         `json:"session_key,omitempty"`
-	Platform   string         `json:"platform,omitempty"`
-	UserID     string         `json:"user_id,omitempty"`
-	UserName   string         `json:"user_name,omitempty"`
-	Content    string         `json:"content,omitempty"`
-	Error      string         `json:"error,omitempty"`
-	Extra      map[string]any `json:"extra,omitempty"`
+	Event       HookEventType     `json:"event"`
+	Timestamp   time.Time         `json:"timestamp"`
+	Project     string            `json:"project"`
+	SessionKey  string            `json:"session_key,omitempty"`
+	Platform    string            `json:"platform,omitempty"`
+	MessageID   string            `json:"message_id,omitempty"`
+	UserID      string            `json:"user_id,omitempty"`
+	UserName    string            `json:"user_name,omitempty"`
+	ChannelName string            `json:"channel_name,omitempty"`
+	Content     string            `json:"content,omitempty"`
+	Context     map[string]any    `json:"ctx,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	Error       string            `json:"error,omitempty"`
+	Extra       map[string]any    `json:"extra,omitempty"`
+}
+
+// HookContext carries per-message dynamic data from a platform into cc-connect
+// hooks. It is intentionally not part of the agent prompt.
+type HookContext struct {
+	Context map[string]any
+	Headers map[string]string
 }
 
 // HookManager dispatches lifecycle events to configured hook handlers.
@@ -246,19 +257,52 @@ func eventToEnv(e HookEvent) []string {
 	if e.Platform != "" {
 		env = append(env, "CC_HOOK_PLATFORM="+e.Platform)
 	}
+	if e.MessageID != "" {
+		env = append(env, "CC_HOOK_MESSAGE_ID="+e.MessageID)
+	}
 	if e.UserID != "" {
 		env = append(env, "CC_HOOK_USER_ID="+e.UserID)
 	}
 	if e.UserName != "" {
 		env = append(env, "CC_HOOK_USER_NAME="+e.UserName)
 	}
+	if e.ChannelName != "" {
+		env = append(env, "CC_HOOK_CHANNEL_NAME="+e.ChannelName)
+	}
 	if e.Content != "" {
 		env = append(env, "CC_HOOK_CONTENT="+e.Content)
+	}
+	if len(e.Context) > 0 {
+		if b, err := json.Marshal(e.Context); err == nil {
+			env = append(env, "CC_HOOK_CTX_JSON="+string(b))
+		}
+	}
+	if len(e.Headers) > 0 {
+		if b, err := json.Marshal(e.Headers); err == nil {
+			env = append(env, "CC_HOOK_HEADERS_JSON="+string(b))
+		}
 	}
 	if e.Error != "" {
 		env = append(env, "CC_HOOK_ERROR="+e.Error)
 	}
 	return env
+}
+
+func cloneHookContext(ctx HookContext) HookContext {
+	var out HookContext
+	if len(ctx.Context) > 0 {
+		out.Context = make(map[string]any, len(ctx.Context))
+		for k, v := range ctx.Context {
+			out.Context[k] = v
+		}
+	}
+	if len(ctx.Headers) > 0 {
+		out.Headers = make(map[string]string, len(ctx.Headers))
+		for k, v := range ctx.Headers {
+			out.Headers[k] = v
+		}
+	}
+	return out
 }
 
 // Hooks returns the current hook configurations (for management API / testing).

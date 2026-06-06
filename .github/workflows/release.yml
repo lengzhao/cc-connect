@@ -97,10 +97,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          git tag -l --format='%(contents)' "${VERSION}" > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "Personal fork release ${VERSION}." > release-notes.md
+          fi
           if gh release view "${VERSION}" >/dev/null 2>&1; then
+            gh release edit "${VERSION}" --notes-file release-notes.md
             gh release upload "${VERSION}" dist/*.tar.gz dist/*.zip dist/checksums.txt --clobber
           else
             gh release create "${VERSION}" dist/*.tar.gz dist/*.zip dist/checksums.txt \
               --title "${VERSION}" \
-              --notes "Personal fork release ${VERSION}."
+              --notes-file release-notes.md
           fi

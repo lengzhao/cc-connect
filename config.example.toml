@@ -1108,6 +1108,8 @@ app_secret = "your-feishu-app-secret"
 # timeout = "30m"
 # task_ttl = "2h"
 # max_tasks = 1000
+# forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # Whitelist HTTP headers exposed to cc-connect hooks (not agent prompt)
+#                                                     # 白名单 HTTP 头，仅暴露给 cc-connect hooks（不写入 Agent 提示词）
 #
 # Optional AgentCard skills. If omitted, cc-connect advertises a default bridge skill.
 # 可选 AgentCard skills；未配置时会使用默认 cc-connect bridge skill。

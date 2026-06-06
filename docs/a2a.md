@@ -45,6 +45,7 @@ Common options:
 | `task_ttl` | `2h` | How long an in-flight cc-connect bridge waiter can remain pending |
 | `max_tasks` | `1000` | Maximum number of in-flight A2A tasks waiting for cc-connect completion |
 | `skills` | default bridge skill | AgentCard skills advertised to A2A clients |
+| `forward_headers` | empty | Whitelist of HTTP header names exposed to cc-connect hooks as `headers` / `CC_HOOK_HEADERS_JSON`. Not injected into the coding agent prompt. `Authorization` / `Cookie` are always blocked |
 
 ## Endpoints
 
@@ -68,6 +69,25 @@ If `public_url` is not configured, the AgentCard JSON-RPC URL is derived from th
 4. Local listen address fallback.
 
 When `X-A2A-User` is provided, cc-connect uses it as the message user id; otherwise it falls back to `a2a`.
+
+### Forwarding context to cc-connect hooks
+
+Configure a whitelist with `forward_headers`. Matching request headers are attached to the `message.received` hook event — they are **not** prepended to the coding agent prompt.
+
+```toml
+forward_headers = ["X-Tenant-Id", "X-Trace-Id"]
+```
+
+Clients send them on the JSON-RPC `POST` request (or via A2A client `ServiceParams`). HTTP hooks receive them as the `headers` object in the JSON payload. Command hooks receive the same data as `CC_HOOK_HEADERS_JSON`.
+
+A2A `SendMessageRequest.metadata` and `message.metadata` are merged into the hook `ctx` object. Command hooks receive them as `CC_HOOK_CTX_JSON`.
+
+Every hook invocation also receives:
+
+- `message_id` / `CC_HOOK_MESSAGE_ID`
+- `channel_name` / `CC_HOOK_CHANNEL_NAME` when the platform provides a chat or channel name
+
+`Authorization`, `Cookie`, and other sensitive headers are never forwarded, even if listed in config.
 
 ## Skills
 

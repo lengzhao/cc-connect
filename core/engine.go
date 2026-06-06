@@ -1944,14 +1944,22 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		"has_images", len(msg.Images) > 0, "has_audio", msg.Audio != nil, "has_files", len(msg.Files) > 0,
 	)
 
-	e.hooks.Emit(HookEvent{
-		Event:      HookEventMessageReceived,
-		SessionKey: msg.SessionKey,
-		Platform:   msg.Platform,
-		UserID:     msg.UserID,
-		UserName:   msg.UserName,
-		Content:    msg.Content,
-	})
+	hookEvent := HookEvent{
+		Event:       HookEventMessageReceived,
+		SessionKey:  msg.SessionKey,
+		Platform:    msg.Platform,
+		MessageID:   msg.MessageID,
+		UserID:      msg.UserID,
+		UserName:    msg.UserName,
+		ChannelName: msg.ChatName,
+		Content:     msg.Content,
+	}
+	if hp, ok := p.(HookContextProvider); ok {
+		ctx := cloneHookContext(hp.HookContext(msg.ReplyCtx))
+		hookEvent.Context = ctx.Context
+		hookEvent.Headers = ctx.Headers
+	}
+	e.hooks.Emit(hookEvent)
 
 	// Voice message: transcribe to text first
 	if msg.Audio != nil {
