@@ -56,7 +56,7 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - name: Build Alpine-compatible Linux binaries
+      - name: Build release binaries
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -64,19 +64,33 @@ jobs:
           BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}"
 
-          for target in linux/amd64 linux/arm64; do
+          for target in \
+            linux/amd64 \
+            linux/arm64 \
+            darwin/amd64 \
+            darwin/arm64 \
+            windows/amd64 \
+            windows/arm64; do
             GOOS="${target%/*}"
             GOARCH="${target#*/}"
-            OUT="cc-connect-${VERSION}-${GOOS}-${GOARCH}"
+            EXT=""
+            if [ "${GOOS}" = "windows" ]; then
+              EXT=".exe"
+            fi
+            OUT="cc-connect-${VERSION}-${GOOS}-${GOARCH}${EXT}"
             echo "Building ${OUT}"
             GOOS="${GOOS}" GOARCH="${GOARCH}" CGO_ENABLED=0 \
               go build -ldflags "${LDFLAGS}" -o "dist/${OUT}" ./cmd/cc-connect
-            tar -C dist -czf "dist/${OUT}.tar.gz" "${OUT}"
+            if [ "${GOOS}" = "windows" ]; then
+              (cd dist && zip "${OUT%.exe}.zip" "${OUT}")
+            else
+              tar -C dist -czf "dist/${OUT}.tar.gz" "${OUT}"
+            fi
             rm "dist/${OUT}"
           done
 
           cd dist
-          sha256sum *.tar.gz > checksums.txt
+          sha256sum *.tar.gz *.zip > checksums.txt
 
       - name: Publish GitHub Release
         env:
@@ -84,9 +98,9 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "${VERSION}" >/dev/null 2>&1; then
-            gh release upload "${VERSION}" dist/*.tar.gz dist/checksums.txt --clobber
+            gh release upload "${VERSION}" dist/*.tar.gz dist/*.zip dist/checksums.txt --clobber
           else
-            gh release create "${VERSION}" dist/*.tar.gz dist/checksums.txt \
+            gh release create "${VERSION}" dist/*.tar.gz dist/*.zip dist/checksums.txt \
               --title "${VERSION}" \
               --notes "Personal fork release ${VERSION}."
           fi
