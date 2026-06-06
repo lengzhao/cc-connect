@@ -1106,6 +1106,24 @@ app_secret = "your-feishu-app-secret"
 # timeout = "30m"
 # task_ttl = "2h"
 # max_tasks = 1000
+#
+# Optional AgentCard skills. If omitted, cc-connect advertises a default bridge skill.
+# 可选 AgentCard skills；未配置时会使用默认 cc-connect bridge skill。
+#
+# [[projects.platforms.options.skills]]
+# id = "code-review"
+# name = "Code Review"
+# description = "Review code changes and suggest fixes."
+# tags = ["code", "review"]
+# examples = ["Review this pull request", "Find risks in this diff"]
+# input_modes = ["text/plain"]
+# output_modes = ["text/plain"]
+#
+# [[projects.platforms.options.skills]]
+# id = "coding"
+# name = "Coding Agent"
+# description = "Implement, test, and explain code changes."
+# tags = ["coding", "automation"]
 
 # Discord (uncomment to enable / 取消注释以启用)
 # 1. Create an app at https://discord.com/developers/applications / 创建应用

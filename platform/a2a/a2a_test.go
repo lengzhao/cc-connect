@@ -1,15 +1,18 @@
 package a2a
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/chenhg5/cc-connect/core"
 )
@@ -164,6 +167,85 @@ func TestSDKAgentCardEndpoint(t *testing.T) {
 	}
 }
 
+func TestSDKAgentCardEndpointUsesCustomSkills(t *testing.T) {
+	plat, err := New(map[string]any{
+		"path": "/a2a/",
+		"skills": []any{
+			map[string]any{
+				"id":          "code-review",
+				"name":        "Code Review",
+				"description": "Review code changes and suggest fixes.",
+				"tags":        []any{"code", "review"},
+				"examples":    []any{"Review this pull request"},
+				"input_modes": []any{"text/plain"},
+				"output_modes": []any{
+					"text/plain",
+					"application/json",
+				},
+			},
+			map[string]any{
+				"id":          "coding",
+				"name":        "Coding Agent",
+				"description": "Implement and test code changes.",
+				"tags":        []string{"coding", "automation"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+
+	req := httptest.NewRequest(http.MethodGet, "/a2a/.well-known/agent-card.json", nil)
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var card map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &card); err != nil {
+		t.Fatalf("unmarshal card: %v", err)
+	}
+	skills, ok := card["skills"].([]any)
+	if !ok || len(skills) != 2 {
+		t.Fatalf("skills = %#v, want two custom skills", card["skills"])
+	}
+	first := skills[0].(map[string]any)
+	if first["id"] != "code-review" || first["name"] != "Code Review" || first["description"] != "Review code changes and suggest fixes." {
+		t.Fatalf("first skill = %#v", first)
+	}
+	if got := first["tags"].([]any); len(got) != 2 || got[0] != "code" || got[1] != "review" {
+		t.Fatalf("first tags = %#v", first["tags"])
+	}
+	if got := first["examples"].([]any); len(got) != 1 || got[0] != "Review this pull request" {
+		t.Fatalf("first examples = %#v", first["examples"])
+	}
+	if got := first["inputModes"].([]any); len(got) != 1 || got[0] != "text/plain" {
+		t.Fatalf("first inputModes = %#v", first["inputModes"])
+	}
+	if got := first["outputModes"].([]any); len(got) != 2 || got[1] != "application/json" {
+		t.Fatalf("first outputModes = %#v", first["outputModes"])
+	}
+}
+
+func TestNewRejectsInvalidCustomSkill(t *testing.T) {
+	_, err := New(map[string]any{
+		"skills": []any{
+			map[string]any{
+				"id":   "missing-description",
+				"name": "Missing Description",
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("New() error = nil, want invalid skill error")
+	}
+	if !strings.Contains(err.Error(), "skills[0]") {
+		t.Fatalf("New() error = %v, want skills[0] context", err)
+	}
+}
+
 func TestSDKAgentCardEndpointDerivesURLFromForwardedHeaders(t *testing.T) {
 	plat, err := New(map[string]any{"path": "/a2a/"})
 	if err != nil {
@@ -214,6 +296,315 @@ func TestSDKAgentCardEndpointDerivesURLFromForwardedHeader(t *testing.T) {
 	iface := interfaces[0].(map[string]any)
 	if iface["url"] != "https://forwarded.example.com/a2a/" {
 		t.Fatalf("interface url = %v, want https://forwarded.example.com/a2a/", iface["url"])
+	}
+}
+
+func TestSDKAgentCardEndpointPublicURLOverridesForwardedHeaders(t *testing.T) {
+	plat, err := New(map[string]any{
+		"path":       "/a2a/",
+		"public_url": "https://configured.example.com",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+
+	req := httptest.NewRequest(http.MethodGet, "/a2a/.well-known/agent-card.json", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "proxy.example.com")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if got := agentCardURL(t, rec.Body.Bytes()); got != "https://configured.example.com/a2a/" {
+		t.Fatalf("agent card url = %q, want configured public_url", got)
+	}
+}
+
+func TestSDKAgentCardEndpointFallsBackToHostHeader(t *testing.T) {
+	plat, err := New(map[string]any{"path": "/a2a/"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+
+	req := httptest.NewRequest(http.MethodGet, "/a2a/.well-known/agent-card.json", nil)
+	req.Host = "host.example.com"
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if got := agentCardURL(t, rec.Body.Bytes()); got != "http://host.example.com/a2a/" {
+		t.Fatalf("agent card url = %q, want host fallback", got)
+	}
+}
+
+func TestSDKAgentCardEndpointUsesFirstForwardedHeaderValue(t *testing.T) {
+	plat, err := New(map[string]any{"path": "/a2a/"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+
+	req := httptest.NewRequest(http.MethodGet, "/a2a/.well-known/agent-card.json", nil)
+	req.Header.Set("X-Forwarded-Proto", "https,http")
+	req.Header.Set("X-Forwarded-Host", "first.example.com,second.example.com")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if got := agentCardURL(t, rec.Body.Bytes()); got != "https://first.example.com/a2a/" {
+		t.Fatalf("agent card url = %q, want first forwarded value", got)
+	}
+}
+
+func TestJSONRPCSendMessageCompletesTaskWithArtifact(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "2s", "api_token": "secret"})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		if msg.Platform != "a2a" {
+			t.Errorf("Platform = %q, want a2a", msg.Platform)
+		}
+		if msg.SessionKey != "a2a:ctx-1" {
+			t.Errorf("SessionKey = %q, want a2a:ctx-1", msg.SessionKey)
+		}
+		if msg.UserID != "alice" {
+			t.Errorf("UserID = %q, want alice", msg.UserID)
+		}
+		if err := platform.Reply(context.Background(), msg.ReplyCtx, "done"); err != nil {
+			t.Errorf("Reply() error = %v", err)
+		}
+	})
+
+	client := newA2AClient(t, server.URL+"/a2a/", headerInterceptor{
+		"Authorization": {"Bearer secret"},
+		"X-A2A-User":    {"alice"},
+	})
+	result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: &a2a.Message{
+			ID:        "msg-1",
+			ContextID: "ctx-1",
+			Role:      a2a.MessageRoleUser,
+			Parts:     a2a.ContentParts{a2a.NewTextPart("hello")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	task, ok := result.(*a2a.Task)
+	if !ok {
+		t.Fatalf("SendMessage() result = %T, want *a2a.Task", result)
+	}
+	if task.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("task state = %s, want completed", task.Status.State)
+	}
+	if len(task.Artifacts) != 1 || len(task.Artifacts[0].Parts) != 1 || task.Artifacts[0].Parts[0].Text() != "done" {
+		t.Fatalf("task artifacts = %#v, want text artifact done", task.Artifacts)
+	}
+}
+
+func TestJSONRPCCancelTaskCancelsInFlightSend(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "2s"})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+	received := make(chan replyContext, 1)
+	p.setHandler(func(_ core.Platform, msg *core.Message) {
+		received <- msg.ReplyCtx.(replyContext)
+	})
+	client := newA2AClient(t, server.URL+"/a2a/", nil)
+
+	sendDone := make(chan a2a.SendMessageResult, 1)
+	sendErr := make(chan error, 1)
+	go func() {
+		result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+			Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("please wait")),
+		})
+		if err != nil {
+			sendErr <- err
+			return
+		}
+		sendDone <- result
+	}()
+
+	var rc replyContext
+	select {
+	case rc = <-received:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for handler")
+	}
+	waitForTask(t, client, a2a.TaskID(rc.taskID))
+	canceledTask, err := client.CancelTask(context.Background(), &a2a.CancelTaskRequest{ID: a2a.TaskID(rc.taskID)})
+	if err != nil {
+		t.Fatalf("CancelTask() error = %v", err)
+	}
+	if canceledTask.Status.State != a2a.TaskStateCanceled {
+		t.Fatalf("CancelTask state = %s, want canceled", canceledTask.Status.State)
+	}
+
+	select {
+	case err := <-sendErr:
+		t.Fatalf("SendMessage() error = %v", err)
+	case result := <-sendDone:
+		task, ok := result.(*a2a.Task)
+		if !ok {
+			t.Fatalf("SendMessage result = %T, want *a2a.Task", result)
+		}
+		if task.Status.State != a2a.TaskStateCanceled {
+			t.Fatalf("SendMessage final state = %s, want canceled", task.Status.State)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SendMessage cancellation result")
+	}
+}
+
+func TestJSONRPCGetTaskAfterSendMessage(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "2s"})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		if err := platform.Reply(context.Background(), msg.ReplyCtx, "done"); err != nil {
+			t.Errorf("Reply() error = %v", err)
+		}
+	})
+	client := newA2AClient(t, server.URL+"/a2a/", nil)
+
+	result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello")),
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	sentTask := result.(*a2a.Task)
+	got, err := client.GetTask(context.Background(), &a2a.GetTaskRequest{ID: sentTask.ID})
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if got.ID != sentTask.ID || got.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("GetTask() = id %q state %s, want id %q completed", got.ID, got.Status.State, sentTask.ID)
+	}
+}
+
+func TestJSONRPCTimeoutReturnsFailedTask(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "1ms"})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+	p.setHandler(func(_ core.Platform, _ *core.Message) {})
+	client := newA2AClient(t, server.URL+"/a2a/", nil)
+
+	result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("never reply")),
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	task, ok := result.(*a2a.Task)
+	if !ok {
+		t.Fatalf("SendMessage result = %T, want *a2a.Task", result)
+	}
+	if task.Status.State != a2a.TaskStateFailed {
+		t.Fatalf("task state = %s, want failed", task.Status.State)
+	}
+}
+
+func TestJSONRPCRejectsWhenPendingCapacityFull(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "2s", "max_tasks": 1})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+	received := make(chan replyContext, 2)
+	p.setHandler(func(_ core.Platform, msg *core.Message) {
+		received <- msg.ReplyCtx.(replyContext)
+	})
+	client := newA2AClient(t, server.URL+"/a2a/", nil)
+
+	firstDone := make(chan a2a.SendMessageResult, 1)
+	firstErr := make(chan error, 1)
+	go func() {
+		result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+			Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hold slot")),
+		})
+		if err != nil {
+			firstErr <- err
+			return
+		}
+		firstDone <- result
+	}()
+	var firstRC replyContext
+	select {
+	case firstRC = <-received:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first handler")
+	}
+
+	result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("over capacity")),
+	})
+	if err != nil {
+		t.Fatalf("second SendMessage() error = %v", err)
+	}
+	task, ok := result.(*a2a.Task)
+	if !ok {
+		t.Fatalf("second SendMessage result = %T, want *a2a.Task", result)
+	}
+	if task.Status.State != a2a.TaskStateRejected {
+		t.Fatalf("second task state = %s, want rejected", task.Status.State)
+	}
+
+	p.pending.cancel(firstRC.taskID)
+	select {
+	case err := <-firstErr:
+		t.Fatalf("first SendMessage() error = %v", err)
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first SendMessage cleanup")
+	}
+}
+
+func TestJSONRPCRejectsMissingBearer(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "api_token": "secret"})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+
+	body := []byte(`{"jsonrpc":"2.0","id":"1","method":"SendMessage","params":{"message":{"messageId":"msg-1","role":"ROLE_USER","parts":[{"text":"hello"}]}}}`)
+	req := httptest.NewRequest(http.MethodPost, server.URL+"/a2a/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want JSON-RPC HTTP 200 body = %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp["error"] == nil {
+		t.Fatalf("response = %s, want JSON-RPC error", rec.Body.String())
+	}
+}
+
+func TestPartsToCoreMapsDataRawAndURLParts(t *testing.T) {
+	content, files, err := partsToCore(a2a.ContentParts{
+		a2a.NewTextPart("hello"),
+		a2a.NewDataPart(map[string]any{"ok": true}),
+		a2a.NewRawPart([]byte("file-bytes")),
+		a2a.NewFileURLPart(a2a.URL("https://example.com/file.txt"), "text/plain"),
+	})
+	if err != nil {
+		t.Fatalf("partsToCore() error = %v", err)
+	}
+	wantContent := "hello\n\n{\"ok\":true}\n\nFile URL: https://example.com/file.txt"
+	if content != wantContent {
+		t.Fatalf("content = %q, want %q", content, wantContent)
+	}
+	if len(files) != 1 || string(files[0].Data) != "file-bytes" {
+		t.Fatalf("files = %#v, want one raw file", files)
 	}
 }
 
@@ -416,4 +807,82 @@ func TestAuthInterceptorRejectsBadBearer(t *testing.T) {
 	if !errors.Is(err, errUnauthorized) {
 		t.Fatalf("Before() error = %v, want errUnauthorized", err)
 	}
+}
+
+func agentCardURL(t *testing.T, body []byte) string {
+	t.Helper()
+	var card map[string]any
+	if err := json.Unmarshal(body, &card); err != nil {
+		t.Fatalf("unmarshal card: %v", err)
+	}
+	interfaces, ok := card["supportedInterfaces"].([]any)
+	if !ok || len(interfaces) != 1 {
+		t.Fatalf("supportedInterfaces = %#v", card["supportedInterfaces"])
+	}
+	iface, ok := interfaces[0].(map[string]any)
+	if !ok {
+		t.Fatalf("supportedInterfaces[0] = %#v", interfaces[0])
+	}
+	urlValue, ok := iface["url"].(string)
+	if !ok {
+		t.Fatalf("interface url = %#v", iface["url"])
+	}
+	return urlValue
+}
+
+func newTestPlatform(t *testing.T, opts map[string]any) *Platform {
+	t.Helper()
+	plat, err := New(opts)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return plat.(*Platform)
+}
+
+func newA2AClient(t *testing.T, endpoint string, interceptor a2aclient.CallInterceptor) *a2aclient.Client {
+	t.Helper()
+	options := []a2aclient.FactoryOption{}
+	if interceptor != nil {
+		options = append(options, a2aclient.WithCallInterceptors(interceptor))
+	}
+	client, err := a2aclient.NewFromEndpoints(context.Background(), []*a2a.AgentInterface{
+		a2a.NewAgentInterface(endpoint, a2a.TransportProtocolJSONRPC),
+	}, options...)
+	if err != nil {
+		t.Fatalf("NewFromEndpoints() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := client.Destroy(); err != nil {
+			t.Errorf("client.Destroy() error = %v", err)
+		}
+	})
+	return client
+}
+
+func waitForTask(t *testing.T, client *a2aclient.Client, taskID a2a.TaskID) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if _, err := client.GetTask(context.Background(), &a2a.GetTaskRequest{ID: taskID}); err == nil {
+			return
+		} else {
+			lastErr = err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for task %q to become queryable: %v", taskID, lastErr)
+}
+
+type headerInterceptor map[string][]string
+
+func (h headerInterceptor) Before(ctx context.Context, req *a2aclient.Request) (context.Context, any, error) {
+	for key, values := range h {
+		req.ServiceParams.Append(key, values...)
+	}
+	return ctx, nil, nil
+}
+
+func (h headerInterceptor) After(context.Context, *a2aclient.Response) error {
+	return nil
 }

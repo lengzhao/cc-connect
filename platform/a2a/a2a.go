@@ -42,6 +42,7 @@ type Platform struct {
 	maxTasks    int
 	agentName   string
 	description string
+	skills      []sdka2a.AgentSkill
 
 	agentVersion string
 
@@ -100,6 +101,10 @@ func New(opts map[string]any) (core.Platform, error) {
 	if version == "" {
 		version = "dev"
 	}
+	skills, err := skillsOption(opts)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Platform{
 		listenAddr:   listenAddr,
@@ -111,6 +116,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		maxTasks:     maxTasks,
 		agentName:    stringOption(opts, "agent_name", defaultAgentName),
 		description:  stringOption(opts, "description", stringOption(opts, "agent_description", defaultDescription)),
+		skills:       skills,
 		agentVersion: version,
 		pending:      newPendingStore(maxTasks, taskTTL),
 	}, nil
@@ -243,15 +249,8 @@ func (p *Platform) agentCard(endpointURL string) *sdka2a.AgentCard {
 		DefaultOutputModes: []string{"text/plain"},
 		Description:        p.description,
 		Name:               p.agentName,
-		Skills: []sdka2a.AgentSkill{
-			{
-				ID:          "cc-connect",
-				Name:        "Coding agent bridge",
-				Description: "Forward A2A messages to the configured cc-connect coding agent.",
-				Tags:        []string{"coding-agent", "automation", "bridge"},
-			},
-		},
-		Version: p.agentVersion,
+		Skills:             p.skills,
+		Version:            p.agentVersion,
 	}
 }
 
@@ -690,6 +689,110 @@ func normalizePath(path string) string {
 	return path
 }
 
+func skillsOption(opts map[string]any) ([]sdka2a.AgentSkill, error) {
+	if opts == nil || opts["skills"] == nil {
+		return defaultSkills(), nil
+	}
+	raw := opts["skills"]
+	switch v := raw.(type) {
+	case []sdka2a.AgentSkill:
+		if len(v) == 0 {
+			return nil, errors.New("a2a: skills must not be empty")
+		}
+		for i := range v {
+			if err := validateSkill(v[i], i); err != nil {
+				return nil, err
+			}
+			normalizeSkillSlices(&v[i])
+		}
+		return v, nil
+	case []map[string]any:
+		return parseSkillMaps(v)
+	case []any:
+		maps := make([]map[string]any, 0, len(v))
+		for i, item := range v {
+			switch skill := item.(type) {
+			case map[string]any:
+				maps = append(maps, skill)
+			default:
+				return nil, fmt.Errorf("a2a: skills[%d] must be a table, got %T", i, item)
+			}
+		}
+		return parseSkillMaps(maps)
+	default:
+		return nil, fmt.Errorf("a2a: skills must be an array of tables, got %T", raw)
+	}
+}
+
+func defaultSkills() []sdka2a.AgentSkill {
+	return []sdka2a.AgentSkill{
+		{
+			ID:          "cc-connect",
+			Name:        "Coding agent bridge",
+			Description: "Forward A2A messages to the configured cc-connect coding agent.",
+			Tags:        []string{"coding-agent", "automation", "bridge"},
+		},
+	}
+}
+
+func parseSkillMaps(raw []map[string]any) ([]sdka2a.AgentSkill, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("a2a: skills must not be empty")
+	}
+	skills := make([]sdka2a.AgentSkill, 0, len(raw))
+	for i, item := range raw {
+		skill := sdka2a.AgentSkill{
+			ID:          strings.TrimSpace(stringOption(item, "id", "")),
+			Name:        strings.TrimSpace(stringOption(item, "name", "")),
+			Description: strings.TrimSpace(stringOption(item, "description", "")),
+			Tags:        stringSliceOption(item, "tags"),
+			Examples:    stringSliceOption(item, "examples"),
+			InputModes:  stringSliceOption(item, "input_modes"),
+			OutputModes: stringSliceOption(item, "output_modes"),
+		}
+		if len(skill.InputModes) == 0 {
+			skill.InputModes = stringSliceOption(item, "inputModes")
+		}
+		if len(skill.OutputModes) == 0 {
+			skill.OutputModes = stringSliceOption(item, "outputModes")
+		}
+		if err := validateSkill(skill, i); err != nil {
+			return nil, err
+		}
+		normalizeSkillSlices(&skill)
+		skills = append(skills, skill)
+	}
+	return skills, nil
+}
+
+func validateSkill(skill sdka2a.AgentSkill, idx int) error {
+	if strings.TrimSpace(skill.ID) == "" {
+		return fmt.Errorf("a2a: skills[%d].id is required", idx)
+	}
+	if strings.TrimSpace(skill.Name) == "" {
+		return fmt.Errorf("a2a: skills[%d].name is required", idx)
+	}
+	if strings.TrimSpace(skill.Description) == "" {
+		return fmt.Errorf("a2a: skills[%d].description is required", idx)
+	}
+	return nil
+}
+
+func normalizeSkillSlices(skill *sdka2a.AgentSkill) {
+	if skill.Tags == nil {
+		skill.Tags = []string{}
+	}
+	if skill.Examples == nil {
+		skill.Examples = []string{}
+	}
+	if skill.InputModes == nil {
+		skill.InputModes = []string{}
+	}
+	if skill.OutputModes == nil {
+		skill.OutputModes = []string{}
+	}
+}
+
 func stringOption(opts map[string]any, key, fallback string) string {
 	if opts == nil {
 		return fallback
@@ -707,6 +810,42 @@ func stringOption(opts map[string]any, key, fallback string) string {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+func stringSliceOption(opts map[string]any, key string) []string {
+	if opts == nil || opts[key] == nil {
+		return nil
+	}
+	switch v := opts[key].(type) {
+	case []string:
+		return cleanStringSlice(v)
+	case []any:
+		values := make([]string, 0, len(v))
+		for _, item := range v {
+			value := strings.TrimSpace(fmt.Sprint(item))
+			if value != "" {
+				values = append(values, value)
+			}
+		}
+		return values
+	default:
+		value := strings.TrimSpace(fmt.Sprint(v))
+		if value == "" {
+			return nil
+		}
+		return []string{value}
+	}
+}
+
+func cleanStringSlice(in []string) []string {
+	values := make([]string, 0, len(in))
+	for _, item := range in {
+		value := strings.TrimSpace(item)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func durationOption(opts map[string]any, key string, fallback time.Duration) (time.Duration, error) {

@@ -19,6 +19,15 @@ agent_version = "v10.0.0"
 timeout = "30m"
 task_ttl = "2h"
 max_tasks = 1000
+
+[[projects.platforms.options.skills]]
+id = "code-review"
+name = "Code Review"
+description = "Review code changes and suggest fixes."
+tags = ["code", "review"]
+examples = ["Review this pull request"]
+input_modes = ["text/plain"]
+output_modes = ["text/plain"]
 ```
 
 Common options:
@@ -35,6 +44,7 @@ Common options:
 | `timeout` | `30m` | Maximum time to wait for a cc-connect result |
 | `task_ttl` | `2h` | How long an in-flight cc-connect bridge waiter can remain pending |
 | `max_tasks` | `1000` | Maximum number of in-flight A2A tasks waiting for cc-connect completion |
+| `skills` | default bridge skill | AgentCard skills advertised to A2A clients |
 
 ## Endpoints
 
@@ -58,6 +68,23 @@ If `public_url` is not configured, the AgentCard JSON-RPC URL is derived from th
 4. Local listen address fallback.
 
 When `X-A2A-User` is provided, cc-connect uses it as the message user id; otherwise it falls back to `a2a`.
+
+## Skills
+
+If `[[projects.platforms.options.skills]]` is omitted, the platform advertises one default cc-connect bridge skill. If one or more skills are configured, they replace the default skill.
+
+Each skill requires:
+
+- `id`
+- `name`
+- `description`
+
+Optional fields:
+
+- `tags`
+- `examples`
+- `input_modes`
+- `output_modes`
 
 ## Flow
 

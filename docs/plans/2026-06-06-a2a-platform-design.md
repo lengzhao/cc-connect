@@ -70,6 +70,15 @@ agent_version = "v10.0.0"
 timeout = "30m"
 task_ttl = "2h"
 max_tasks = 1000
+
+[[projects.platforms.options.skills]]
+id = "code-review"
+name = "Code Review"
+description = "Review code changes and suggest fixes."
+tags = ["code", "review"]
+examples = ["Review this pull request"]
+input_modes = ["text/plain"]
+output_modes = ["text/plain"]
 ```
 
 Fields:
@@ -86,6 +95,7 @@ Fields:
 | `timeout` | No | `30m` | Maximum time the executor waits for the cc-connect result. Alias: `request_timeout` |
 | `task_ttl` | No | `2h` | How long an in-flight cc-connect bridge waiter can remain pending |
 | `max_tasks` | No | `1000` | Maximum number of in-flight A2A tasks waiting for cc-connect completion |
+| `skills` | No | default bridge skill | AgentCard skills advertised to A2A clients |
 
 ## Endpoints
 
@@ -103,7 +113,9 @@ The AgentCard is built with SDK types and served by a dynamic HTTP handler so th
 - `supportedInterfaces` containing a JSON-RPC interface at `public_url + path`, or a request-derived URL.
 - Name, description, and version from config.
 - Default text/plain output and text/data/raw-compatible input modes.
-- A default cc-connect bridge skill.
+- Configured skills from `[[projects.platforms.options.skills]]`, or a default cc-connect bridge skill when omitted.
+
+Configured skills require `id`, `name`, and `description`. Optional fields are `tags`, `examples`, `input_modes`, and `output_modes`.
 
 Request-derived URLs trust headers in this order: `Forwarded`, `X-Forwarded-Proto` plus `X-Forwarded-Host`, `Host`, then the local listen address fallback.
 

@@ -87,6 +87,8 @@ Implementation:
 - Serve `GET <path>.well-known/agent-card.json` with a dynamic handler.
 - Use `a2a.NewAgentInterface(endpointURL, a2a.TransportProtocolJSONRPC)`.
 - If `public_url` is empty, derive endpoint URL from `Forwarded`, `X-Forwarded-*`, `Host`, then local listen fallback.
+- Parse optional `[[projects.platforms.options.skills]]`; configured skills replace the default bridge skill.
+- Validate each configured skill has `id`, `name`, and `description`.
 
 Tests:
 
@@ -95,6 +97,8 @@ Tests:
 - `supportedInterfaces[0].url` is `public_url + path`, or the request-derived URL when `public_url` is empty.
 - `supportedInterfaces[0].protocolBinding` is `JSONRPC`.
 - False capability fields may be omitted by SDK `omitempty` behavior.
+- Custom skills appear in AgentCard with tags, examples, input modes, and output modes.
+- Invalid custom skills fail platform construction with indexed error context.
 
 ## Task 4: SDK JSON-RPC Routing and Auth
 
