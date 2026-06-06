@@ -1,0 +1,92 @@
+name: Personal Release
+
+on:
+  push:
+    tags:
+      - 'v10.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, for example v10.0.1'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set release version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build web assets
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Build Alpine-compatible Linux binaries
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          COMMIT="$(git rev-parse --short HEAD)"
+          BUILD_TIME="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}"
+
+          for target in linux/amd64 linux/arm64; do
+            GOOS="${target%/*}"
+            GOARCH="${target#*/}"
+            OUT="cc-connect-${VERSION}-${GOOS}-${GOARCH}"
+            echo "Building ${OUT}"
+            GOOS="${GOOS}" GOARCH="${GOARCH}" CGO_ENABLED=0 \
+              go build -ldflags "${LDFLAGS}" -o "dist/${OUT}" ./cmd/cc-connect
+            tar -C dist -czf "dist/${OUT}.tar.gz" "${OUT}"
+            rm "dist/${OUT}"
+          done
+
+          cd dist
+          sha256sum *.tar.gz > checksums.txt
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            gh release upload "${VERSION}" dist/*.tar.gz dist/checksums.txt --clobber
+          else
+            gh release create "${VERSION}" dist/*.tar.gz dist/checksums.txt \
+              --title "${VERSION}" \
+              --notes "Personal fork release ${VERSION}."
+          fi
