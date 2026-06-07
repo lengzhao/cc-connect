@@ -381,6 +381,14 @@ level = "info" # debug, info, warn, error
 #   http    — POST JSON to a URL with event payload
 #           — 向 URL 发送 POST JSON 请求，包含事件数据
 #
+# Common command hook env vars / 常用 command hook 环境变量:
+#   CC_HOOK_MESSAGE_ID      — platform message id, useful for per-message correlation / 平台消息 ID，用于单消息关联
+#   CC_HOOK_SESSION_KEY     — cc-connect session key / cc-connect 会话 key
+#   CC_HOOK_PLATFORM        — platform name, e.g. slack, a2a / 平台名称，如 slack、a2a
+#   CC_HOOK_CHANNEL_NAME    — human-readable channel/chat name when available / 可用时为频道或会话名称
+#   CC_HOOK_CTX_JSON        — dynamic platform context JSON, e.g. A2A metadata / 动态平台上下文 JSON，如 A2A metadata
+#   CC_HOOK_HEADERS_JSON    — whitelisted inbound headers JSON, e.g. A2A forward_headers / 白名单入站 header JSON，如 A2A forward_headers
+#
 # [[hooks]]
 # event = "message.received"
 # type = "command"
@@ -397,6 +405,19 @@ level = "info" # debug, info, warn, error
 # event = "*"
 # type = "http"
 # url = "https://my-server.com/cc-connect/events"
+#
+# Example: forward A2A metadata and whitelisted headers to your service.
+# 示例：将 A2A metadata 和白名单 header 转发到业务服务。
+#
+# [[hooks]]
+# event = "message.received"
+# type = "command"
+# command = '''
+# curl -sS -X POST https://my-server.com/agenthub/context \
+#   -H 'Content-Type: application/json' \
+#   -d "{\"message_id\":\"$CC_HOOK_MESSAGE_ID\",\"ctx\":$CC_HOOK_CTX_JSON,\"headers\":$CC_HOOK_HEADERS_JSON}"
+# '''
+# async = true
 
 # =============================================================================
 # Speech-to-Text (Voice Messages) / 语音转文字（语音消息）
@@ -1108,8 +1129,40 @@ app_secret = "your-feishu-app-secret"
 # timeout = "30m"
 # task_ttl = "2h"
 # max_tasks = 1000
-# forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # Whitelist HTTP headers exposed to cc-connect hooks (not agent prompt)
-#                                                     # 白名单 HTTP 头，仅暴露给 cc-connect hooks（不写入 Agent 提示词）
+# forward_headers = ["X-Tenant-Id", "X-Trace-Id", "X-AgentHub-Run-Id"]
+# Whitelist HTTP headers exposed to cc-connect hooks only (not agent prompt).
+# These appear in HTTP hook JSON as "headers", and in command hooks as CC_HOOK_HEADERS_JSON.
+# Authorization/Cookie/Proxy-Authorization/Set-Cookie are always blocked even if listed here.
+# 白名单 HTTP 头，仅暴露给 cc-connect hooks（不写入 Agent 提示词）。
+# HTTP hook JSON 中为 "headers"，command hook 中为 CC_HOOK_HEADERS_JSON。
+# Authorization/Cookie/Proxy-Authorization/Set-Cookie 即使配置也会被强制过滤。
+#
+# A2A SendMessage metadata example / A2A SendMessage metadata 示例:
+# {
+#   "message": {
+#     "messageId": "msg-001",
+#     "role": "ROLE_USER",
+#     "parts": [{"kind": "text", "text": "Review this PR"}],
+#     "metadata": {
+#       "tenant_id": "acme",
+#       "workspace_id": "ws-123"
+#     }
+#   },
+#   "metadata": {
+#     "agenthub_request_id": "req-789",
+#     "tool_context": {"env": "prod"}
+#   }
+# }
+#
+# cc-connect merges SendMessageRequest.metadata and message.metadata into hook ctx.
+# Command hooks read it from CC_HOOK_CTX_JSON; HTTP hooks receive it as "ctx".
+# cc-connect 会将 SendMessageRequest.metadata 与 message.metadata 合并到 hook ctx。
+# command hook 通过 CC_HOOK_CTX_JSON 读取；HTTP hook 通过 "ctx" 字段接收。
+#
+# Example command hook payload from an A2A message / A2A 消息对应的 command hook 示例变量:
+#   CC_HOOK_MESSAGE_ID=msg-001
+#   CC_HOOK_CTX_JSON={"agenthub_request_id":"req-789","tenant_id":"acme","tool_context":{"env":"prod"},"workspace_id":"ws-123"}
+#   CC_HOOK_HEADERS_JSON={"X-AgentHub-Run-Id":"run-456","X-Tenant-Id":"acme","X-Trace-Id":"trace-abc"}
 #
 # Optional AgentCard skills. If omitted, cc-connect advertises a default bridge skill.
 # 可选 AgentCard skills；未配置时会使用默认 cc-connect bridge skill。
