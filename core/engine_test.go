@@ -6281,6 +6281,87 @@ func TestProcessInteractiveEvents_AskUserQuestionFromAgent_RendersRichCardPrompt
 	}
 }
 
+func TestProcessInteractiveEvents_AskUserQuestionApproveAllAutoApproves(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	sess := &permRecordingSession{
+		controllableAgentSession: controllableAgentSession{
+			sessionID: "ask-approve-all",
+			alive:     true,
+			events:    make(chan Event, 16),
+			closed:    make(chan struct{}),
+		},
+	}
+	e := NewEngine("test", &controllableAgent{nextSession: sess}, []Platform{p}, "", LangEnglish)
+
+	key := "test:chat:user1"
+	session := e.sessions.GetOrCreateActive(key)
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx",
+		approveAll:   true,
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "m-ask-approve-all", time.Now(), nil, nil, nil)
+		close(done)
+	}()
+
+	input := map[string]any{"questions": []any{map[string]any{"question": "Which database?"}}}
+	sess.events <- Event{
+		Type:         EventPermissionRequest,
+		RequestID:    "req-ask",
+		ToolName:     "AskUserQuestion",
+		ToolInput:    `{"questions":[{"question":"Which database?"}]}`,
+		ToolInputRaw: input,
+		Questions:    testQuestions(),
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		sess.mu.Lock()
+		calls := sess.permCalls
+		result := sess.lastPermResult
+		sess.mu.Unlock()
+		if calls == 1 {
+			if result.Behavior != "allow" {
+				t.Fatalf("permission behavior = %q, want allow", result.Behavior)
+			}
+			if _, ok := result.UpdatedInput["answers"]; ok {
+				t.Fatalf("auto-approved AskUserQuestion should not synthesize answers: %#v", result.UpdatedInput)
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("expected AskUserQuestion to be auto-approved")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	state.mu.Lock()
+	pending := state.pending
+	state.mu.Unlock()
+	if pending != nil {
+		t.Fatal("expected no pending AskUserQuestion prompt under approveAll")
+	}
+	if sent := p.getSent(); len(sent) != 0 {
+		t.Fatalf("expected no AskUserQuestion prompt to be sent, got %v", sent)
+	}
+
+	sess.events <- Event{Type: EventResult, Done: true}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("processInteractiveEvents did not complete")
+	}
+}
+
 func TestProcessInteractiveEvents_AskUserQuestionFromAgent_RendersLegacyPrompt(t *testing.T) {
 	p := &stubPlatformEngine{n: "plain"}
 	sess := newBlockingSendSession("codex-ask-legacy")

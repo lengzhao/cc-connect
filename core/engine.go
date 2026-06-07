@@ -4148,7 +4148,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			autoApprove := state.approveAll
 			state.mu.Unlock()
 
-			if autoApprove && !isAskQuestion {
+			if autoApprove {
 				slog.Debug("auto-approving (approve-all)", "request_id", event.RequestID, "tool", event.ToolName)
 				_ = state.agentSession.RespondPermission(event.RequestID, PermissionResult{
 					Behavior:     "allow",
@@ -9516,7 +9516,7 @@ func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images
 			return err
 		}
 		// Use AtMentionSender when @users specified and platform supports it
-		if (len(atUsers) > 0 || atAll) {
+		if len(atUsers) > 0 || atAll {
 			if atSender, ok := p.(AtMentionSender); ok {
 				if err := atSender.ReplyWithAt(e.ctx, replyCtx, message, atUsers, atAll); err != nil {
 					return err
