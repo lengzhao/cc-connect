@@ -608,7 +608,7 @@ func syncNpmPackageVersion(execPath, newVer string) {
 	}
 
 	name, _ := pkg["name"].(string)
-	if name != "cc-connect" {
+	if name != "cc-connect" && name != "@lengzhao/cc-connect" {
 		return
 	}
 

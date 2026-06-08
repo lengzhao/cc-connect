@@ -65,7 +65,7 @@ if (needsReinstall()) {
       cwd: __dirname,
     });
   } catch {
-    console.error("[cc-connect] Auto-install failed. Run manually: npm uninstall -g cc-connect && npm install -g cc-connect@beta");
+    console.error("[cc-connect] Auto-install failed. Run manually: npm uninstall -g @lengzhao/cc-connect && npm install -g @lengzhao/cc-connect");
     process.exit(1);
   }
 }

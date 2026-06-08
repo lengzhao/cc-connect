@@ -158,11 +158,14 @@ release-all: web clean
 	@echo "Packaging archives..."
 	@cd $(DIST) && for f in $(APP)-*; do \
 		case "$$f" in \
-			*.tar.gz|*.zip) continue ;; \
+			*.tar.gz|*.zip|*.tgz) continue ;; \
 			*.exe) zip "$${f%.exe}.zip" "$$f" ;; \
 			*)     tar czf "$$f.tar.gz" "$$f" ;; \
 		esac; \
 	done
+	@echo "Packing npm package..."
+	@node -e 'const fs=require("fs");const v="$(VERSION)".replace(/^v/,"");const p=JSON.parse(fs.readFileSync("npm/package.json"));p.version=v;fs.writeFileSync("npm/package.json",JSON.stringify(p,null,2)+"\n");'
+	@cd npm && npm pack --pack-destination ../$(DIST)
 	@cd $(DIST) && sha256sum * > checksums.txt
 	@echo "Done. Binaries and archives in $(DIST)/"
 

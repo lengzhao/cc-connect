@@ -1,26 +1,33 @@
-# cc-connect
+# @lengzhao/cc-connect
 
-Bridge local AI coding agents (Claude Code, Cursor, Gemini CLI, Codex) to messaging platforms (Feishu/Lark, DingTalk, Slack, Telegram, Discord, LINE, WeChat Work).
-
-Chat with your AI dev assistant from anywhere.
+Personal fork of [cc-connect](https://github.com/chenhg5/cc-connect). Bridge local AI coding agents (Claude Code, Cursor, Gemini CLI, Codex) to messaging platforms (Feishu/Lark, DingTalk, Slack, Telegram, Discord, LINE, WeChat Work).
 
 ## Install
 
 ```bash
-npm install -g cc-connect
+npm install -g @lengzhao/cc-connect
+```
+
+Install from a GitHub Release tarball:
+
+```bash
+npm install -g https://github.com/lengzhao/cc-connect/releases/download/vVERSION/lengzhao-cc-connect-VERSION.tgz
+```
+
+Example:
+
+```bash
+npm install -g https://github.com/lengzhao/cc-connect/releases/download/v10.0.1/lengzhao-cc-connect-10.0.1.tgz
 ```
 
 ## Usage
 
 ```bash
-# Create config
 cc-connect --version
-
-# Edit config.toml, then run
 cc-connect
 cc-connect -config /path/to/config.toml
 ```
 
 ## Documentation
 
-See full documentation at: https://github.com/chenhg5/cc-connect
+Upstream docs: https://github.com/chenhg5/cc-connect

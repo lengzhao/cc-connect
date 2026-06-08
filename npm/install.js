@@ -10,11 +10,37 @@ const http = require("http");
 const zlib = require("zlib");
 
 const PACKAGE = require("./package.json");
-const VERSION = `v${PACKAGE.version}`;
+const VERSION = `v${PACKAGE.version.replace(/^v/, "")}`;
 const NAME = "cc-connect";
 
-const GITHUB_REPO = "chenhg5/cc-connect";
-const GITEE_REPO = "cg33/cc-connect";
+function parseGitHubRepo(pkg) {
+  if (process.env.CC_CONNECT_GITHUB_REPO) {
+    return process.env.CC_CONNECT_GITHUB_REPO;
+  }
+  const repo = pkg.repository;
+  const url = typeof repo === "string" ? repo : repo && repo.url;
+  if (url) {
+    const m = String(url).match(/github\.com[/:]([^/]+\/[^/.]+?)(?:\.git)?$/);
+    if (m) return m[1];
+  }
+  return "lengzhao/cc-connect";
+}
+
+function parseGiteeRepo(pkg) {
+  if (process.env.CC_CONNECT_GITEE_REPO) {
+    return process.env.CC_CONNECT_GITEE_REPO;
+  }
+  if (pkg.gitee === false || pkg.gitee === "") {
+    return "";
+  }
+  if (typeof pkg.gitee === "string" && pkg.gitee.trim()) {
+    return pkg.gitee.trim();
+  }
+  return "";
+}
+
+const GITHUB_REPO = parseGitHubRepo(PACKAGE);
+const GITEE_REPO = parseGiteeRepo(PACKAGE);
 
 const PLATFORM_MAP = {
   darwin: "darwin",
@@ -42,10 +68,13 @@ function getPlatformInfo() {
 }
 
 function getDownloadURLs(filename) {
-  return [
+  const urls = [
     `https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${filename}`,
-    `https://gitee.com/${GITEE_REPO}/releases/download/${VERSION}/${filename}`,
   ];
+  if (GITEE_REPO) {
+    urls.push(`https://gitee.com/${GITEE_REPO}/releases/download/${VERSION}/${filename}`);
+  }
+  return urls;
 }
 
 function fetch(url, redirects = 5) {

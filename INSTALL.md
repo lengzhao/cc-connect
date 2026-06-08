@@ -21,7 +21,7 @@ Don't guess values—always ask the user to choose via interactive prompts.
 ### Option A: npm (recommended for most users)
 
 ```bash
-npm install -g cc-connect
+npm install -g @lengzhao/cc-connect
 ```
 
 After installation, the `cc-connect` binary will be available globally.
@@ -33,9 +33,19 @@ After installation, the `cc-connect` binary will be available globally.
 brew install cc-connect
 ```
 
-### Option C: Download binary from GitHub Releases
+### Option C: npm from GitHub Release tarball
 
-Go to https://github.com/chenhg5/cc-connect/releases and download the binary for your platform.
+If the version is not on npm yet, or you use a fork, install directly from the release tarball:
+
+```bash
+npm install -g https://github.com/lengzhao/cc-connect/releases/download/vVERSION/lengzhao-cc-connect-VERSION.tgz
+```
+
+Replace `VERSION` with the release tag without the leading `v` (e.g. `10.0.1` for tag `v10.0.1`).
+
+### Option D: Download binary from GitHub Releases
+
+Go to https://github.com/lengzhao/cc-connect/releases and download the binary for your platform.
 
 Typical artifact names (check the release page for exact filenames):
 
@@ -56,7 +66,7 @@ On macOS, you may need to remove the quarantine attribute:
 xattr -d com.apple.quarantine cc-connect
 ```
 
-### Option D: Build from source
+### Option E: Build from source
 
 Requires Go 1.22+.
 
