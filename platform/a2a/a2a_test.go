@@ -42,6 +42,9 @@ func TestNewDefaults(t *testing.T) {
 	if p.agentVersion != "dev" {
 		t.Fatalf("agentVersion = %q, want dev", p.agentVersion)
 	}
+	if p.userHeader != "X-A2A-User" {
+		t.Fatalf("userHeader = %q, want X-A2A-User", p.userHeader)
+	}
 }
 
 func TestNewCustomOptions(t *testing.T) {
@@ -57,6 +60,7 @@ func TestNewCustomOptions(t *testing.T) {
 		"task_ttl":          "1h",
 		"max_tasks":         int64(42),
 		"allow_from":        "alice",
+		"user_header":       "x-caller-user",
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -77,6 +81,9 @@ func TestNewCustomOptions(t *testing.T) {
 	}
 	if p.timeout != 5*time.Minute || p.taskTTL != time.Hour || p.maxTasks != 42 {
 		t.Fatalf("unexpected config: timeout=%s taskTTL=%s maxTasks=%d", p.timeout, p.taskTTL, p.maxTasks)
+	}
+	if p.userHeader != "X-Caller-User" {
+		t.Fatalf("userHeader = %q, want X-Caller-User", p.userHeader)
 	}
 }
 
@@ -407,6 +414,51 @@ func TestJSONRPCSendMessageCompletesTaskWithArtifact(t *testing.T) {
 	}
 	if len(task.Artifacts) != 1 || len(task.Artifacts[0].Parts) != 1 || task.Artifacts[0].Parts[0].Text() != "done" {
 		t.Fatalf("task artifacts = %#v, want text artifact done", task.Artifacts)
+	}
+}
+
+func TestJSONRPCSendMessageUsesConfiguredUserHeader(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{
+		"path":        "/a2a/",
+		"timeout":     "2s",
+		"api_token":   "secret",
+		"user_header": "X-Caller-User",
+	})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+
+	received := make(chan *core.Message, 1)
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		received <- msg
+		if err := platform.Reply(context.Background(), msg.ReplyCtx, "done"); err != nil {
+			t.Errorf("Reply() error = %v", err)
+		}
+	})
+
+	client := newA2AClient(t, server.URL+"/a2a/", headerInterceptor{
+		"Authorization":   {"Bearer secret"},
+		"X-Caller-User":   {"carol"},
+		"X-A2A-User":      {"alice"},
+		"X-Unused-Header": {"bob"},
+	})
+	if _, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: &a2a.Message{
+			ID:        "msg-1",
+			ContextID: "ctx-1",
+			Role:      a2a.MessageRoleUser,
+			Parts:     a2a.ContentParts{a2a.NewTextPart("hello")},
+		},
+	}); err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+
+	select {
+	case msg := <-received:
+		if msg.UserID != "carol" {
+			t.Fatalf("UserID = %q, want carol", msg.UserID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler")
 	}
 }
 

@@ -64,6 +64,7 @@ listen_addr = ":8010"
 path = "/a2a/"
 public_url = "https://agent.example.com"
 api_token = "optional-bearer-token"
+user_header = "X-A2A-User"
 agent_name = "cc-connect"
 description = "cc-connect A2A bridge"
 agent_version = "v10.0.0"
@@ -89,6 +90,7 @@ Fields:
 | `path` | No | `/a2a/` | JSON-RPC base path and AgentCard prefix |
 | `public_url` | No | empty | External base URL used in AgentCard. If empty, derive from request headers |
 | `api_token` | No | empty | If set, require `Authorization: Bearer <token>`. Alias: `token` |
+| `user_header` | No | `X-A2A-User` | HTTP header used as the cc-connect message user id. This is a cc-connect extension, not an A2A protocol field |
 | `agent_name` | No | `CC-Connect` | AgentCard display name |
 | `description` | No | generic description | AgentCard description. Alias: `agent_description` |
 | `agent_version` | No | cc-connect version or `dev` | AgentCard version |

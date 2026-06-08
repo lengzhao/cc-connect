@@ -112,7 +112,7 @@ Implementation:
 - Build a request handler with `a2asrv.NewHandler(&sdkExecutor{platform: p})`.
 - Serve it with `a2asrv.NewJSONRPCHandler` at `path`.
 - Add an SDK `CallInterceptor` controlled by `api_token` or `token`.
-- Set `CallContext.User` from `X-A2A-User`, falling back to `a2a`.
+- Set `CallContext.User` from configurable `user_header`, defaulting to `X-A2A-User`, falling back to `a2a`.
 
 Tests:
 

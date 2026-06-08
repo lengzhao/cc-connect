@@ -28,6 +28,7 @@ const (
 	defaultMaxTasks    = 1000
 	defaultAgentName   = "CC-Connect"
 	defaultDescription = "Bridge A2A requests to the configured cc-connect coding agent."
+	defaultUserHeader  = "X-A2A-User"
 )
 
 var errUnauthorized = errors.New("a2a: unauthorized")
@@ -46,6 +47,7 @@ type Platform struct {
 
 	agentVersion   string
 	forwardHeaders []string
+	userHeader     string
 
 	server  *http.Server
 	handler core.MessageHandler
@@ -107,6 +109,11 @@ func New(opts map[string]any) (core.Platform, error) {
 		return nil, err
 	}
 
+	userHeader, err := userHeaderOption(opts)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Platform{
 		listenAddr:     listenAddr,
 		path:           path,
@@ -120,6 +127,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		skills:         skills,
 		agentVersion:   version,
 		forwardHeaders: normalizeForwardHeaderNames(stringSliceOption(opts, "forward_headers")),
+		userHeader:     userHeader,
 		pending:        newPendingStore(maxTasks, taskTTL),
 	}, nil
 }
@@ -346,7 +354,7 @@ func (p *Platform) getHandler() core.MessageHandler {
 }
 
 func (p *Platform) authInterceptor() a2asrv.CallInterceptor {
-	return authInterceptor{token: p.apiToken}
+	return authInterceptor{token: p.apiToken, userHeader: p.userHeader}
 }
 
 func (p *Platform) completePending(taskID, content string) bool {
@@ -361,11 +369,16 @@ type sdkExecutor struct {
 }
 
 type authInterceptor struct {
-	token string
+	token      string
+	userHeader string
 }
 
 func (i authInterceptor) Before(ctx context.Context, callCtx *a2asrv.CallContext, _ *a2asrv.Request) (context.Context, any, error) {
-	userName := serviceParamValue(callCtx, "X-A2A-User")
+	userHeader := i.userHeader
+	if userHeader == "" {
+		userHeader = defaultUserHeader
+	}
+	userName := serviceParamValue(callCtx, userHeader)
 	if userName == "" {
 		userName = "a2a"
 	}
@@ -845,6 +858,21 @@ func stringOption(opts map[string]any, key, fallback string) string {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+func userHeaderOption(opts map[string]any) (string, error) {
+	raw := strings.TrimSpace(stringOption(opts, "user_header", defaultUserHeader))
+	if strings.EqualFold(raw, defaultUserHeader) {
+		return defaultUserHeader, nil
+	}
+	header := http.CanonicalHeaderKey(raw)
+	if header == "" {
+		return defaultUserHeader, nil
+	}
+	if isBlockedForwardHeader(header) {
+		return "", fmt.Errorf("a2a: user_header %q is not allowed", header)
+	}
+	return header, nil
 }
 
 func stringSliceOption(opts map[string]any, key string) []string {

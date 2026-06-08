@@ -1127,6 +1127,9 @@ app_secret = "your-feishu-app-secret"
 # path = "/a2a/"
 # public_url = "https://agent.example.com"
 # api_token = "optional-bearer-token"
+# user_header = "X-A2A-User"
+# HTTP header used as cc-connect user id; default is the cc-connect extension X-A2A-User.
+# 用作 cc-connect 用户 ID 的 HTTP 头；默认是 cc-connect 扩展头 X-A2A-User。
 # agent_name = "cc-connect"
 # description = "cc-connect A2A bridge"
 # agent_version = "v10.0.0"

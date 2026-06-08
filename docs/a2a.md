@@ -13,6 +13,7 @@ listen_addr = ":8010"
 path = "/a2a/"
 public_url = "https://agent.example.com"
 api_token = "optional-bearer-token"
+user_header = "X-A2A-User"
 agent_name = "cc-connect"
 description = "cc-connect A2A bridge"
 agent_version = "v10.0.0"
@@ -38,6 +39,7 @@ Common options:
 | `path` | `/a2a/` | JSON-RPC base path and AgentCard prefix |
 | `public_url` | empty | External base URL advertised in AgentCard. If empty, the AgentCard URL is derived from request headers |
 | `api_token` | empty | Optional Bearer token. Alias: `token` |
+| `user_header` | `X-A2A-User` | HTTP header used as the cc-connect message user id. This is a cc-connect extension, not an A2A protocol field |
 | `agent_name` | `CC-Connect` | AgentCard name |
 | `description` | generic bridge description | AgentCard description |
 | `agent_version` | cc-connect version or `dev` | AgentCard version |
@@ -68,7 +70,7 @@ If `public_url` is not configured, the AgentCard JSON-RPC URL is derived from th
 3. `Host` header or request host.
 4. Local listen address fallback.
 
-When `X-A2A-User` is provided, cc-connect uses it as the message user id; otherwise it falls back to `a2a`.
+The message user id is read from the configured `user_header`. By default this is the cc-connect extension header `X-A2A-User`. If the header is absent, cc-connect falls back to `a2a`.
 
 ### Forwarding context to cc-connect hooks
 
