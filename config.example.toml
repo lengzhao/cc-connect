@@ -1109,6 +1109,10 @@ app_secret = "your-feishu-app-secret"
 #                         # 会话粒度："user"(默认) | "channel"(整个频道一个会话) | "thread"(每个 Slack 话题串一个会话)
 # reaction_emoji = "eyes"  # Emoji on incoming message (default eyes); set to "none" to disable / 收到消息时添加表情
 # done_emoji = "white_check_mark"  # Emoji when agent finishes (default ✅); set to "none" to disable / 处理完成后添加表情
+# inject_mentioned_users = true  # Add Slack user refs for inbound <@USER_ID> mentions so the agent can resolve who was mentioned
+#                                 # 为入站消息里的 <@USER_ID> 注入用户引用，方便 Agent 知道被 @ 的是谁
+# include_user_email = false  # Include sender/mentioned-user email in injected refs; requires Slack users:read.email scope
+#                             # 在注入信息里包含邮箱；需要 Slack users:read.email 权限，默认关闭
 
 # A2A server (uncomment to enable / 取消注释以启用)
 # Exposes this project as an A2A JSON-RPC agent server.

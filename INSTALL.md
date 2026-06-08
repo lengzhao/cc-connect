@@ -289,7 +289,8 @@ Connection: Socket Mode (WebSocket)
 1. Go to https://api.slack.com/apps → Create New App → From scratch
 2. Enable **Socket Mode** (Settings → Socket Mode) → generate App-Level Token (`xapp-...`)
 3. Subscribe to bot events: `message.im`, `app_mention` (Event Subscriptions)
-4. Add Bot Token Scopes: `chat:write`, `im:history`, `im:read`, `im:write`, `app_mentions:read`
+4. Add Bot Token Scopes: `chat:write`, `im:history`, `im:read`, `im:write`, `app_mentions:read`, `users:read`
+   - Optional: add `users:read.email` only if you enable `include_user_email = true`
 5. Install App to Workspace → copy Bot Token (`xoxb-...`)
 
 **Config:**
@@ -303,6 +304,8 @@ bot_token = "xoxb-your-bot-token"
 app_token = "xapp-your-app-level-token"
 # Optional custom Slack Web API URL.
 api_url = "https://slack.example.com/api/"
+# inject_mentioned_users = true  # default: inject refs for inbound <@USER_ID> mentions
+# include_user_email = false     # default: false; requires users:read.email when enabled
 ```
 
 **Detailed guide:** [docs/slack.md](docs/slack.md)

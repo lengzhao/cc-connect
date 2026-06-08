@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,11 +27,18 @@ func init() {
 }
 
 type replyContext struct {
-	channel    string
-	timestamp  string // thread_ts for threading replies
-	messageTS  string // triggering user message ts (for emoji reactions)
-	sessionKey string
-	lang       string // normalized UI language for this session
+	channel       string
+	timestamp     string // thread_ts for threading replies
+	messageTS     string // triggering user message ts (for emoji reactions)
+	sessionKey    string
+	lang          string // normalized UI language for this session
+	slackMentions []slackMentionRef
+}
+
+type slackMentionRef struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email,omitempty"`
 }
 
 type Platform struct {
@@ -41,6 +49,8 @@ type Platform struct {
 	sessionScope          string // "user" (default) | "channel" | "thread"
 	reactionEmoji         string // emoji on incoming message (default eyes)
 	doneEmoji             string // emoji when processing completes (default white_check_mark)
+	injectMentionedUsers  bool   // prepend Slack mention metadata for users mentioned in inbound text
+	includeUserEmail      bool   // include Slack profile email in injected metadata when available
 	client                *slack.Client
 	socket                *socketmode.Client
 	handler               core.MessageHandler
@@ -84,15 +94,22 @@ func New(opts map[string]any) (core.Platform, error) {
 	if v, ok := opts["done_emoji"].(string); ok && v == "none" {
 		doneEmoji = ""
 	}
+	injectMentionedUsers := true
+	if v, ok := opts["inject_mentioned_users"].(bool); ok {
+		injectMentionedUsers = v
+	}
+	includeUserEmail, _ := opts["include_user_email"].(bool)
 	return &Platform{
-		botToken:         botToken,
-		appToken:         appToken,
-		apiURL:           apiURL,
-		allowFrom:        allowFrom,
-		sessionScope:     scope,
-		reactionEmoji:    reactionEmoji,
-		doneEmoji:        doneEmoji,
-		channelNameCache: make(map[string]string),
+		botToken:             botToken,
+		appToken:             appToken,
+		apiURL:               apiURL,
+		allowFrom:            allowFrom,
+		sessionScope:         scope,
+		reactionEmoji:        reactionEmoji,
+		doneEmoji:            doneEmoji,
+		injectMentionedUsers: injectMentionedUsers,
+		includeUserEmail:     includeUserEmail,
+		channelNameCache:     make(map[string]string),
 	}, nil
 }
 
@@ -268,21 +285,25 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 					return
 				}
 				lang := p.rememberSessionLang(sessionKey, ev.User, content)
+				mentions := p.resolveMentionedUsers(content)
 				rc := replyContext{
 					channel: ev.Channel, timestamp: threadTS,
 					messageTS: ev.TimeStamp, sessionKey: sessionKey, lang: lang,
+					slackMentions: mentions,
 				}
 				p.reactReceived(rc)
+				userName, userEmail := p.resolveUserNameAndEmail(ev.User)
 				msg := &core.Message{
 					SessionKey: sessionKey, Platform: "slack",
-					UserID: ev.User, UserName: p.resolveUserName(ev.User),
-					ChatName:  p.resolveChannelNameForMsg(ev.Channel),
-					Content:   content,
-					Images:    images,
-					Files:     docFiles,
-					Audio:     audio,
-					MessageID: ev.TimeStamp,
-					ReplyCtx:  rc,
+					UserID: ev.User, UserName: userName, UserEmail: userEmail,
+					ChatName:     p.resolveChannelNameForMsg(ev.Channel),
+					Content:      content,
+					ExtraContent: formatMentionExtraContent(mentions),
+					Images:       images,
+					Files:        docFiles,
+					Audio:        audio,
+					MessageID:    ev.TimeStamp,
+					ReplyCtx:     rc,
 				}
 				p.handler(p, msg)
 
@@ -338,18 +359,25 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 				}
 
 				lang := p.rememberSessionLang(sessionKey, ev.User, ev.Text)
+				mentions := p.resolveMentionedUsers(ev.Text)
 				rc := replyContext{
 					channel: ev.Channel, timestamp: threadTS,
 					messageTS: ts, sessionKey: sessionKey, lang: lang,
+					slackMentions: mentions,
 				}
 				p.reactReceived(rc)
+				userName, userEmail := p.resolveUserNameAndEmail(ev.User)
 				msg := &core.Message{
 					SessionKey: sessionKey, Platform: "slack",
-					UserID: ev.User, UserName: p.resolveUserName(ev.User),
-					ChatName: p.resolveChannelNameForMsg(ev.Channel),
-					Content:  ev.Text, Images: images, Files: docFiles, Audio: audio,
-					MessageID: ts,
-					ReplyCtx:  rc,
+					UserID: ev.User, UserName: userName, UserEmail: userEmail,
+					ChatName:     p.resolveChannelNameForMsg(ev.Channel),
+					Content:      ev.Text,
+					ExtraContent: formatMentionExtraContent(mentions),
+					Images:       images,
+					Files:        docFiles,
+					Audio:        audio,
+					MessageID:    ts,
+					ReplyCtx:     rc,
 				}
 				p.handler(p, msg)
 			}
@@ -380,13 +408,22 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 
 		sessionKey := p.buildSessionKey(cmd.ChannelID, cmd.UserID, "")
 		lang := p.rememberSessionLang(sessionKey, cmd.UserID, content)
+		mentions := p.resolveMentionedUsers(content)
 
+		userName, userEmail := p.resolveUserNameAndEmail(cmd.UserID)
+		if userName == "" {
+			userName = cmd.UserName
+		}
 		msg := &core.Message{
 			SessionKey: sessionKey, Platform: "slack",
-			UserID: cmd.UserID, UserName: cmd.UserName,
-			Content: content,
+			UserID: cmd.UserID, UserName: userName, UserEmail: userEmail,
+			Content:      content,
+			ExtraContent: formatMentionExtraContent(mentions),
 			ReplyCtx: replyContext{
-				channel: cmd.ChannelID, sessionKey: sessionKey, lang: lang,
+				channel:       cmd.ChannelID,
+				sessionKey:    sessionKey,
+				lang:          lang,
+				slackMentions: mentions,
 			},
 		}
 		slog.Debug("slack: slash command", "command", cmd.Command, "text", cmd.Text, "user", cmd.UserID)
@@ -599,6 +636,7 @@ var _ core.CardRefresher = (*Platform)(nil)
 var _ core.TypingIndicator = (*Platform)(nil)
 var _ core.TypingIndicatorDone = (*Platform)(nil)
 var _ core.ObserverTarget = (*Platform)(nil)
+var _ core.HookContextProvider = (*Platform)(nil)
 
 // SendObservation implements core.ObserverTarget for terminal session observation.
 func (p *Platform) SendObservation(ctx context.Context, channelID, text string) error {
@@ -687,21 +725,21 @@ func (p *Platform) ReconstructReplyCtx(sessionKey string) (any, error) {
 	return rc, nil
 }
 
-func (p *Platform) cachedUserInfo(userID string) (name, lang string) {
+func (p *Platform) cachedUserInfo(userID string) (name, email, lang string) {
 	if userID == "" {
-		return "", ""
+		return "", "", ""
 	}
 	if cached, ok := p.userInfoCache.Load(userID); ok {
 		info := cached.(slackUserInfo)
-		return info.name, info.lang
+		return info.name, info.email, info.lang
 	}
 	if p.client == nil {
-		return userID, ""
+		return userID, "", ""
 	}
 	user, err := p.client.GetUserInfo(userID)
 	if err != nil {
 		slog.Debug("slack: resolve user info failed", "user", userID, "error", err)
-		return userID, ""
+		return userID, "", ""
 	}
 	name = user.RealName
 	if name == "" {
@@ -710,14 +748,107 @@ func (p *Platform) cachedUserInfo(userID string) (name, lang string) {
 	if name == "" {
 		name = userID
 	}
+	email = user.Profile.Email
 	lang = mapSlackUserLocale(user.Locale)
-	p.userInfoCache.Store(userID, slackUserInfo{name: name, lang: lang})
-	return name, lang
+	p.userInfoCache.Store(userID, slackUserInfo{name: name, email: email, lang: lang})
+	return name, email, lang
 }
 
 func (p *Platform) resolveUserName(userID string) string {
-	name, _ := p.cachedUserInfo(userID)
+	name, _, _ := p.cachedUserInfo(userID)
 	return name
+}
+
+func (p *Platform) resolveUserNameAndEmail(userID string) (string, string) {
+	name, email, _ := p.cachedUserInfo(userID)
+	if !p.includeUserEmail {
+		email = ""
+	}
+	return name, email
+}
+
+var slackUserMentionRE = regexp.MustCompile(`<@([UW][A-Z0-9]+)(?:\|[^>]+)?>`)
+
+func extractSlackMentionUserIDs(text string) []string {
+	matches := slackUserMentionRE.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	ids := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		id := match[1]
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (p *Platform) buildMentionExtraContent(text string) string {
+	return formatMentionExtraContent(p.resolveMentionedUsers(text))
+}
+
+func (p *Platform) resolveMentionedUsers(text string) []slackMentionRef {
+	if !p.injectMentionedUsers {
+		return nil
+	}
+	ids := extractSlackMentionUserIDs(text)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	mentions := make([]slackMentionRef, 0, len(ids))
+	for _, id := range ids {
+		name, email, _ := p.cachedUserInfo(id)
+		if name == "" {
+			name = id
+		}
+		ref := slackMentionRef{ID: id, Name: name}
+		if p.includeUserEmail && email != "" {
+			ref.Email = email
+		}
+		mentions = append(mentions, ref)
+	}
+	return mentions
+}
+
+func formatMentionExtraContent(mentions []slackMentionRef) string {
+	if len(mentions) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, len(mentions))
+	for _, mention := range mentions {
+		line := fmt.Sprintf(`[cc-connect slack_mention id=%s name="%s"`, mention.ID, slackPromptAttrValue(mention.Name))
+		if mention.Email != "" {
+			line += fmt.Sprintf(` email="%s"`, slackPromptAttrValue(mention.Email))
+		}
+		line += "]"
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (p *Platform) HookContext(replyCtx any) core.HookContext {
+	rc, ok := replyCtx.(replyContext)
+	if !ok || len(rc.slackMentions) == 0 {
+		return core.HookContext{}
+	}
+	return core.HookContext{
+		Context: map[string]any{
+			"slack_mentions": rc.slackMentions,
+		},
+	}
+}
+
+func slackPromptAttrValue(value string) string {
+	return strings.NewReplacer(`"`, `'`, "\n", " ", "\r", "").Replace(value)
 }
 
 func (p *Platform) resolveChannelNameForMsg(channelID string) string {
@@ -761,6 +892,7 @@ func (p *Platform) FormattingInstructions() string {
 - Blockquote: > text
 - Lists: use bullet (•) or numbered lists normally
 - Links: <url|display text>
+- Mention Slack users with <@USER_ID> when a cc-connect slack_mention or sender_id provides a Slack user ID.
 - Do NOT use ## headings — Slack does not render them. Use *bold text* on its own line instead.`
 }
 

@@ -69,6 +69,7 @@ type HookEvent struct {
 	MessageID   string            `json:"message_id,omitempty"`
 	UserID      string            `json:"user_id,omitempty"`
 	UserName    string            `json:"user_name,omitempty"`
+	UserEmail   string            `json:"user_email,omitempty"`
 	ChannelName string            `json:"channel_name,omitempty"`
 	Content     string            `json:"content,omitempty"`
 	Context     map[string]any    `json:"ctx,omitempty"`
@@ -265,6 +266,9 @@ func eventToEnv(e HookEvent) []string {
 	}
 	if e.UserName != "" {
 		env = append(env, "CC_HOOK_USER_NAME="+e.UserName)
+	}
+	if e.UserEmail != "" {
+		env = append(env, "CC_HOOK_USER_EMAIL="+e.UserEmail)
 	}
 	if e.ChannelName != "" {
 		env = append(env, "CC_HOOK_CHANNEL_NAME="+e.ChannelName)

@@ -88,7 +88,7 @@ func (p *Platform) handleBlockAction(callback slack.InteractionCallback, action 
 		p.setSessionLang(sessionKey, lang)
 	}
 	if lang == "" {
-		if _, userLang := p.cachedUserInfo(callback.User.ID); userLang != "" {
+		if _, _, userLang := p.cachedUserInfo(callback.User.ID); userLang != "" {
 			lang = userLang
 			p.setSessionLang(sessionKey, lang)
 		}
@@ -199,11 +199,13 @@ func (p *Platform) handlePermAction(
 		lang:       lang,
 	}
 	if p.handler != nil {
+		userName, userEmail := p.resolveUserNameAndEmail(callback.User.ID)
 		go p.handler(p, &core.Message{
 			SessionKey: sessionKey,
 			Platform:   "slack",
 			UserID:     callback.User.ID,
-			UserName:   p.resolveUserName(callback.User.ID),
+			UserName:   userName,
+			UserEmail:  userEmail,
 			ChatName:   p.resolveChannelNameForMsg(channelID),
 			Content:    responseText,
 			ReplyCtx:   rctx,
@@ -238,11 +240,13 @@ func (p *Platform) handleAskQAction(
 		lang:       lang,
 	}
 	if p.handler != nil {
+		userName, userEmail := p.resolveUserNameAndEmail(callback.User.ID)
 		go p.handler(p, &core.Message{
 			SessionKey: sessionKey,
 			Platform:   "slack",
 			UserID:     callback.User.ID,
-			UserName:   p.resolveUserName(callback.User.ID),
+			UserName:   userName,
+			UserEmail:  userEmail,
 			ChatName:   p.resolveChannelNameForMsg(channelID),
 			Content:    actionVal,
 			ReplyCtx:   rctx,
@@ -285,11 +289,13 @@ func (p *Platform) handleCmdAction(
 		lang:       p.langForSession(sessionKey),
 	}
 	slog.Info("slack: card action dispatched as command", "cmd", cmdText, "user", callback.User.ID)
+	userName, userEmail := p.resolveUserNameAndEmail(callback.User.ID)
 	go p.handler(p, &core.Message{
 		SessionKey: sessionKey,
 		Platform:   "slack",
 		UserID:     callback.User.ID,
-		UserName:   p.resolveUserName(callback.User.ID),
+		UserName:   userName,
+		UserEmail:  userEmail,
 		ChatName:   p.resolveChannelNameForMsg(channelID),
 		Content:    cmdText,
 		ReplyCtx:   rctx,

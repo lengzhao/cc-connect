@@ -302,6 +302,7 @@ type queuedMessage struct {
 	fromVoice     bool
 	userID        string
 	userName      string // sender's display name for sender injection
+	userEmail     string // sender email for sender injection, when the platform explicitly provides it
 	msgPlatform   string // platform name for sender injection
 	msgSessionKey string // session key for extracting chat ID
 	channelKey    string // platform-provided channel identifier (preferred over sessionKey extraction)
@@ -1951,6 +1952,7 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		MessageID:   msg.MessageID,
 		UserID:      msg.UserID,
 		UserName:    msg.UserName,
+		UserEmail:   msg.UserEmail,
 		ChannelName: msg.ChatName,
 		Content:     msg.Content,
 	}
@@ -2280,6 +2282,7 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 		fromVoice:     msg.FromVoice,
 		userID:        msg.UserID,
 		userName:      msg.UserName,
+		userEmail:     msg.UserEmail,
 		msgPlatform:   msg.Platform,
 		msgSessionKey: msg.SessionKey,
 		channelKey:    msg.ChannelKey,
@@ -2717,7 +2720,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		drainEvents(state.agentSession.Events())
 	}
 
-	promptContent := e.buildSenderPrompt(msg.Content, msg.UserID, msg.UserName, msg.Platform, msg.SessionKey, msg.ChannelKey)
+	promptContent := e.buildSenderPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey)
 
 	sendStart := time.Now()
 	state.mu.Lock()
@@ -4583,7 +4586,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					}
 				}
 
-				queuedPrompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)
+				queuedPrompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)
 
 				nextSend := make(chan error, 1)
 				go func() {
@@ -4870,7 +4873,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		state.mu.Unlock()
 
 		e.i18n.DetectAndSet(queued.content)
-		prompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)
+		prompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)
 
 		if state.agentSession == nil || !state.agentSession.Alive() {
 			e.send(queued.platform, queued.replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "agent session ended"))
@@ -13832,7 +13835,8 @@ func (e *Engine) cmdBindSetup(p Platform, msg *Message) {
 // injectSender is enabled and userID is non-empty. When userName is available
 // it is included as sender_name so the agent can identify who sent the message
 // by display name (useful in shared channel sessions with multiple users).
-func (e *Engine) buildSenderPrompt(content, userID, userName, platform, sessionKey, channelKey string) string {
+// Platforms may also provide senderEmail for workflows that need contact info.
+func (e *Engine) buildSenderPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey string) string {
 	if !e.injectSender || userID == "" {
 		return content
 	}
@@ -13840,11 +13844,20 @@ func (e *Engine) buildSenderPrompt(content, userID, userName, platform, sessionK
 	if chatID == "" {
 		chatID = extractChannelID(sessionKey)
 	}
+	var attrs []string
+	attrs = append(attrs, fmt.Sprintf("sender_id=%s", userID))
 	if userName != "" {
-		safeName := strings.NewReplacer(`"`, `'`, "\n", " ", "\r", "").Replace(userName)
-		return fmt.Sprintf("[cc-connect sender_id=%s sender_name=\"%s\" platform=%s chat_id=%s]\n%s", userID, safeName, platform, chatID, content)
+		attrs = append(attrs, fmt.Sprintf(`sender_name="%s"`, promptAttrValue(userName)))
 	}
-	return fmt.Sprintf("[cc-connect sender_id=%s platform=%s chat_id=%s]\n%s", userID, platform, chatID, content)
+	if senderEmail != "" {
+		attrs = append(attrs, fmt.Sprintf(`sender_email="%s"`, promptAttrValue(senderEmail)))
+	}
+	attrs = append(attrs, fmt.Sprintf("platform=%s", platform), fmt.Sprintf("chat_id=%s", chatID))
+	return fmt.Sprintf("[cc-connect %s]\n%s", strings.Join(attrs, " "), content)
+}
+
+func promptAttrValue(value string) string {
+	return strings.NewReplacer(`"`, `'`, "\n", " ", "\r", "").Replace(value)
 }
 
 func extractChannelID(sessionKey string) string {

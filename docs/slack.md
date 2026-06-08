@@ -75,6 +75,7 @@ Under "Scopes" → "Bot Token Scopes", add:
 | `channels:history` | Read channel messages (optional) |
 | `groups:history` | Read private channel messages (optional) |
 | `users:read` | Get user info |
+| `users:read.email` | Get user email (optional; only needed when `include_user_email = true`) |
 
 ---
 
@@ -176,6 +177,8 @@ app_token = "xapp-xxxxxxx..."
 # Optional: override Slack Web API base URL for proxy/custom deployments.
 # Accepts either "https://slack.example.com" or "https://slack.example.com/api/".
 api_url = "https://slack.example.com/api/"
+# inject_mentioned_users = true  # default: inject refs for inbound <@USER_ID> mentions
+# include_user_email = false     # default: false; requires users:read.email when enabled
 ```
 
 ### Token Reference
@@ -249,6 +252,48 @@ Requirements:
 Delete-mode multi-select uses toggle buttons on Slack (Feishu uses native checkbox forms).
 
 Platform UI strings (loading toasts, ask-question confirmations) follow the user's language. Detection priority: explicit `/lang`, natural-language message content, session cache, then Slack `users.info` `locale` (client language setting, not display name). Supported locales match the engine (`en`, `zh`, `zh-TW`, `ja`, `es`).
+
+## Slack Mentions and User Context
+
+Slack stores user mentions in message text as `<@USER_ID>`. cc-connect keeps that original text so outgoing replies can mention the same person with Slack's native syntax, and by default injects a compact reference for every mentioned user:
+
+```text
+[cc-connect slack_mention id=U123ABC name="Hory Zhao"]
+```
+
+When project-level `inject_sender = true` is enabled, the sender is also injected through the common sender header:
+
+```text
+[cc-connect sender_id=U999 sender_name="Rock" platform=slack chat_id=C123]
+```
+
+The agent should mention Slack users with `<@USER_ID>` when replying. If your organization provides a tool that maps email/name to Slack user ID, expose that tool to the agent and let it return the ID to use in `<@...>`.
+
+Email injection is disabled by default. To include emails for the sender and mentioned users, set:
+
+```toml
+[projects.platforms.options]
+include_user_email = true
+```
+
+Then add the Slack bot scope `users:read.email` and reinstall/re-authorize the Slack app. If Slack does not return an email, cc-connect omits the `email` field and continues normally.
+
+Hooks receive the same information in structured form. HTTP hooks get the sender email as top-level `user_email`; command hooks get `CC_HOOK_USER_EMAIL`. Mentioned users are exposed through hook context as `ctx.slack_mentions` (or `CC_HOOK_CTX_JSON` for command hooks):
+
+```json
+{
+  "user_email": "rock@example.com",
+  "ctx": {
+    "slack_mentions": [
+      {
+        "id": "U123ABC",
+        "name": "Hory Zhao",
+        "email": "hory.zhao@example.com"
+      }
+    ]
+  }
+}
+```
 
 ---
 

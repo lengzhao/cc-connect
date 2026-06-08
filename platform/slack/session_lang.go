@@ -7,8 +7,9 @@ import (
 )
 
 type slackUserInfo struct {
-	name string
-	lang string
+	name  string
+	email string
+	lang  string
 }
 
 func (p *Platform) setSessionLang(sessionKey, lang string) {
@@ -51,7 +52,7 @@ func (p *Platform) rememberSessionLang(sessionKey, userID, content string) strin
 		}
 	}
 
-	if _, lang := p.cachedUserInfo(userID); lang != "" {
+	if _, _, lang := p.cachedUserInfo(userID); lang != "" {
 		p.setSessionLang(sessionKey, lang)
 		return lang
 	}

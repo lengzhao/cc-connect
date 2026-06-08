@@ -170,6 +170,7 @@ func TestEmit_CommandHookEnvVars(t *testing.T) {
 		Platform:   "slack",
 		UserID:     "U1",
 		UserName:   "bob",
+		UserEmail:  "bob@example.com",
 		Content:    "test msg",
 	})
 
@@ -186,6 +187,7 @@ func TestEmit_CommandHookEnvVars(t *testing.T) {
 		"CC_HOOK_PLATFORM":    "slack",
 		"CC_HOOK_USER_ID":     "U1",
 		"CC_HOOK_USER_NAME":   "bob",
+		"CC_HOOK_USER_EMAIL":  "bob@example.com",
 		"CC_HOOK_CONTENT":     "test msg",
 	}
 	for k, v := range expected {
@@ -201,6 +203,7 @@ func TestEventToEnvIncludesMessageContextAndHeaders(t *testing.T) {
 		Event:       HookEventMessageReceived,
 		MessageID:   "msg-123",
 		ChannelName: "general",
+		UserEmail:   "alice@example.com",
 		Context: map[string]any{
 			"tenant_id": "acme",
 			"priority":  float64(2),
@@ -215,6 +218,9 @@ func TestEventToEnvIncludesMessageContextAndHeaders(t *testing.T) {
 	}
 	if got["CC_HOOK_CHANNEL_NAME"] != "general" {
 		t.Fatalf("CC_HOOK_CHANNEL_NAME = %q", got["CC_HOOK_CHANNEL_NAME"])
+	}
+	if got["CC_HOOK_USER_EMAIL"] != "alice@example.com" {
+		t.Fatalf("CC_HOOK_USER_EMAIL = %q", got["CC_HOOK_USER_EMAIL"])
 	}
 	var ctx map[string]any
 	if err := json.Unmarshal([]byte(got["CC_HOOK_CTX_JSON"]), &ctx); err != nil {

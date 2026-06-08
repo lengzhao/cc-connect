@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -118,6 +119,69 @@ func TestParseSlackInnerEventFiles(t *testing.T) {
 	}
 	if files[0].Name != "a.pdf" || files[0].Mimetype != "application/pdf" {
 		t.Fatalf("unexpected file: %+v", files[0])
+	}
+}
+
+func TestBuildMentionExtraContentIncludesMentionedUsers(t *testing.T) {
+	p := &Platform{injectMentionedUsers: true}
+	p.userInfoCache.Store("U222", slackUserInfo{name: "Hory Zhao", lang: "en"})
+	p.userInfoCache.Store("U333", slackUserInfo{name: "Jane", lang: "en"})
+
+	got := p.buildMentionExtraContent("send the report to <@U222> and <@U333|jane>")
+	if !strings.Contains(got, `[cc-connect slack_mention id=U222 name="Hory Zhao"]`) {
+		t.Fatalf("missing U222 mention ref: %q", got)
+	}
+	if !strings.Contains(got, `[cc-connect slack_mention id=U333 name="Jane"]`) {
+		t.Fatalf("missing U333 mention ref: %q", got)
+	}
+}
+
+func TestBuildMentionExtraContentDeduplicatesMentions(t *testing.T) {
+	p := &Platform{injectMentionedUsers: true}
+	p.userInfoCache.Store("U222", slackUserInfo{name: "Hory Zhao", lang: "en"})
+
+	got := p.buildMentionExtraContent("ask <@U222> then remind <@U222>")
+	if strings.Count(got, "id=U222") != 1 {
+		t.Fatalf("mention refs should be deduplicated, got %q", got)
+	}
+}
+
+func TestBuildMentionExtraContentEmailDisabledByDefault(t *testing.T) {
+	p := &Platform{injectMentionedUsers: true}
+	p.userInfoCache.Store("U222", slackUserInfo{name: "Hory Zhao", email: "hory.zhao@example.com", lang: "en"})
+
+	got := p.buildMentionExtraContent("send to <@U222>")
+	if strings.Contains(got, "hory.zhao@example.com") {
+		t.Fatalf("email should not be injected by default, got %q", got)
+	}
+}
+
+func TestBuildMentionExtraContentIncludesEmailWhenEnabled(t *testing.T) {
+	p := &Platform{injectMentionedUsers: true, includeUserEmail: true}
+	p.userInfoCache.Store("U222", slackUserInfo{name: "Hory Zhao", email: "hory.zhao@example.com", lang: "en"})
+
+	got := p.buildMentionExtraContent("send to <@U222>")
+	if !strings.Contains(got, `email="hory.zhao@example.com"`) {
+		t.Fatalf("email should be injected when enabled, got %q", got)
+	}
+}
+
+func TestHookContextIncludesMentionedUsers(t *testing.T) {
+	p := &Platform{injectMentionedUsers: true, includeUserEmail: true}
+	p.userInfoCache.Store("U222", slackUserInfo{name: "Hory Zhao", email: "hory.zhao@example.com", lang: "en"})
+
+	got := p.HookContext(replyContext{
+		slackMentions: p.resolveMentionedUsers("send to <@U222>"),
+	})
+	mentions, ok := got.Context["slack_mentions"].([]slackMentionRef)
+	if !ok {
+		t.Fatalf("slack_mentions type = %T", got.Context["slack_mentions"])
+	}
+	if len(mentions) != 1 {
+		t.Fatalf("mentions len = %d", len(mentions))
+	}
+	if mentions[0].ID != "U222" || mentions[0].Name != "Hory Zhao" || mentions[0].Email != "hory.zhao@example.com" {
+		t.Fatalf("unexpected mention: %+v", mentions[0])
 	}
 }
 
