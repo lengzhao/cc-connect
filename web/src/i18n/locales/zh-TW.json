@@ -236,6 +236,7 @@
     "allowFrom": "允許的使用者",
     "allowFromHintTelegram": "Telegram 使用者 ID，以逗號分隔",
     "groupReplyAll": "回覆所有群組訊息",
+    "threadReplyWithoutMention": "話題內後續訊息免 @",
     "sharedGroupSession": "共享群組工作階段",
     "sharedChannelSession": "共享頻道工作階段",
     "guildId": "伺服器 ID",

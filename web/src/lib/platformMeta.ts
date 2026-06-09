@@ -40,6 +40,8 @@ export const platformMeta: Record<string, PlatformMeta> = {
       { key: 'bot_token', labelKey: 'fields.botToken', required: true, type: 'password', placeholder: 'xoxb-...' },
       { key: 'app_token', labelKey: 'fields.appToken', required: true, type: 'password', placeholder: 'xapp-...' },
       { key: 'allow_from', labelKey: 'fields.allowFrom', placeholder: '* (all)', group: 'advanced' },
+      { key: 'group_reply_all', labelKey: 'fields.groupReplyAll', type: 'boolean', group: 'advanced' },
+      { key: 'thread_reply_without_mention', labelKey: 'fields.threadReplyWithoutMention', type: 'boolean', group: 'advanced' },
       { key: 'share_session_in_channel', labelKey: 'fields.sharedChannelSession', type: 'boolean', group: 'advanced' },
     ],
   },

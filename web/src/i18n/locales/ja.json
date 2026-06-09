@@ -236,6 +236,7 @@
     "allowFrom": "許可ユーザー",
     "allowFromHintTelegram": "Telegram ユーザー ID（カンマ区切り）",
     "groupReplyAll": "すべてのグループメッセージに返信",
+    "threadReplyWithoutMention": "スレッド内の続きは @ 不要",
     "sharedGroupSession": "グループセッションを共有",
     "sharedChannelSession": "チャンネルセッションを共有",
     "guildId": "サーバー ID",

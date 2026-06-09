@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -306,6 +307,147 @@ func TestNormalizeSlackAPIURL(t *testing.T) {
 				t.Fatalf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNewPlatform_ThreadReplyWithoutMentionDefaultsTrue(t *testing.T) {
+	plat, err := New(map[string]any{
+		"bot_token": "xoxb-test",
+		"app_token": "xapp-test",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+	if !p.threadReplyWithoutMention {
+		t.Error("thread_reply_without_mention should default to true")
+	}
+}
+
+func TestIsSlackDirectMessage(t *testing.T) {
+	if !isSlackDirectMessage("im", "D123") {
+		t.Fatal("im channel_type should be DM")
+	}
+	if !isSlackDirectMessage("", "D123") {
+		t.Fatal("D-prefix channel should be DM when channel_type is empty")
+	}
+	if isSlackDirectMessage("", "C123") {
+		t.Fatal("C-prefix channel should not be DM")
+	}
+}
+
+func TestIsUserMessageSubtype(t *testing.T) {
+	if !isUserMessageSubtype("") {
+		t.Fatal("empty subtype should be user message")
+	}
+	if !isUserMessageSubtype("file_share") {
+		t.Fatal("file_share should be user message")
+	}
+	if isUserMessageSubtype("message_changed") {
+		t.Fatal("message_changed should be ignored")
+	}
+	if isUserMessageSubtype("channel_join") {
+		t.Fatal("channel_join should be ignored")
+	}
+}
+
+func TestNewPlatform_RequireMentionFalseAliasesGroupReplyAll(t *testing.T) {
+	plat, err := New(map[string]any{
+		"bot_token":         "xoxb-test",
+		"app_token":         "xapp-test",
+		"require_mention":   false,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+	if !p.groupReplyAll {
+		t.Error("require_mention=false should set groupReplyAll=true")
+	}
+}
+
+func TestNewPlatform_RequireMentionTrueDoesNotForceGroupReplyAll(t *testing.T) {
+	plat, err := New(map[string]any{
+		"bot_token":       "xoxb-test",
+		"app_token":       "xapp-test",
+		"require_mention": true,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+	if p.groupReplyAll {
+		t.Error("require_mention=true should leave groupReplyAll=false")
+	}
+}
+
+func TestShouldProcessMessageEvent(t *testing.T) {
+	tests := []struct {
+		name                      string
+		groupReplyAll             bool
+		threadReplyWithoutMention bool
+		channelID                 string
+		channelType               string
+		threadTS                  string
+		markActive                bool
+		want                      bool
+	}{
+		{name: "dm always accepted", groupReplyAll: false, channelID: "D1", channelType: "im", want: true},
+		{name: "dm detected by channel id prefix", groupReplyAll: false, channelID: "D1", channelType: "", want: true},
+		{name: "public channel default ignored", groupReplyAll: false, channelID: "C1", channelType: "channel", want: false},
+		{name: "private channel default ignored", groupReplyAll: false, channelID: "G1", channelType: "group", want: false},
+		{name: "mpim default ignored", groupReplyAll: false, channelID: "G1", channelType: "mpim", want: false},
+		{name: "public channel group_reply_all", groupReplyAll: true, channelID: "C1", channelType: "channel", want: true},
+		{
+			name: "active thread follow-up accepted", groupReplyAll: false, threadReplyWithoutMention: true,
+			channelID: "C1", channelType: "channel", threadTS: "111.000", markActive: true, want: true,
+		},
+		{
+			name: "inactive thread follow-up ignored", groupReplyAll: false, threadReplyWithoutMention: true,
+			channelID: "C1", channelType: "channel", threadTS: "111.000", want: false,
+		},
+		{
+			name: "thread follow-up disabled", groupReplyAll: false, threadReplyWithoutMention: false,
+			channelID: "C1", channelType: "channel", threadTS: "111.000", markActive: true, want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channelID := tt.channelID
+			if channelID == "" {
+				channelID = "C1"
+			}
+			p := &Platform{
+				groupReplyAll:             tt.groupReplyAll,
+				threadReplyWithoutMention: tt.threadReplyWithoutMention,
+				threadActiveTTL:           defaultThreadActiveTTL,
+			}
+			if tt.markActive {
+				p.markActiveThread(channelID, "111.000")
+			}
+			ev := &slackevents.MessageEvent{
+				Channel: channelID, ChannelType: tt.channelType, ThreadTimeStamp: tt.threadTS,
+			}
+			if got := p.shouldProcessMessageEvent(ev); got != tt.want {
+				t.Fatalf("shouldProcessMessageEvent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsDuplicateInbound(t *testing.T) {
+	p := &Platform{
+		dedupTTL:      defaultInboundDedupTTL,
+		recentInbound: make(map[string]time.Time),
+	}
+	if p.isDuplicateInbound("C1", "1.000") {
+		t.Fatal("first inbound should not be duplicate")
+	}
+	if !p.isDuplicateInbound("C1", "1.000") {
+		t.Fatal("second inbound with same ts should be duplicate")
+	}
+	if p.isDuplicateInbound("C2", "1.000") {
+		t.Fatal("different channel should not be duplicate")
 	}
 }
 

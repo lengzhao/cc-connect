@@ -236,6 +236,7 @@
     "allowFrom": "Allowed users",
     "allowFromHintTelegram": "Telegram user IDs, comma-separated",
     "groupReplyAll": "Reply to all group messages",
+    "threadReplyWithoutMention": "Allow thread follow-ups without @mention",
     "sharedGroupSession": "Shared group session",
     "sharedChannelSession": "Shared channel session",
     "guildId": "Guild ID",

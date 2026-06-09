@@ -236,6 +236,7 @@
     "allowFrom": "Usuarios permitidos",
     "allowFromHintTelegram": "IDs de usuario de Telegram, separados por comas",
     "groupReplyAll": "Responder a todos los mensajes del grupo",
+    "threadReplyWithoutMention": "Permitir respuestas en hilo sin @mención",
     "sharedGroupSession": "Sesión de grupo compartida",
     "sharedChannelSession": "Sesión de canal compartida",
     "guildId": "ID del servidor",

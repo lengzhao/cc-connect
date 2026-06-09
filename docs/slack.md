@@ -124,6 +124,8 @@ Under "Subscribe to bot events", add:
 |-------|---------|
 | `app_mention` | Triggered when the bot is @mentioned |
 | `message.im` | Triggered when a DM is received |
+| `message.channels` | Channel thread follow-ups (recommended with default `thread_reply_without_mention`) |
+| `message.groups` | Same for private channels (optional) |
 
 ### 5.4 Save Changes
 
@@ -179,7 +181,21 @@ app_token = "xapp-xxxxxxx..."
 api_url = "https://slack.example.com/api/"
 # inject_mentioned_users = true  # default: inject refs for inbound <@USER_ID> mentions
 # include_user_email = false     # default: false; requires users:read.email when enabled
+# group_reply_all = false        # default: channel messages require @mention (via app_mention event)
+# require_mention = true         # alias: require_mention = false is the same as group_reply_all = true
+# thread_reply_without_mention = true  # default: follow-ups in a bot-engaged thread need no @mention
+# thread_active_ttl_hours = 72         # default: active threads survive restarts for 72 hours
+# dedup_ttl_seconds = 60               # default: inbound dedup window for duplicate Slack events
+# state_dir = ""                       # optional override for thread state storage directory
 ```
+
+By default, the bot responds to **DMs**, **@mentions in channels**, and **follow-up messages in the same thread** after an `@mention` started the conversation. Set `thread_reply_without_mention = false` to require `@mention` on every channel message.
+
+To respond to every top-level channel message without `@mention`, set `group_reply_all = true` (or `require_mention = false`) and subscribe to `message.channels` in your Slack app.
+
+When `thread_reply_without_mention` is enabled (default), also subscribe to `message.channels` and `message.groups` (private channels) so thread follow-ups are delivered.
+
+Active thread state is persisted under `<data_dir>/slack/<project>/state.json` and restored on restart while still within `thread_active_ttl_hours` (default 72h). Inbound duplicate events (`app_mention` + `message` for the same post) are deduplicated in memory for `dedup_ttl_seconds` (default 60s).
 
 ### Token Reference
 

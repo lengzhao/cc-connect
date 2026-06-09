@@ -1100,8 +1100,13 @@ app_secret = "your-feishu-app-secret"
 # Slack (uncomment to enable / 取消注释以启用)
 # 1. Create an app at https://api.slack.com/apps / 创建应用
 # 2. Enable Socket Mode (Settings > Socket Mode) / 开启 Socket Mode
-# 3. Subscribe to bot events: message.channels, message.im
-#    订阅事件：message.channels, message.im
+# 3. Subscribe to bot events: app_mention, message.im
+#    Also add message.channels (and message.groups for private channels) when
+#    thread_reply_without_mention = true (default) so thread follow-ups work.
+#    Add message.channels only for group_reply_all = true on top-level channel posts.
+#    订阅事件：app_mention、message.im
+#    默认 thread_reply_without_mention = true 时还需 message.channels（私有频道加 message.groups）
+#    若 group_reply_all = true 才需要 message.channels 接收频道顶层消息
 # 4. Install app to workspace, copy Bot Token (xoxb-...) and App Token (xapp-...)
 #    安装应用到工作区，复制 Bot Token 和 App Token
 # Connection: Socket Mode WebSocket (no public URL needed) / 无需公网 IP
@@ -1126,6 +1131,17 @@ app_secret = "your-feishu-app-secret"
 #                                 # 为入站消息里的 <@USER_ID> 注入用户引用，方便 Agent 知道被 @ 的是谁
 # include_user_email = false  # Include sender/mentioned-user email in injected refs; requires Slack users:read.email scope
 #                             # 在注入信息里包含邮箱；需要 Slack users:read.email 权限，默认关闭
+# group_reply_all = false  # If true, respond to ALL channel messages without @mention / 设为 true 频道无需 @ 也响应
+# require_mention = true   # Alias for the inverse of group_reply_all; require_mention = false enables group_reply_all
+#                          # group_reply_all 的别名；require_mention = false 表示频道无需 @ 也响应
+# thread_reply_without_mention = true  # After @mention starts a thread, accept follow-ups without @mention (default true)
+#                                      # @ 开启话题后，同一线程内后续消息可免 @（默认开启）
+# thread_active_ttl_hours = 72  # How long a bot-engaged thread stays active across restarts (default 72h)
+#                               # bot 已激活线程在重启后仍有效的时长（默认 72 小时）
+# dedup_ttl_seconds = 60  # Inbound dedup window for app_mention/message double delivery (default 60s)
+#                         # app_mention 与 message 重复投递的去重窗口（默认 60 秒）
+# state_dir = ""  # Optional override for Slack thread state directory (default <data_dir>/slack/<project>/)
+#                 # 可选，覆盖 Slack 线程状态目录（默认 <data_dir>/slack/<project>/）
 
 # A2A server (uncomment to enable / 取消注释以启用)
 # Exposes this project as an A2A JSON-RPC agent server.

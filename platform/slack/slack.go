@@ -51,7 +51,12 @@ type Platform struct {
 	doneEmoji             string // emoji when processing completes (default white_check_mark)
 	injectMentionedUsers  bool   // prepend Slack mention metadata for users mentioned in inbound text
 	includeUserEmail      bool   // include Slack profile email in injected metadata when available
-	client                *slack.Client
+	groupReplyAll              bool // respond to all channel messages without @mention (default false)
+	threadReplyWithoutMention  bool // allow follow-ups in bot-engaged threads without @mention (default true)
+	statePath                  string
+	threadActiveTTL            time.Duration
+	dedupTTL                   time.Duration
+	client                     *slack.Client
 	socket                *socketmode.Client
 	handler               core.MessageHandler
 	cardNavHandler        core.CardNavigationHandler
@@ -59,8 +64,12 @@ type Platform struct {
 	channelNameCache      map[string]string
 	channelCacheMu        sync.RWMutex
 	userInfoCache         sync.Map // userID -> slackUserInfo (display name + Slack locale)
-	sessionLang           sync.Map // sessionKey -> normalized language code
-	cardMsgMu             sync.Mutex
+	sessionLang    sync.Map // sessionKey -> normalized language code
+	threadStateMu  sync.Mutex
+	activeThreads  map[string]time.Time // channel:thread_ts -> marked at (bot-engaged threads)
+	inboundDedupMu sync.Mutex
+	recentInbound  map[string]time.Time // channel:msg_ts -> seen at (dedupe app_mention vs message)
+	cardMsgMu      sync.Mutex
 	cardMsgRefs           map[string]cardMessageRef
 	interactiveAckMu      sync.Mutex
 	interactiveAckPayload any
@@ -99,18 +108,39 @@ func New(opts map[string]any) (core.Platform, error) {
 		injectMentionedUsers = v
 	}
 	includeUserEmail, _ := opts["include_user_email"].(bool)
-	return &Platform{
-		botToken:             botToken,
-		appToken:             appToken,
-		apiURL:               apiURL,
-		allowFrom:            allowFrom,
-		sessionScope:         scope,
-		reactionEmoji:        reactionEmoji,
-		doneEmoji:            doneEmoji,
-		injectMentionedUsers: injectMentionedUsers,
-		includeUserEmail:     includeUserEmail,
-		channelNameCache:     make(map[string]string),
-	}, nil
+	groupReplyAll, _ := opts["group_reply_all"].(bool)
+	// require_mention = false is equivalent to group_reply_all = true:
+	// both mean "respond to all channel messages without needing an @mention".
+	if v, ok := opts["require_mention"].(bool); ok && !v {
+		groupReplyAll = true
+	}
+	threadReplyWithoutMention := true
+	if v, ok := opts["thread_reply_without_mention"].(bool); ok {
+		threadReplyWithoutMention = v
+	}
+	threadActiveHours := parsePositiveIntOpt(opts["thread_active_ttl_hours"], defaultThreadActiveHours)
+	dedupSecs := parsePositiveIntOpt(opts["dedup_ttl_seconds"], defaultInboundDedupSecs)
+	p := &Platform{
+		botToken:                  botToken,
+		appToken:                  appToken,
+		apiURL:                    apiURL,
+		allowFrom:                 allowFrom,
+		sessionScope:              scope,
+		reactionEmoji:             reactionEmoji,
+		doneEmoji:                 doneEmoji,
+		injectMentionedUsers:      injectMentionedUsers,
+		includeUserEmail:          includeUserEmail,
+		groupReplyAll:             groupReplyAll,
+		threadReplyWithoutMention: threadReplyWithoutMention,
+		statePath:                 resolveSlackStatePath(opts),
+		threadActiveTTL:           time.Duration(threadActiveHours) * time.Hour,
+		dedupTTL:                  time.Duration(dedupSecs) * time.Second,
+		activeThreads:             make(map[string]time.Time),
+		recentInbound:             make(map[string]time.Time),
+		channelNameCache:          make(map[string]string),
+	}
+	p.loadSlackThreadState()
+	return p, nil
 }
 
 // normalizeSlackAPIURL returns the Slack Web API base URL in the format
@@ -272,7 +302,13 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 					return
 				}
 
+				if p.isDuplicateInbound(ev.Channel, ev.TimeStamp) {
+					slog.Debug("slack: duplicate app_mention skipped", "channel", ev.Channel, "ts", ev.TimeStamp)
+					return
+				}
+
 				threadTS := threadRootTS(ev.ThreadTimeStamp, ev.TimeStamp)
+				p.markActiveThread(ev.Channel, threadTS)
 				sessionKey := p.buildSessionKey(ev.Channel, ev.User, threadTS)
 
 				var shareFiles []slackevents.File
@@ -325,6 +361,13 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 				if ev.BotID != "" || ev.User == "" {
 					return
 				}
+				if !isUserMessageSubtype(ev.SubType) {
+					slog.Debug("slack: ignoring message subtype", "subtype", ev.SubType, "channel", ev.Channel)
+					return
+				}
+				if !p.shouldProcessMessageEvent(ev) {
+					return
+				}
 
 				if ts := ev.TimeStamp; ts != "" {
 					if dotIdx := strings.IndexByte(ts, '.'); dotIdx > 0 {
@@ -341,6 +384,10 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 
 				if !core.AllowList(p.allowFrom, ev.User) {
 					slog.Debug("slack: message from unauthorized user", "user", ev.User)
+					return
+				}
+				if p.isDuplicateInbound(ev.Channel, ev.TimeStamp) {
+					slog.Debug("slack: duplicate message skipped", "channel", ev.Channel, "ts", ev.TimeStamp)
 					return
 				}
 
@@ -522,6 +569,113 @@ func slackFileDisplayName(f slackevents.File) string {
 	return f.Title
 }
 
+func slackThreadKey(channel, threadTS string) string {
+	return channel + ":" + threadTS
+}
+
+// isSlackDirectMessage reports whether the event is from a 1:1 DM.
+// channel_type is preferred; channel IDs starting with "D" are a fallback when
+// Slack omits channel_type on some message events.
+func isSlackDirectMessage(channelType, channelID string) bool {
+	if channelType == "im" {
+		return true
+	}
+	return strings.HasPrefix(channelID, "D")
+}
+
+// isUserMessageSubtype reports whether a message event subtype carries user content
+// we should forward to the agent (as opposed to join/leave/edit metadata events).
+func isUserMessageSubtype(subtype string) bool {
+	switch subtype {
+	case "", "file_share":
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Platform) markActiveThread(channel, threadTS string) {
+	if channel == "" || threadTS == "" {
+		return
+	}
+	now := time.Now()
+	key := slackThreadKey(channel, threadTS)
+
+	p.threadStateMu.Lock()
+	if p.activeThreads == nil {
+		p.activeThreads = make(map[string]time.Time)
+	}
+	p.activeThreads[key] = now
+	p.threadStateMu.Unlock()
+
+	p.saveSlackThreadState()
+}
+
+func (p *Platform) isActiveThread(channel, threadTS string) bool {
+	if channel == "" || threadTS == "" {
+		return false
+	}
+	key := slackThreadKey(channel, threadTS)
+	now := time.Now()
+
+	p.threadStateMu.Lock()
+	defer p.threadStateMu.Unlock()
+	if p.activeThreads == nil {
+		return false
+	}
+	markedAt, ok := p.activeThreads[key]
+	if !ok {
+		return false
+	}
+	if now.Sub(markedAt) > p.threadActiveTTL {
+		delete(p.activeThreads, key)
+		return false
+	}
+	return true
+}
+
+// isDuplicateInbound reports whether the same channel+timestamp was already handled
+// (Slack may deliver both app_mention and message for one user post).
+func (p *Platform) isDuplicateInbound(channel, msgTS string) bool {
+	if channel == "" || msgTS == "" {
+		return false
+	}
+	key := slackThreadKey(channel, msgTS)
+	now := time.Now()
+
+	p.inboundDedupMu.Lock()
+	defer p.inboundDedupMu.Unlock()
+	if p.recentInbound == nil {
+		p.recentInbound = make(map[string]time.Time)
+	}
+	p.pruneExpiredInboundLocked(now)
+	if _, ok := p.recentInbound[key]; ok {
+		return true
+	}
+	p.recentInbound[key] = now
+	return false
+}
+
+// shouldProcessMessageEvent decides whether a message event should reach the engine.
+// By default only DMs are accepted; channel messages require @mention via
+// AppMentionEvent unless group_reply_all (or require_mention = false) is set.
+// When thread_reply_without_mention is enabled, follow-ups in a bot-engaged thread
+// are also accepted (requires message.channels / message.groups subscription).
+func (p *Platform) shouldProcessMessageEvent(ev *slackevents.MessageEvent) bool {
+	if p.groupReplyAll {
+		return true
+	}
+	if isSlackDirectMessage(ev.ChannelType, ev.Channel) {
+		return true
+	}
+	if p.threadReplyWithoutMention && ev.ThreadTimeStamp != "" && p.isActiveThread(ev.Channel, ev.ThreadTimeStamp) {
+		return true
+	}
+	slog.Debug("slack: ignoring channel message without @mention",
+		"channel", ev.Channel, "channel_type", ev.ChannelType, "thread_ts", ev.ThreadTimeStamp)
+	return false
+}
+
 // assistantOrThreadTS returns the thread_ts to use for the bot's reply.
 //
 // For Slack Assistant apps (Agent toggle on), the user's "Chat" tab is a
@@ -543,7 +697,7 @@ func assistantOrThreadTS(ev *slackevents.MessageEvent) string {
 		return ev.ThreadTimeStamp
 	}
 	// For non-DM channels, thread under the user's message.
-	if ev.ChannelType != "im" {
+	if !isSlackDirectMessage(ev.ChannelType, ev.Channel) {
 		return ev.TimeStamp
 	}
 	// DM top-level: top-level reply is natural.
@@ -1034,5 +1188,6 @@ func (p *Platform) Stop() error {
 	if p.cancel != nil {
 		p.cancel()
 	}
+	p.saveSlackThreadState()
 	return nil
 }
