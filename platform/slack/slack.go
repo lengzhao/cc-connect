@@ -414,18 +414,7 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 		if userName == "" {
 			userName = cmd.UserName
 		}
-		msg := &core.Message{
-			SessionKey: sessionKey, Platform: "slack",
-			UserID: cmd.UserID, UserName: userName, UserEmail: userEmail,
-			Content:      content,
-			ExtraContent: formatMentionExtraContent(mentions),
-			ReplyCtx: replyContext{
-				channel:       cmd.ChannelID,
-				sessionKey:    sessionKey,
-				lang:          lang,
-				slackMentions: mentions,
-			},
-		}
+		msg := p.messageFromSlashCommand(cmd, content, sessionKey, lang, mentions, userName, userEmail)
 		slog.Debug("slack: slash command", "command", cmd.Command, "text", cmd.Text, "user", cmd.UserID)
 		p.handler(p, msg)
 
@@ -833,6 +822,32 @@ func formatMentionExtraContent(mentions []slackMentionRef) string {
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (p *Platform) messageFromSlashCommand(
+	cmd slack.SlashCommand,
+	content, sessionKey, lang string,
+	mentions []slackMentionRef,
+	userName, userEmail string,
+) *core.Message {
+	return &core.Message{
+		SessionKey:   sessionKey,
+		Platform:     "slack",
+		MessageID:    cmd.TriggerID,
+		ChannelID:    cmd.ChannelID,
+		UserID:       cmd.UserID,
+		UserName:     userName,
+		UserEmail:    userEmail,
+		ChatName:     p.resolveChannelNameForMsg(cmd.ChannelID),
+		Content:      content,
+		ExtraContent: formatMentionExtraContent(mentions),
+		ReplyCtx: replyContext{
+			channel:       cmd.ChannelID,
+			sessionKey:    sessionKey,
+			lang:          lang,
+			slackMentions: mentions,
+		},
+	}
 }
 
 func (p *Platform) HookContext(replyCtx any) core.HookContext {

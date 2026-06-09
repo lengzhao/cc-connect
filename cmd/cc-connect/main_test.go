@@ -340,3 +340,26 @@ func TestCanonicalCronSubcommand_ManualTriggerAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectEnvFromOptions(t *testing.T) {
+	got := projectEnvFromOptions(map[string]any{
+		"env": map[string]string{
+			"AGENTHUB_URL":  "https://agenthub.example",
+			"AGENT_PRODUCT": "claude",
+		},
+	})
+	want := map[string]string{
+		"AGENTHUB_URL":  "https://agenthub.example",
+		"AGENT_PRODUCT": "claude",
+	}
+	m := make(map[string]string, len(got))
+	for _, kv := range got {
+		k, v, ok := strings.Cut(kv, "=")
+		if ok {
+			m[k] = v
+		}
+	}
+	if !reflect.DeepEqual(m, want) {
+		t.Fatalf("projectEnvFromOptions() = %#v, want %#v", m, want)
+	}
+}

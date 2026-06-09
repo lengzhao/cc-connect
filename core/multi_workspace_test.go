@@ -704,3 +704,30 @@ func TestCommandContextWithWorkspace_UnboundChannelFallsBack(t *testing.T) {
 		t.Errorf("expected interactiveKey to equal sessionKey when unbound, got %q want %q", interactiveKey, msg.SessionKey)
 	}
 }
+
+func TestResolveCustomExecWorkDir_BoundChannel(t *testing.T) {
+	baseDir := t.TempDir()
+	wsDir := filepath.Join(baseDir, "bound-workspace")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	e := newTestEngineWithMultiWorkspaceAgent(t, baseDir)
+	channelID := "C-bound"
+	channelKey := "test-platform:" + channelID
+	e.workspaceBindings.Bind("project:test", channelKey, "bound-channel", wsDir)
+
+	p := &mockChannelResolver{name: "test-platform", names: map[string]string{}}
+	msg := &Message{
+		Platform:   "test-platform",
+		ChannelKey: channelID,
+		SessionKey: channelKey + ":U-001",
+	}
+	cmd := &CustomCommand{Name: "deploy", Exec: "echo ok", Source: "config"}
+
+	got := e.resolveCustomExecWorkDir(p, msg, cmd)
+	want := normalizeWorkspacePath(wsDir)
+	if got != want {
+		t.Fatalf("workDir = %q, want %q", got, want)
+	}
+}

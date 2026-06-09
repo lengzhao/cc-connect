@@ -274,6 +274,7 @@ func main() {
 		}
 
 		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile, lang)
+		engine.SetProjectEnv(projectEnvFromOptions(proj.Agent.Options))
 		// Wire display settings including show_context_indicator and reply_footer
 		// Global [display] config can be overridden by project-level settings
 		_, _, _, _, _, showCtx, showFooter := config.EffectiveDisplay(cfg, &proj)
@@ -1553,6 +1554,7 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 
 	// Reload admin allowlist
 	engine.SetAdminFrom(proj.AdminFrom)
+	engine.SetProjectEnv(projectEnvFromOptions(proj.Agent.Options))
 
 	// Reload per-user role-based policies
 	if proj.Users != nil {
@@ -1630,6 +1632,31 @@ func buildAgentOptions(dataDir string, proj config.ProjectConfig) map[string]any
 	opts["cc_data_dir"] = dataDir
 	opts["cc_project"] = proj.Name
 	return opts
+}
+
+func projectEnvFromOptions(opts map[string]any) []string {
+	raw, ok := opts["env"]
+	if !ok {
+		return nil
+	}
+	switch envMap := raw.(type) {
+	case map[string]string:
+		env := make([]string, 0, len(envMap))
+		for k, v := range envMap {
+			env = append(env, k+"="+v)
+		}
+		return env
+	case map[string]any:
+		env := make([]string, 0, len(envMap))
+		for k, v := range envMap {
+			if s, ok := v.(string); ok {
+				env = append(env, k+"="+s)
+			}
+		}
+		return env
+	default:
+		return nil
+	}
 }
 
 func wireAgentProviders(agent core.Agent, agentCfg config.AgentConfig) providerWiringResult {

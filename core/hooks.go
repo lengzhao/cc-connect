@@ -19,6 +19,7 @@ type HookEventType string
 
 const (
 	HookEventMessageReceived     HookEventType = "message.received"
+	HookEventCommandExecuted     HookEventType = "command.executed"
 	HookEventMessageSent         HookEventType = "message.sent"
 	HookEventSessionStarted      HookEventType = "session.started"
 	HookEventSessionEnded        HookEventType = "session.ended"
@@ -243,6 +244,33 @@ func (hm *HookManager) executeHTTP(h *HookConfig, event HookEvent) {
 		"project", hm.project, "event", event.Event,
 		"url", h.URL, "status", resp.StatusCode,
 	)
+}
+
+// HookEventFromMessage builds a hook payload from an inbound platform message.
+// content overrides msg.Content when non-empty (e.g. the raw "/cmd args" line).
+func HookEventFromMessage(project string, p Platform, msg *Message, event HookEventType, content string) HookEvent {
+	if content == "" {
+		content = msg.Content
+	}
+	hookEvent := HookEvent{
+		Event:       event,
+		Project:     project,
+		Timestamp:   time.Now(),
+		SessionKey:  msg.SessionKey,
+		Platform:    msg.Platform,
+		MessageID:   msg.MessageID,
+		UserID:      msg.UserID,
+		UserName:    msg.UserName,
+		UserEmail:   msg.UserEmail,
+		ChannelName: msg.ChatName,
+		Content:     content,
+	}
+	if hp, ok := p.(HookContextProvider); ok {
+		ctx := cloneHookContext(hp.HookContext(msg.ReplyCtx))
+		hookEvent.Context = ctx.Context
+		hookEvent.Headers = ctx.Headers
+	}
+	return hookEvent
 }
 
 // eventToEnv converts a HookEvent to environment variables for shell hooks.

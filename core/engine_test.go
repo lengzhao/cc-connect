@@ -2596,6 +2596,158 @@ func TestEngine_AdminFrom_GatesCustomExecCommand(t *testing.T) {
 	}
 }
 
+func TestEngine_CustomExecCommandRequiresIdentifiedAdmin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX shell redirection")
+	}
+	e := newTestEngine()
+	e.SetAdminFrom("*")
+	out := filepath.Join(t.TempDir(), "ran.txt")
+	e.commands.Add("deploy", "", "", "printf ran > "+shellQuote(out), "", "config")
+	p := &stubPlatformEngine{n: "test"}
+
+	msg := &Message{SessionKey: "test:u1", UserID: "", ReplyCtx: "ctx"}
+	e.handleCommand(p, msg, "/deploy")
+	time.Sleep(300 * time.Millisecond)
+
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("custom exec command ran without an identified user")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat output: %v", err)
+	}
+	if sent := p.getSent(); len(sent) != 1 || !strings.Contains(sent[0], "admin") {
+		t.Fatalf("empty user should be blocked with admin message, got: %v", sent)
+	}
+}
+
+func TestEngine_CustomExecCommandInjectsHookAndProjectEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses POSIX env command")
+	}
+	out := filepath.Join(t.TempDir(), "env.txt")
+	p := &hookContextPlatform{
+		stubPlatformEngine: stubPlatformEngine{n: "slack"},
+		ctx: HookContext{
+			Context: map[string]any{"tenant_id": "acme"},
+			Headers: map[string]string{
+				"X-Trace-Id": "trace-1",
+			},
+		},
+	}
+	e := NewEngine("nex", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("U02LNUW8KV5")
+	e.SetProjectEnv([]string{
+		"AGENTHUB_URL=https://agenthub.example",
+		"AGENT_PRODUCT=claude",
+		"AGENT_WORK_DIR=/repo",
+	})
+	e.commands.Add("dumpenv", "", "", "env > "+shellQuote(out), "", "config")
+
+	e.handleCommand(p, &Message{
+		SessionKey: "slack:D0AK8MAHW22:U02LNUW8KV5",
+		Platform:   "slack",
+		MessageID:  "cmd-123",
+		UserID:     "U02LNUW8KV5",
+		UserName:   "Guiqing Zheng",
+		UserEmail:  "xxx@example.com",
+		ChatName:   "D0AK8MAHW22",
+		Content:    "/dumpenv",
+		ReplyCtx:   "ctx",
+	}, "/dumpenv")
+
+	var data []byte
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var err error
+		data, err = os.ReadFile(out)
+		if err == nil && strings.Contains(string(data), "CC_HOOK_EVENT=") {
+			break
+		}
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatalf("read env output: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for env output, last content:\n%s", string(data))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	env := string(data)
+	for _, want := range []string{
+		"CC_HOOK_EVENT=command.executed\n",
+		"CC_HOOK_PROJECT=nex\n",
+		"CC_HOOK_SESSION_KEY=slack:D0AK8MAHW22:U02LNUW8KV5\n",
+		"CC_HOOK_MESSAGE_ID=cmd-123\n",
+		"CC_HOOK_PLATFORM=slack\n",
+		"CC_HOOK_USER_ID=U02LNUW8KV5\n",
+		"CC_HOOK_USER_NAME=Guiqing Zheng\n",
+		"CC_HOOK_USER_EMAIL=xxx@example.com\n",
+		"CC_HOOK_CHANNEL_NAME=D0AK8MAHW22\n",
+		"CC_HOOK_CTX_JSON={\"tenant_id\":\"acme\"}\n",
+		"CC_HOOK_HEADERS_JSON={\"X-Trace-Id\":\"trace-1\"}\n",
+		"AGENTHUB_URL=https://agenthub.example\n",
+		"AGENT_PRODUCT=claude\n",
+		"AGENT_WORK_DIR=/repo\n",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("env output missing %q in:\n%s", want, env)
+		}
+	}
+	if !strings.Contains(env, "CC_HOOK_TIMESTAMP=") {
+		t.Fatalf("env output missing CC_HOOK_TIMESTAMP in:\n%s", env)
+	}
+	if strings.Contains(env, "CC_HOOK_TIMESTAMP=0001-01-01") {
+		t.Fatalf("env output has zero timestamp in:\n%s", env)
+	}
+}
+
+func TestEngine_CustomExecCommandEmitsCommandExecutedHook(t *testing.T) {
+	var got HookEvent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Errorf("unmarshal body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &stubPlatformEngine{n: "slack"}
+	e := NewEngine("nex", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("U1")
+	e.SetHooks(NewHookManager("nex", []HookConfig{{
+		Event: "command.executed",
+		Type:  "http",
+		URL:   srv.URL,
+		Async: boolPtr(false),
+	}}))
+	e.commands.Add("deploy", "", "", "true", "", "config")
+
+	e.handleCommand(p, &Message{
+		SessionKey: "slack:C:U1",
+		Platform:   "slack",
+		MessageID:  "cmd-123",
+		UserID:     "U1",
+		Content:    "/deploy",
+		ReplyCtx:   "ctx",
+	}, "/deploy prod")
+
+	if got.Event != HookEventCommandExecuted {
+		t.Fatalf("hook event = %q, want command.executed", got.Event)
+	}
+	if got.Content != "/deploy prod" {
+		t.Fatalf("hook content = %q, want raw command line", got.Content)
+	}
+	if got.MessageID != "cmd-123" {
+		t.Fatalf("hook message_id = %q", got.MessageID)
+	}
+	if got.Timestamp.IsZero() {
+		t.Fatal("hook timestamp should be set")
+	}
+}
+
 func TestEngine_AdminFrom_AdminCanRunShell(t *testing.T) {
 	e := newTestEngine()
 	e.SetAdminFrom("admin1")

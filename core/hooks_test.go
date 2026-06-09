@@ -198,6 +198,33 @@ func TestEmit_CommandHookEnvVars(t *testing.T) {
 	}
 }
 
+func TestHookEventFromMessage_SetsTimestampAndContent(t *testing.T) {
+	p := &hookContextPlatform{
+		stubPlatformEngine: stubPlatformEngine{n: "slack"},
+		ctx: HookContext{
+			Context: map[string]any{"tenant_id": "acme"},
+		},
+	}
+	before := time.Now()
+	ev := HookEventFromMessage("nex", p, &Message{
+		SessionKey: "slack:C:U",
+		Platform:   "slack",
+		MessageID:  "msg-1",
+		UserID:     "U1",
+		Content:    "stale",
+		ReplyCtx:   "ctx",
+	}, HookEventCommandExecuted, "/deploy prod")
+	if ev.Content != "/deploy prod" {
+		t.Fatalf("content = %q, want raw command line", ev.Content)
+	}
+	if ev.Timestamp.IsZero() || ev.Timestamp.Before(before) {
+		t.Fatalf("timestamp = %v, want recent non-zero time", ev.Timestamp)
+	}
+	if ev.Context["tenant_id"] != "acme" {
+		t.Fatalf("context = %#v", ev.Context)
+	}
+}
+
 func TestEventToEnvIncludesMessageContextAndHeaders(t *testing.T) {
 	env := eventToEnv(HookEvent{
 		Event:       HookEventMessageReceived,

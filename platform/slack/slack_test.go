@@ -11,6 +11,44 @@ import (
 	"github.com/slack-go/slack/slackevents"
 )
 
+func TestMessageFromSlashCommandIncludesHookFields(t *testing.T) {
+	p := &Platform{
+		botToken: "xoxb-test",
+		channelNameCache: map[string]string{
+			"D0AK8MAHW22": "dm-with-rock",
+		},
+	}
+	cmd := slack.SlashCommand{
+		TriggerID: "trigger-123",
+		ChannelID: "D0AK8MAHW22",
+		UserID:    "U02LNUW8KV5",
+		UserName:  "Guiqing Zheng",
+		Command:   "/deploy",
+		Text:      "prod",
+	}
+	msg := p.messageFromSlashCommand(
+		cmd,
+		"/deploy prod",
+		"slack:D0AK8MAHW22:U02LNUW8KV5",
+		"en",
+		nil,
+		"Guiqing Zheng",
+		"xxx@example.com",
+	)
+	if msg.MessageID != "trigger-123" {
+		t.Fatalf("MessageID = %q", msg.MessageID)
+	}
+	if msg.ChannelID != "D0AK8MAHW22" {
+		t.Fatalf("ChannelID = %q", msg.ChannelID)
+	}
+	if msg.ChatName != "dm-with-rock" {
+		t.Fatalf("ChatName = %q", msg.ChatName)
+	}
+	if msg.UserID != "U02LNUW8KV5" || msg.UserEmail != "xxx@example.com" {
+		t.Fatalf("user identity = id:%q email:%q", msg.UserID, msg.UserEmail)
+	}
+}
+
 func TestStripAppMentionText(t *testing.T) {
 	tests := []struct {
 		name string

@@ -278,7 +278,7 @@ include_user_email = true
 
 Then add the Slack bot scope `users:read.email` and reinstall/re-authorize the Slack app. If Slack does not return an email, cc-connect omits the `email` field and continues normally.
 
-Hooks receive the same information in structured form. HTTP hooks get the sender email as top-level `user_email`; command hooks get `CC_HOOK_USER_EMAIL`. Mentioned users are exposed through hook context as `ctx.slack_mentions` (or `CC_HOOK_CTX_JSON` for command hooks):
+Hooks receive the same information in structured form. HTTP hooks get the sender email as top-level `user_email`; command hooks and custom exec commands get `CC_HOOK_USER_EMAIL`. Mentioned users are exposed through hook context as `ctx.slack_mentions` (or `CC_HOOK_CTX_JSON` for command hooks and custom exec commands):
 
 ```json
 {

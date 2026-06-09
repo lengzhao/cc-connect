@@ -367,6 +367,7 @@ level = "info" # debug, info, warn, error
 #
 # Supported events / 支持的事件:
 #   message.received   — user message arrives / 用户消息到达
+#   command.executed   — custom exec command runs / custom exec 命令执行
 #   message.sent       — agent reply sent / Agent 回复发送完成
 #   session.started    — agent session spawned / Agent 会话启动
 #   session.ended      — agent session stopped / Agent 会话结束
@@ -388,6 +389,10 @@ level = "info" # debug, info, warn, error
 #   CC_HOOK_CHANNEL_NAME    — human-readable channel/chat name when available / 可用时为频道或会话名称
 #   CC_HOOK_CTX_JSON        — dynamic platform context JSON, e.g. A2A metadata / 动态平台上下文 JSON，如 A2A metadata
 #   CC_HOOK_HEADERS_JSON    — whitelisted inbound headers JSON, e.g. A2A forward_headers / 白名单入站 header JSON，如 A2A forward_headers
+# These CC_HOOK_* variables are also injected into [[commands]].exec as command.executed,
+# and the same event is emitted to matching [[hooks]] rules.
+# 这些 CC_HOOK_* 变量同样会以 command.executed 事件注入到 [[commands]].exec，
+# 并触发匹配的 [[hooks]] 规则。
 #
 # [[hooks]]
 # event = "message.received"
@@ -563,6 +568,13 @@ level = "info" # debug, info, warn, error
 
 # Exec commands - execute shell commands directly
 # Exec 命令 — 直接执行 shell 命令
+#
+# Exec commands inherit [projects.agent.options.env] and receive the same
+# CC_HOOK_* context contract as command hooks, with CC_HOOK_EVENT=command.executed.
+# Matching [[hooks]] with event = "command.executed" are also emitted.
+# Exec 命令会继承 [projects.agent.options.env]，并接收与 command hook 一致的
+# CC_HOOK_* 上下文契约，其中 CC_HOOK_EVENT=command.executed；
+# 同时会触发 event = "command.executed" 的 [[hooks]] 规则。
 
 # [[commands]]
 # name = "push"

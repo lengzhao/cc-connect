@@ -225,6 +225,7 @@ type Engine struct {
 	maxQueuedMessages int
 	dirHistory        *DirHistory
 	baseWorkDir       string
+	projectEnv        []string
 	projectState      *ProjectStateStore
 
 	// Auto-compress settings
@@ -539,6 +540,13 @@ func (e *Engine) reapIdleWorkspaces() {
 // SetHooks configures the lifecycle event hook manager.
 func (e *Engine) SetHooks(hm *HookManager) {
 	e.hooks = hm
+}
+
+// SetProjectEnv configures static project runtime environment variables that
+// should also be available to project-scoped shell executions such as custom
+// exec commands.
+func (e *Engine) SetProjectEnv(env []string) {
+	e.projectEnv = append([]string(nil), env...)
 }
 
 func (e *Engine) SetSpeechConfig(cfg SpeechCfg) {
@@ -877,6 +885,9 @@ var privilegedCommands = map[string]bool{
 // isAdmin checks whether the given user ID is authorized for privileged commands.
 // Unlike AllowList, empty adminFrom means deny-all (fail-closed).
 func (e *Engine) isAdmin(userID string) bool {
+	if strings.TrimSpace(userID) == "" {
+		return false
+	}
 	e.userRolesMu.RLock()
 	af := e.adminFrom
 	e.userRolesMu.RUnlock()
@@ -1945,23 +1956,7 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		"has_images", len(msg.Images) > 0, "has_audio", msg.Audio != nil, "has_files", len(msg.Files) > 0,
 	)
 
-	hookEvent := HookEvent{
-		Event:       HookEventMessageReceived,
-		SessionKey:  msg.SessionKey,
-		Platform:    msg.Platform,
-		MessageID:   msg.MessageID,
-		UserID:      msg.UserID,
-		UserName:    msg.UserName,
-		UserEmail:   msg.UserEmail,
-		ChannelName: msg.ChatName,
-		Content:     msg.Content,
-	}
-	if hp, ok := p.(HookContextProvider); ok {
-		ctx := cloneHookContext(hp.HookContext(msg.ReplyCtx))
-		hookEvent.Context = ctx.Context
-		hookEvent.Headers = ctx.Headers
-	}
-	e.hooks.Emit(hookEvent)
+	e.hooks.Emit(HookEventFromMessage(e.name, p, msg, HookEventMessageReceived, ""))
 
 	// Voice message: transcribe to text first
 	if msg.Audio != nil {
@@ -5205,10 +5200,17 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 				e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCommandDisabled), "/"+custom.Name))
 				return true
 			}
+			if custom.Exec != "" && !e.isAdmin(msg.UserID) {
+				slog.Info("audit: command_blocked",
+					"user_id", msg.UserID, "platform", msg.Platform,
+					"project", e.name, "command", custom.Name, "reason", "unauthorized")
+				e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgAdminRequired), "/"+custom.Name))
+				return true
+			}
 			slog.Info("audit: command_executed",
 				"user_id", msg.UserID, "platform", msg.Platform,
 				"project", e.name, "command", custom.Name, "type", "custom")
-			e.executeCustomCommand(p, msg, custom, args)
+			e.executeCustomCommand(p, msg, custom, args, raw)
 			return true
 		}
 		if skill := e.skills.Resolve(cmd); skill != nil {
@@ -6366,6 +6368,10 @@ const quickFinishTimeout = 500 * time.Millisecond
 // just send the result directly (no intermediate messages). If it's still running,
 // send a progress message and keep updating until completion.
 func (e *Engine) runShellWithProgress(p Platform, replyCtx any, command string, workDir string, timeout time.Duration, maxOutput int) error {
+	return e.runShellWithProgressEnv(p, replyCtx, command, workDir, timeout, maxOutput, nil)
+}
+
+func (e *Engine) runShellWithProgressEnv(p Platform, replyCtx any, command string, workDir string, timeout time.Duration, maxOutput int, extraEnv []string) error {
 	cmdLabel := truncateStr(command, 60)
 
 	ctx, cancel := context.WithTimeout(e.ctx, timeout)
@@ -6378,6 +6384,9 @@ func (e *Engine) runShellWithProgress(p Platform, replyCtx any, command string, 
 		cmd = exec.CommandContext(ctx, "sh", "-c", command)
 	}
 	cmd.Dir = workDir
+	if len(extraEnv) > 0 {
+		cmd.Env = MergeEnv(os.Environ(), extraEnv)
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -12279,14 +12288,14 @@ func (e *Engine) renderHeartbeatCard() *Card {
 // Custom command execution & management
 // ──────────────────────────────────────────────────────────────
 
-func (e *Engine) executeCustomCommand(p Platform, msg *Message, cmd *CustomCommand, args []string) {
-	if cmd.Exec != "" && !e.isAdmin(msg.UserID) {
-		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgAdminRequired), "/"+cmd.Name))
-		return
-	}
+func (e *Engine) executeCustomCommand(p Platform, msg *Message, cmd *CustomCommand, args []string, raw string) {
 	// If this is an exec command, run shell command directly
 	if cmd.Exec != "" {
-		go e.executeShellCommand(p, msg, cmd, args)
+		hookEvent := HookEventFromMessage(e.name, p, msg, HookEventCommandExecuted, raw)
+		e.hooks.Emit(hookEvent)
+		extraEnv := MergeEnv(e.projectEnv, eventToEnv(hookEvent))
+		workDir := e.resolveCustomExecWorkDir(p, msg, cmd)
+		go e.executeShellCommand(p, msg, cmd, args, extraEnv, workDir)
 		return
 	}
 
@@ -12320,32 +12329,47 @@ func (e *Engine) executeCustomCommand(p Platform, msg *Message, cmd *CustomComma
 	go e.processInteractiveMessageWith(p, msg, session, agent, sessions, interactiveKey, workspaceDir, msg.SessionKey)
 }
 
+func (e *Engine) resolveCustomExecWorkDir(p Platform, msg *Message, cmd *CustomCommand) string {
+	if workDir := strings.TrimSpace(cmd.WorkDir); workDir != "" {
+		return workDir
+	}
+	agent, _, _, workspaceDir, err := e.commandContextWithWorkspace(p, msg)
+	if err == nil {
+		if workspaceDir != "" {
+			return workspaceDir
+		}
+		if agent != nil {
+			if wdAgent, ok := agent.(interface{ GetWorkDir() string }); ok {
+				if wd := wdAgent.GetWorkDir(); wd != "" {
+					return wd
+				}
+			}
+		}
+	}
+	if e.agent != nil {
+		if wdAgent, ok := e.agent.(interface{ GetWorkDir() string }); ok {
+			if wd := wdAgent.GetWorkDir(); wd != "" {
+				return wd
+			}
+		}
+	}
+	workDir, _ := os.Getwd()
+	return workDir
+}
+
 // executeShellCommand runs a shell command and sends the output to the user.
-func (e *Engine) executeShellCommand(p Platform, msg *Message, cmd *CustomCommand, args []string) {
+func (e *Engine) executeShellCommand(p Platform, msg *Message, cmd *CustomCommand, args []string, extraEnv []string, workDir string) {
 	slog.Info("executing shell command",
 		"command", cmd.Name,
 		"exec", cmd.Exec,
 		"user", msg.UserName,
+		"work_dir", workDir,
 	)
 
 	// Expand placeholders in exec command
 	execCmd := ExpandPrompt(cmd.Exec, args)
 
-	// Determine working directory
-	workDir := cmd.WorkDir
-	if workDir == "" {
-		// Default to agent's work_dir if available
-		if e.agent != nil {
-			if agentOpts, ok := e.agent.(interface{ GetWorkDir() string }); ok {
-				workDir = agentOpts.GetWorkDir()
-			}
-		}
-	}
-	if workDir == "" {
-		workDir, _ = os.Getwd()
-	}
-
-	_ = e.runShellWithProgress(p, msg.ReplyCtx, execCmd, workDir, 60*time.Second, 4000)
+	_ = e.runShellWithProgressEnv(p, msg.ReplyCtx, execCmd, workDir, 60*time.Second, 4000, extraEnv)
 }
 
 func (e *Engine) cmdCommands(p Platform, msg *Message, args []string) {

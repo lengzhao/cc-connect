@@ -80,9 +80,9 @@ Configure a whitelist with `forward_headers`. Matching request headers are attac
 forward_headers = ["X-Tenant-Id", "X-Trace-Id"]
 ```
 
-Clients send them on the JSON-RPC `POST` request (or via A2A client `ServiceParams`). HTTP hooks receive them as the `headers` object in the JSON payload. Command hooks receive the same data as `CC_HOOK_HEADERS_JSON`.
+Clients send them on the JSON-RPC `POST` request (or via A2A client `ServiceParams`). HTTP hooks receive them as the `headers` object in the JSON payload. Command hooks and custom exec commands receive the same data as `CC_HOOK_HEADERS_JSON`.
 
-A2A `SendMessageRequest.metadata` and `message.metadata` are merged into the hook `ctx` object. Command hooks receive them as `CC_HOOK_CTX_JSON`.
+A2A `SendMessageRequest.metadata` and `message.metadata` are merged into the hook `ctx` object. Command hooks and custom exec commands receive them as `CC_HOOK_CTX_JSON`.
 
 Every hook invocation also receives:
 
