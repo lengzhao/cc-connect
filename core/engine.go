@@ -2608,6 +2608,31 @@ func isDenyResponse(s string) bool {
 // Interactive agent processing
 // ──────────────────────────────────────────────────────────────
 
+func (e *Engine) emitMessageProcessingHook(p Platform, msg *Message) {
+	if e.hooks == nil || msg == nil {
+		return
+	}
+	e.hooks.Emit(HookEventFromMessage(e.name, p, msg, HookEventMessageProcessing, ""))
+}
+
+func (e *Engine) emitQueuedMessageProcessingHook(q queuedMessage) {
+	if e.hooks == nil {
+		return
+	}
+	e.hooks.Emit(HookEventFromMessage(e.name, q.platform, &Message{
+		SessionKey: q.msgSessionKey,
+		Platform:   q.msgPlatform,
+		MessageID:  q.messageID,
+		UserID:     q.userID,
+		UserName:   q.userName,
+		UserEmail:  q.userEmail,
+		Content:    q.content,
+		ReplyCtx:   q.replyCtx,
+		FromVoice:  q.fromVoice,
+		ChannelKey: q.channelKey,
+	}, HookEventMessageProcessing, ""))
+}
+
 func (e *Engine) processInteractiveMessage(p Platform, msg *Message, session *Session) {
 	e.processInteractiveMessageWith(p, msg, session, e.agent, e.sessions, msg.SessionKey, "", "")
 }
@@ -2631,6 +2656,8 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	if e.ctx.Err() != nil {
 		return
 	}
+
+	e.emitMessageProcessingHook(p, msg)
 
 	turnStart := time.Now()
 
@@ -4558,6 +4585,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				state.fromVoice = queued.fromVoice
 				state.mu.Unlock()
 
+				e.emitQueuedMessageProcessingHook(queued)
+
 				// Stop the previous turn's typing indicator
 				if stopTyping != nil {
 					stopTyping()
@@ -4866,6 +4895,8 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		state.currentMessageID = queued.messageID
 		state.fromVoice = queued.fromVoice
 		state.mu.Unlock()
+
+		e.emitQueuedMessageProcessingHook(queued)
 
 		e.i18n.DetectAndSet(queued.content)
 		prompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)

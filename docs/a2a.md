@@ -74,7 +74,7 @@ The message user id is read from the configured `user_header`. By default this i
 
 ### Forwarding context to cc-connect hooks
 
-Configure a whitelist with `forward_headers`. Matching request headers are attached to the `message.received` hook event — they are **not** prepended to the coding agent prompt.
+Configure a whitelist with `forward_headers`. Matching request headers are attached to the `message.received` and `message.processing` hook events — they are **not** prepended to the coding agent prompt.
 
 ```toml
 forward_headers = ["X-Tenant-Id", "X-Trace-Id"]
@@ -82,7 +82,7 @@ forward_headers = ["X-Tenant-Id", "X-Trace-Id"]
 
 Clients send them on the JSON-RPC `POST` request (or via A2A client `ServiceParams`). HTTP hooks receive them as the `headers` object in the JSON payload. Command hooks and custom exec commands receive the same data as `CC_HOOK_HEADERS_JSON`.
 
-A2A `SendMessageRequest.metadata` and `message.metadata` are merged into the hook `ctx` object. Command hooks and custom exec commands receive them as `CC_HOOK_CTX_JSON`.
+A2A `SendMessageRequest.metadata` and `message.metadata` are merged into the hook `ctx` object. Command hooks, custom exec commands, and `message.processing` hooks receive them as `CC_HOOK_CTX_JSON`.
 
 Every hook invocation also receives:
 

@@ -367,6 +367,7 @@ level = "info" # debug, info, warn, error
 #
 # Supported events / 支持的事件:
 #   message.received   — user message arrives / 用户消息到达
+#   message.processing — message acquired session lock and starts agent turn / 消息已获得 session 锁并开始 Agent 处理
 #   command.executed   — custom exec command runs / custom exec 命令执行
 #   message.sent       — agent reply sent / Agent 回复发送完成
 #   session.started    — agent session spawned / Agent 会话启动

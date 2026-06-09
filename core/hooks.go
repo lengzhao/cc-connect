@@ -19,6 +19,7 @@ type HookEventType string
 
 const (
 	HookEventMessageReceived     HookEventType = "message.received"
+	HookEventMessageProcessing   HookEventType = "message.processing"
 	HookEventCommandExecuted     HookEventType = "command.executed"
 	HookEventMessageSent         HookEventType = "message.sent"
 	HookEventSessionStarted      HookEventType = "session.started"

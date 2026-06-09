@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -151,6 +152,215 @@ func TestHandleMessageEmitsHookMessageContext(t *testing.T) {
 	}
 	if got.Headers["X-Tenant-Id"] != "acme" {
 		t.Fatalf("hook headers = %#v", got.Headers)
+	}
+}
+
+func TestHandleMessageEmitsProcessingHookAfterLock(t *testing.T) {
+	var mu sync.Mutex
+	var events []HookEventType
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		var ev HookEvent
+		if err := json.Unmarshal(body, &ev); err != nil {
+			t.Errorf("unmarshal body: %v", err)
+		}
+		mu.Lock()
+		events = append(events, ev.Event)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	sess := newControllableSession("proc-hook")
+	agent := &controllableAgent{nextSession: sess}
+	p := &stubPlatformEngine{n: "slack"}
+	e := NewEngine("test", agent, []Platform{p}, t.TempDir()+"/sessions.json", LangEnglish)
+	e.SetHooks(NewHookManager("test", []HookConfig{{
+		Event: "*",
+		Type:  "http",
+		URL:   srv.URL,
+		Async: boolPtr(false),
+	}}))
+
+	e.handleMessage(p, &Message{
+		SessionKey: "slack:C:U1",
+		Platform:   "slack",
+		MessageID:  "msg-proc",
+		UserID:     "U1",
+		UserName:   "Alice",
+		Content:    "hello agent",
+		ReplyCtx:   "ctx",
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		gotProcessing := slices.Contains(events, HookEventMessageProcessing)
+		mu.Unlock()
+		if gotProcessing {
+			break
+		}
+		if time.Now().After(deadline) {
+			mu.Lock()
+			got := append([]HookEventType(nil), events...)
+			mu.Unlock()
+			t.Fatalf("message.processing not emitted, events=%v", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	got := append([]HookEventType(nil), events...)
+	mu.Unlock()
+	if !slices.Contains(got, HookEventMessageReceived) {
+		t.Fatalf("expected message.received, events=%v", got)
+	}
+	if !slices.Contains(got, HookEventMessageProcessing) {
+		t.Fatalf("expected message.processing, events=%v", got)
+	}
+}
+
+func TestHandleMessageProcessingHookSkippedForCommands(t *testing.T) {
+	var mu sync.Mutex
+	var events []HookEventType
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		var ev HookEvent
+		if err := json.Unmarshal(body, &ev); err != nil {
+			t.Errorf("unmarshal body: %v", err)
+		}
+		mu.Lock()
+		events = append(events, ev.Event)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &stubPlatformEngine{n: "slack"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, t.TempDir()+"/sessions.json", LangEnglish)
+	e.SetHooks(NewHookManager("test", []HookConfig{{
+		Event: "*",
+		Type:  "http",
+		URL:   srv.URL,
+		Async: boolPtr(false),
+	}}))
+
+	e.handleMessage(p, &Message{
+		SessionKey: "slack:C:U1",
+		Platform:   "slack",
+		MessageID:  "cmd-new",
+		UserID:     "U1",
+		Content:    "/new",
+		ReplyCtx:   "ctx",
+	})
+
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	got := append([]HookEventType(nil), events...)
+	mu.Unlock()
+	if !slices.Contains(got, HookEventMessageReceived) {
+		t.Fatalf("expected message.received, events=%v", got)
+	}
+	if slices.Contains(got, HookEventMessageProcessing) {
+		t.Fatalf("did not expect message.processing for /new, events=%v", got)
+	}
+}
+
+func TestProcessInteractiveEvents_EmitsProcessingHookForQueuedMessage(t *testing.T) {
+	var mu sync.Mutex
+	var events []HookEventType
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		var ev HookEvent
+		if err := json.Unmarshal(body, &ev); err != nil {
+			t.Errorf("unmarshal body: %v", err)
+		}
+		mu.Lock()
+		events = append(events, ev.Event)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &stubPlatformEngine{n: "test"}
+	sess := newQueuingSession("qs-processing-hook")
+	agent := &controllableAgent{nextSession: sess}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	e.SetHooks(NewHookManager("test", []HookConfig{{
+		Event: "message.processing",
+		Type:  "http",
+		URL:   srv.URL,
+		Async: boolPtr(false),
+	}}))
+
+	key := "test:user1"
+	session := e.sessions.GetOrCreateActive(key)
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx-turn1",
+		pendingMessages: []queuedMessage{{
+			platform:      p,
+			replyCtx:      "ctx-turn2",
+			content:       "queued-msg",
+			messageID:     "queued-1",
+			userID:        "U1",
+			userName:      "Alice",
+			msgPlatform:   "test",
+			msgSessionKey: key,
+		}},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	go func() {
+		sess.events <- Event{Type: EventResult, Content: "response1", Done: true}
+		sess.sendMu.Lock()
+		for len(sess.sendCalls) == 0 {
+			sess.sendMu.Unlock()
+			time.Sleep(5 * time.Millisecond)
+			sess.sendMu.Lock()
+		}
+		sess.sendMu.Unlock()
+		sess.events <- Event{Type: EventResult, Content: "response2", Done: true}
+	}()
+
+	sendDone := make(chan error, 1)
+	sendDone <- nil
+
+	done := make(chan struct{})
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "turn1", time.Now(), nil, sendDone, "ctx-turn1")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processInteractiveEvents did not complete in time")
+	}
+
+	mu.Lock()
+	count := 0
+	for _, ev := range events {
+		if ev == HookEventMessageProcessing {
+			count++
+		}
+	}
+	mu.Unlock()
+	if count != 1 {
+		t.Fatalf("message.processing count = %d, want 1", count)
 	}
 }
 
