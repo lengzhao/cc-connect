@@ -7,9 +7,10 @@ import (
 )
 
 type slackUserInfo struct {
-	name  string
-	email string
-	lang  string
+	name     string
+	email    string
+	lang     string
+	timezone string
 }
 
 func (p *Platform) setSessionLang(sessionKey, lang string) {

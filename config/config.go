@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -373,6 +374,8 @@ type ProjectConfig struct {
 	// entirely (the per-line indicator flags above become no-ops).
 	ReplyFooter      *bool        `toml:"reply_footer,omitempty"`
 	InjectSender     *bool        `toml:"inject_sender,omitempty"`     // prepend sender identity (platform + user ID) to each message sent to the agent
+	InjectTimestamp  *bool        `toml:"inject_timestamp,omitempty"`  // prepend current local time (user timezone) to each message sent to the agent
+	DefaultTimezone  string       `toml:"default_timezone,omitempty"`  // fallback IANA timezone when platform/user timezone is unknown
 	DisabledCommands []string     `toml:"disabled_commands,omitempty"` // commands to disable for this project (e.g. ["restart", "upgrade"])
 	AdminFrom        string       `toml:"admin_from,omitempty"`        // comma-separated user IDs allowed to run privileged commands; "*" = all allowed users
 	Users            *UsersConfig `toml:"users,omitempty"`             // per-user role config; nil = legacy behavior
@@ -867,6 +870,11 @@ func (c *Config) validateInternal(permissive bool) error {
 		}
 		if err := validateDisplayConfig(prefix+".display", proj.Display); err != nil {
 			return err
+		}
+		if proj.DefaultTimezone != "" {
+			if _, err := time.LoadLocation(proj.DefaultTimezone); err != nil {
+				return fmt.Errorf("config: %s.default_timezone invalid: %w", prefix, err)
+			}
 		}
 	}
 	return nil
@@ -2874,6 +2882,8 @@ type ProjectSettingsUpdate struct {
 	ShowWorkdirIndicator *bool
 	ReplyFooter          *bool
 	InjectSender         *bool
+	InjectTimestamp      *bool
+	DefaultTimezone      *string
 	PlatformAllowFrom    map[string]string
 }
 
@@ -2963,6 +2973,13 @@ func SaveProjectSettings(projectName string, update ProjectSettingsUpdate) error
 			v := *update.InjectSender
 			proj.InjectSender = &v
 		}
+		if update.InjectTimestamp != nil {
+			v := *update.InjectTimestamp
+			proj.InjectTimestamp = &v
+		}
+		if update.DefaultTimezone != nil {
+			proj.DefaultTimezone = *update.DefaultTimezone
+		}
 		if update.WorkDir != nil || update.Mode != nil {
 			if proj.Agent.Options == nil {
 				proj.Agent.Options = map[string]any{}
@@ -3049,6 +3066,12 @@ func GetProjectConfigDetails(projectName string) map[string]any {
 		}
 		if p.InjectSender != nil {
 			result["inject_sender"] = *p.InjectSender
+		}
+		if p.InjectTimestamp != nil {
+			result["inject_timestamp"] = *p.InjectTimestamp
+		}
+		if p.DefaultTimezone != "" {
+			result["default_timezone"] = p.DefaultTimezone
 		}
 		platConfigs := make([]map[string]any, len(p.Platforms))
 		for j, plat := range p.Platforms {

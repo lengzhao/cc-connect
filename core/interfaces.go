@@ -61,6 +61,12 @@ type HookContextProvider interface {
 	HookContext(replyCtx any) HookContext
 }
 
+// UserTimezoneProvider is an optional platform capability that returns the
+// sender's IANA timezone (e.g. "Asia/Shanghai") when known.
+type UserTimezoneProvider interface {
+	UserTimezone(userID string) string
+}
+
 // PlatformPromptInjector is an optional interface for agents that can receive
 // platform-specific prompt fragments (e.g., formatting instructions).
 // The engine calls this before StartSession when the platform provides formatting.

@@ -724,6 +724,13 @@ name = "my-backend"
 # 仅在个人单用户部署中使用此配置，确保所有允许的用户均可信任。
 # admin_from = "*"
 
+# inject_sender = true              # Prepend sender identity to each agent message (default: false)
+#                                   # 在每条发给 agent 的消息前注入发送者身份（默认 false）
+# inject_timestamp = true           # Prepend current local time to each agent message (default: false)
+#                                   # 在每条发给 agent 的消息前注入当前本地时间（默认 false）
+# default_timezone = "Asia/Shanghai" # Fallback IANA timezone when platform user timezone is unknown
+#                                   # 平台用户时区未知时的默认 IANA 时区（Slack 会自动读取用户 profile 时区）
+
 # Multi-user mode — per-user rate limits and role-based command ACL
 # 多用户模式 — 按用户速率限制和基于角色的命令权限控制
 #

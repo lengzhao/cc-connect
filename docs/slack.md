@@ -283,6 +283,13 @@ When project-level `inject_sender = true` is enabled, the sender is also injecte
 [cc-connect sender_id=U999 sender_name="Rock" platform=slack chat_id=C123]
 ```
 
+When `inject_timestamp = true` is enabled, each agent message also includes the current time in the user's timezone (Slack profile timezone, or `default_timezone` fallback):
+
+```text
+[cc-connect timestamp="2026-06-10T15:30:00+08:00" timezone="Asia/Shanghai" sender_id=U999 ...]
+hello
+```
+
 The agent should mention Slack users with `<@USER_ID>` when replying. If your organization provides a tool that maps email/name to Slack user ID, expose that tool to the agent and let it return the ID to use in `<@...>`.
 
 Email injection is disabled by default. To include emails for the sender and mentioned users, set:

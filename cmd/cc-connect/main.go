@@ -564,6 +564,12 @@ func main() {
 		if proj.InjectSender != nil {
 			engine.SetInjectSender(*proj.InjectSender)
 		}
+		if proj.InjectTimestamp != nil {
+			engine.SetInjectTimestamp(*proj.InjectTimestamp)
+		}
+		if proj.DefaultTimezone != "" {
+			engine.SetDefaultTimezone(proj.DefaultTimezone)
+		}
 
 		// Wire speech-to-text if enabled
 		if cfg.Speech.Enabled {
@@ -967,6 +973,8 @@ func main() {
 				ShowWorkdirIndicator: u.ShowWorkdirIndicator,
 				ReplyFooter:          u.ReplyFooter,
 				InjectSender:         u.InjectSender,
+				InjectTimestamp:      u.InjectTimestamp,
+				DefaultTimezone:      u.DefaultTimezone,
 				PlatformAllowFrom:    u.PlatformAllowFrom,
 			})
 		})
@@ -1512,6 +1520,8 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 
 	// Reload sender injection
 	engine.SetInjectSender(proj.InjectSender != nil && *proj.InjectSender)
+	engine.SetInjectTimestamp(proj.InjectTimestamp != nil && *proj.InjectTimestamp)
+	engine.SetDefaultTimezone(proj.DefaultTimezone)
 
 	// Reload attachment send-back switch
 	engine.SetAttachmentSendEnabled(cfg.AttachmentSend != "off")

@@ -29,6 +29,8 @@ type ProjectSettingsUpdate struct {
 	ShowWorkdirIndicator *bool
 	ReplyFooter          *bool
 	InjectSender         *bool
+	InjectTimestamp      *bool
+	DefaultTimezone      *string
 	PlatformAllowFrom    map[string]string
 }
 
@@ -718,6 +720,8 @@ func (m *ManagementServer) handleProjectDetail(w http.ResponseWriter, r *http.Re
 			ShowWorkdirIndicator *bool             `json:"show_workdir_indicator"`
 			ReplyFooter          *bool             `json:"reply_footer"`
 			InjectSender         *bool             `json:"inject_sender"`
+			InjectTimestamp      *bool             `json:"inject_timestamp"`
+			DefaultTimezone      *string           `json:"default_timezone"`
 			PlatformAllowFrom    map[string]string `json:"platform_allow_from"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -767,6 +771,12 @@ func (m *ManagementServer) handleProjectDetail(w http.ResponseWriter, r *http.Re
 		if body.InjectSender != nil {
 			e.SetInjectSender(*body.InjectSender)
 		}
+		if body.InjectTimestamp != nil {
+			e.SetInjectTimestamp(*body.InjectTimestamp)
+		}
+		if body.DefaultTimezone != nil {
+			e.SetDefaultTimezone(*body.DefaultTimezone)
+		}
 
 		restartRequired := false
 		if body.AgentType != nil && *body.AgentType != e.agent.Name() {
@@ -797,6 +807,8 @@ func (m *ManagementServer) handleProjectDetail(w http.ResponseWriter, r *http.Re
 				ShowWorkdirIndicator: body.ShowWorkdirIndicator,
 				ReplyFooter:          body.ReplyFooter,
 				InjectSender:         body.InjectSender,
+				InjectTimestamp:      body.InjectTimestamp,
+				DefaultTimezone:      body.DefaultTimezone,
 				PlatformAllowFrom:    body.PlatformAllowFrom,
 			}
 			if err := m.saveProjectSettings(name, patch); err != nil {

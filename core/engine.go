@@ -175,6 +175,8 @@ type Engine struct {
 	tts                   *TTSCfg
 	display               DisplayCfg
 	injectSender          bool
+	injectTimestamp       bool
+	defaultTimezone       string
 	attachmentSendEnabled bool
 	startedAt             time.Time
 
@@ -666,6 +668,18 @@ func (e *Engine) SetSkipGit(skipGit bool) {
 // accordingly (e.g. personal task views, role-based access control).
 func (e *Engine) SetInjectSender(v bool) {
 	e.injectSender = v
+}
+
+// SetInjectTimestamp controls whether the current local time (in the user's
+// timezone) is prepended to each message sent to the agent.
+func (e *Engine) SetInjectTimestamp(v bool) {
+	e.injectTimestamp = v
+}
+
+// SetDefaultTimezone sets the fallback IANA timezone used when the platform
+// does not provide one and the user has not set /tz.
+func (e *Engine) SetDefaultTimezone(tz string) {
+	e.defaultTimezone = strings.TrimSpace(tz)
 }
 
 // SetAttachmentSendEnabled controls whether side-channel image/file delivery is allowed.
@@ -2742,7 +2756,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		drainEvents(state.agentSession.Events())
 	}
 
-	promptContent := e.buildSenderPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey)
+	promptContent := e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, p)
 
 	sendStart := time.Now()
 	state.mu.Lock()
@@ -4610,7 +4624,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					}
 				}
 
-				queuedPrompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)
+				queuedPrompt := e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform)
 
 				nextSend := make(chan error, 1)
 				go func() {
@@ -4899,7 +4913,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		e.emitQueuedMessageProcessingHook(queued)
 
 		e.i18n.DetectAndSet(queued.content)
-		prompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)
+		prompt := e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform)
 
 		if state.agentSession == nil || !state.agentSession.Alive() {
 			e.send(queued.platform, queued.replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "agent session ended"))
@@ -13886,29 +13900,64 @@ func (e *Engine) cmdBindSetup(p Platform, msg *Message) {
 	}
 }
 
-// buildSenderPrompt prepends a sender identity header to content when
-// injectSender is enabled and userID is non-empty. When userName is available
-// it is included as sender_name so the agent can identify who sent the message
-// by display name (useful in shared channel sessions with multiple users).
-// Platforms may also provide senderEmail for workflows that need contact info.
-func (e *Engine) buildSenderPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey string) string {
-	if !e.injectSender || userID == "" {
+// buildAgentPrompt prepends cc-connect metadata to content when injectTimestamp
+// and/or injectSender are enabled.
+func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey string, p Platform) string {
+	var attrs []string
+	if e.injectTimestamp {
+		tzName := e.resolveUserTimezone(userID, p)
+		attrs = append(attrs, formatInjectTimestamp(time.Now(), tzName))
+	}
+	if e.injectSender && userID != "" {
+		chatID := channelKey
+		if chatID == "" {
+			chatID = extractChannelID(sessionKey)
+		}
+		attrs = append(attrs, fmt.Sprintf("sender_id=%s", userID))
+		if userName != "" {
+			attrs = append(attrs, fmt.Sprintf(`sender_name="%s"`, promptAttrValue(userName)))
+		}
+		if senderEmail != "" {
+			attrs = append(attrs, fmt.Sprintf(`sender_email="%s"`, promptAttrValue(senderEmail)))
+		}
+		attrs = append(attrs, fmt.Sprintf("platform=%s", platform), fmt.Sprintf("chat_id=%s", chatID))
+	}
+	if len(attrs) == 0 {
 		return content
 	}
-	chatID := channelKey
-	if chatID == "" {
-		chatID = extractChannelID(sessionKey)
-	}
-	var attrs []string
-	attrs = append(attrs, fmt.Sprintf("sender_id=%s", userID))
-	if userName != "" {
-		attrs = append(attrs, fmt.Sprintf(`sender_name="%s"`, promptAttrValue(userName)))
-	}
-	if senderEmail != "" {
-		attrs = append(attrs, fmt.Sprintf(`sender_email="%s"`, promptAttrValue(senderEmail)))
-	}
-	attrs = append(attrs, fmt.Sprintf("platform=%s", platform), fmt.Sprintf("chat_id=%s", chatID))
 	return fmt.Sprintf("[cc-connect %s]\n%s", strings.Join(attrs, " "), content)
+}
+
+func (e *Engine) resolveUserTimezone(userID string, p Platform) string {
+	if p != nil {
+		if tzp, ok := p.(UserTimezoneProvider); ok {
+			if tz := strings.TrimSpace(tzp.UserTimezone(userID)); tz != "" {
+				if _, err := time.LoadLocation(tz); err != nil {
+					slog.Warn("platform returned invalid timezone", "timezone", tz, "user_id", userID, "error", err)
+				} else {
+					return tz
+				}
+			}
+		}
+	}
+	if e.defaultTimezone != "" {
+		return e.defaultTimezone
+	}
+	return "UTC"
+}
+
+func formatInjectTimestamp(now time.Time, tzName string) string {
+	tzName = strings.TrimSpace(tzName)
+	if tzName == "" {
+		tzName = "UTC"
+	}
+	loc, err := time.LoadLocation(tzName)
+	if err != nil {
+		loc = time.UTC
+		tzName = "UTC"
+	}
+	local := now.In(loc)
+	return fmt.Sprintf(`timestamp="%s" timezone="%s"`, local.Format(time.RFC3339), tzName)
 }
 
 func promptAttrValue(value string) string {

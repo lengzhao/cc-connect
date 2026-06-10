@@ -893,8 +893,24 @@ func (p *Platform) cachedUserInfo(userID string) (name, email, lang string) {
 	}
 	email = user.Profile.Email
 	lang = mapSlackUserLocale(user.Locale)
-	p.userInfoCache.Store(userID, slackUserInfo{name: name, email: email, lang: lang})
+	timezone := strings.TrimSpace(user.TZ)
+	p.userInfoCache.Store(userID, slackUserInfo{name: name, email: email, lang: lang, timezone: timezone})
 	return name, email, lang
+}
+
+// UserTimezone implements core.UserTimezoneProvider using Slack users.info tz.
+func (p *Platform) UserTimezone(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	if cached, ok := p.userInfoCache.Load(userID); ok {
+		return cached.(slackUserInfo).timezone
+	}
+	_, _, _ = p.cachedUserInfo(userID)
+	if cached, ok := p.userInfoCache.Load(userID); ok {
+		return cached.(slackUserInfo).timezone
+	}
+	return ""
 }
 
 func (p *Platform) resolveUserName(userID string) string {
