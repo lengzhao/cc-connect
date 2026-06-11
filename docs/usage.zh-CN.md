@@ -669,7 +669,7 @@ cc-connect send --file /absolute/path/to/report.pdf --image /absolute/path/to/ch
 ### 聊天命令
 
 ```
-/cron                                          列出所有任务
+/cron                                          列出当前会话（频道/线程）的任务
 /cron add <分> <时> <日> <月> <周> <任务描述>      创建任务
 /cron del <id>                                 删除任务
 /cron enable <id>                              启用

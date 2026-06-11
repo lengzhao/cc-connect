@@ -278,6 +278,15 @@ func (s *CronStore) Get(id string) *CronJob {
 	return nil
 }
 
+// GetForSession returns the job only when it belongs to sessionKey.
+func (s *CronStore) GetForSession(id, sessionKey string) *CronJob {
+	job := s.Get(id)
+	if job == nil || job.SessionKey != sessionKey {
+		return nil
+	}
+	return job
+}
+
 // Update modifies a specific field of a cron job. Returns false if job not found.
 // readOnlyFields contains fields that cannot be modified: id, created_at.
 func (s *CronStore) Update(id string, field string, value any) bool {

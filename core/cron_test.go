@@ -756,6 +756,36 @@ func TestCronStore_MarkRun(t *testing.T) {
 	}
 }
 
+func TestCronStore_GetForSession(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job := &CronJob{
+		ID:         "j1",
+		Project:    "proj1",
+		SessionKey: "slack:C1:user1",
+		CronExpr:   "0 6 * * *",
+		Prompt:     "p1",
+		Enabled:    true,
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := store.GetForSession("j1", "slack:C1:user1"); got == nil {
+		t.Fatal("GetForSession matching session = nil, want job")
+	}
+	if got := store.GetForSession("j1", "slack:C2:user1"); got != nil {
+		t.Fatalf("GetForSession other session = %+v, want nil", got)
+	}
+	if got := store.GetForSession("missing", "slack:C1:user1"); got != nil {
+		t.Fatalf("GetForSession missing id = %+v, want nil", got)
+	}
+}
+
 func TestCronStore_ListByProject(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewCronStore(dir)

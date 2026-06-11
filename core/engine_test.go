@@ -7862,6 +7862,75 @@ func TestCmdCronExec_BlocksShellJobForNonAdmin(t *testing.T) {
 	}
 }
 
+func TestCmdCronList_OnlyShowsSessionJobs(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler := NewCronScheduler(store)
+	p := &stubPlatformEngine{n: "plain"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.cronScheduler = scheduler
+
+	jobs := []*CronJob{
+		{ID: "c1-job", Project: "test", SessionKey: "slack:C1", CronExpr: "0 6 * * *", Prompt: "channel 1", Enabled: true, CreatedAt: time.Now()},
+		{ID: "c2-job", Project: "test", SessionKey: "slack:C2", CronExpr: "0 7 * * *", Prompt: "channel 2", Enabled: true, CreatedAt: time.Now()},
+	}
+	for _, job := range jobs {
+		if err := store.Add(job); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msg := &Message{SessionKey: "slack:C1", ReplyCtx: "ctx"}
+	e.cmdCron(p, msg, []string{"list"})
+
+	if len(p.sent) != 1 {
+		t.Fatalf("sent = %d, want 1", len(p.sent))
+	}
+	if !strings.Contains(p.sent[0], "c1-job") {
+		t.Fatalf("reply = %q, want channel 1 job", p.sent[0])
+	}
+	if strings.Contains(p.sent[0], "c2-job") {
+		t.Fatalf("reply = %q, should not include other channel job", p.sent[0])
+	}
+}
+
+func TestCmdCronExec_RejectsOtherSessionJob(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler := NewCronScheduler(store)
+	p := &stubPlatformEngine{n: "plain"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.cronScheduler = scheduler
+	scheduler.RegisterEngine("test", e)
+
+	job := &CronJob{
+		ID:         "other-channel",
+		Project:    "test",
+		SessionKey: "slack:C2",
+		CronExpr:   "0 6 * * *",
+		Prompt:     "other",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := &Message{SessionKey: "slack:C1", ReplyCtx: "ctx"}
+	e.cmdCron(p, msg, []string{"exec", job.ID})
+
+	if len(p.sent) != 1 {
+		t.Fatalf("sent = %d, want 1", len(p.sent))
+	}
+	if !strings.Contains(p.sent[0], job.ID) || !strings.Contains(strings.ToLower(p.sent[0]), "not found") {
+		t.Fatalf("reply = %q, want not found for other session", p.sent[0])
+	}
+}
+
 func TestCmdCronExec_ProjectMissingReply(t *testing.T) {
 	store, err := NewCronStore(t.TempDir())
 	if err != nil {

@@ -757,7 +757,7 @@ Create scheduled tasks that run automatically.
 ### Chat Commands
 
 ```
-/cron                                          List all jobs
+/cron                                          List jobs for the current session (channel/thread)
 /cron add <min> <hour> <day> <mon> <wk> <prompt>   Create job
 /cron del <id>                                 Delete job
 /cron enable <id>                              Enable job

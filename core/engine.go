@@ -10408,6 +10408,9 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) {
 			return
 		}
 		sub, id := subArgs[0], subArgs[1]
+		if e.cronScheduler.Store().GetForSession(id, sessionKey) == nil {
+			return
+		}
 		switch sub {
 		case "enable":
 			if err := e.cronScheduler.EnableJob(id); err != nil {
@@ -11972,7 +11975,7 @@ func (e *Engine) cmdCronAddExec(p Platform, msg *Message, args []string) {
 }
 
 func (e *Engine) cmdCronList(p Platform, msg *Message) {
-	jobs := e.cronScheduler.Store().ListByProject(e.name)
+	jobs := e.cronScheduler.Store().ListBySessionKey(msg.SessionKey)
 	if len(jobs) == 0 {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronEmpty))
 		return
@@ -12038,7 +12041,7 @@ func (e *Engine) cmdCronExec(p Platform, msg *Message, args []string) {
 		return
 	}
 	id := args[0]
-	job := e.cronScheduler.store.Get(id)
+	job := e.cronScheduler.Store().GetForSession(id, msg.SessionKey)
 	if job == nil {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronNotFound), id))
 		return
@@ -12067,6 +12070,10 @@ func (e *Engine) cmdCronDel(p Platform, msg *Message, args []string) {
 		return
 	}
 	id := args[0]
+	if e.cronScheduler.Store().GetForSession(id, msg.SessionKey) == nil {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronNotFound), id))
+		return
+	}
 	if e.cronScheduler.RemoveJob(id) {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronDeleted), id))
 	} else {
@@ -12080,6 +12087,10 @@ func (e *Engine) cmdCronToggle(p Platform, msg *Message, args []string, enable b
 		return
 	}
 	id := args[0]
+	if e.cronScheduler.Store().GetForSession(id, msg.SessionKey) == nil {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronNotFound), id))
+		return
+	}
 	var err error
 	if enable {
 		err = e.cronScheduler.EnableJob(id)
@@ -12103,6 +12114,10 @@ func (e *Engine) cmdCronMute(p Platform, msg *Message, args []string, mute bool)
 		return
 	}
 	id := args[0]
+	if e.cronScheduler.Store().GetForSession(id, msg.SessionKey) == nil {
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronNotFound), id))
+		return
+	}
 	if !e.cronScheduler.Store().SetMute(id, mute) {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronNotFound), id))
 		return
