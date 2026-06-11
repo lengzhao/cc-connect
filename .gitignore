@@ -144,3 +144,6 @@ credentials/
 
 .codex
 cc-connect-new
+.gomodcache/
+
+.gocache/
