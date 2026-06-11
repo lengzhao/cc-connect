@@ -27,12 +27,13 @@ func init() {
 }
 
 type replyContext struct {
-	channel       string
-	timestamp     string // thread_ts for threading replies
-	messageTS     string // triggering user message ts (for emoji reactions)
-	sessionKey    string
-	lang          string // normalized UI language for this session
-	slackMentions []slackMentionRef
+	channel          string
+	timestamp        string // thread_ts for threading replies
+	messageTS        string // triggering user message ts (for emoji reactions)
+	sessionKey       string
+	lang             string // normalized UI language for this session
+	slackMentions    []slackMentionRef
+	slashResponseURL string // slash command delayed-response URL
 }
 
 type slackMentionRef struct {
@@ -56,9 +57,13 @@ type Platform struct {
 	statePath                  string
 	threadActiveTTL            time.Duration
 	dedupTTL                   time.Duration
+	progressStyle              string
 	client                     *slack.Client
 	socket                *socketmode.Client
 	handler               core.MessageHandler
+	self                  core.Platform
+	statusKeepaliveMu     sync.Mutex
+	statusKeepalive       map[string]context.CancelFunc
 	cardNavHandler        core.CardNavigationHandler
 	cancel                context.CancelFunc
 	channelNameCache      map[string]string
@@ -120,6 +125,10 @@ func New(opts map[string]any) (core.Platform, error) {
 	}
 	threadActiveHours := parsePositiveIntOpt(opts["thread_active_ttl_hours"], defaultThreadActiveHours)
 	dedupSecs := parsePositiveIntOpt(opts["dedup_ttl_seconds"], defaultInboundDedupSecs)
+	progressStyle, err := parseSlackProgressStyle(opts)
+	if err != nil {
+		return nil, err
+	}
 	p := &Platform{
 		botToken:                  botToken,
 		appToken:                  appToken,
@@ -135,12 +144,41 @@ func New(opts map[string]any) (core.Platform, error) {
 		statePath:                 resolveSlackStatePath(opts),
 		threadActiveTTL:           time.Duration(threadActiveHours) * time.Hour,
 		dedupTTL:                  time.Duration(dedupSecs) * time.Second,
+		progressStyle:             progressStyle,
 		activeThreads:             make(map[string]time.Time),
 		recentInbound:             make(map[string]time.Time),
 		channelNameCache:          make(map[string]string),
+		statusKeepalive:           make(map[string]context.CancelFunc),
 	}
 	p.loadSlackThreadState()
+	if progressStyle == progressStyleAssistantStatus || progressStyle == progressStyleStream {
+		wrapped := &progressPlatform{Platform: p}
+		p.self = wrapped
+		return wrapped, nil
+	}
+	p.self = p
 	return p, nil
+}
+
+func parseSlackProgressStyle(opts map[string]any) (string, error) {
+	raw, _ := opts["progress_style"].(string)
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "legacy":
+		return "legacy", nil
+	case progressStyleAssistantStatus:
+		return progressStyleAssistantStatus, nil
+	case progressStyleStream:
+		return progressStyleStream, nil
+	default:
+		return "", fmt.Errorf("slack: invalid progress_style %q (want legacy, assistant_status, or stream)", raw)
+	}
+}
+
+func (p *Platform) selfPlatform() core.Platform {
+	if p != nil && p.self != nil {
+		return p.self
+	}
+	return p
 }
 
 // normalizeSlackAPIURL returns the Slack Web API base URL in the format
@@ -341,7 +379,7 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 					MessageID:    ev.TimeStamp,
 					ReplyCtx:     rc,
 				}
-				p.handler(p, msg)
+				p.handler(p.selfPlatform(), msg)
 
 			case *slackevents.AssistantThreadStartedEvent:
 				// User opened a Slack Assistant Chat thread for this app.
@@ -399,7 +437,7 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 				sessionKey := p.buildSessionKey(ev.Channel, ev.User, threadTS)
 				ts := ev.TimeStamp
 
-				images, audio, docFiles := p.processSlackFileShares(ev.Files)
+				images, audio, docFiles := p.processSlackFileShares(messageEventFiles(ev))
 
 				if ev.Text == "" && len(images) == 0 && audio == nil && len(docFiles) == 0 {
 					return
@@ -426,7 +464,7 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 					MessageID:    ts,
 					ReplyCtx:     rc,
 				}
-				p.handler(p, msg)
+				p.handler(p.selfPlatform(), msg)
 			}
 		}
 
@@ -436,9 +474,7 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 			slog.Debug("slack: slash command type assertion failed")
 			return
 		}
-		if evt.Request != nil {
-			p.socket.Ack(*evt.Request)
-		}
+		p.ackSlashCommand(evt.Request)
 
 		if !core.AllowList(p.allowFrom, cmd.UserID) {
 			slog.Debug("slack: slash command from unauthorized user", "user", cmd.UserID)
@@ -463,7 +499,7 @@ func (p *Platform) handleEvent(evt socketmode.Event) {
 		}
 		msg := p.messageFromSlashCommand(cmd, content, sessionKey, lang, mentions, userName, userEmail)
 		slog.Debug("slack: slash command", "command", cmd.Command, "text", cmd.Text, "user", cmd.UserID)
-		p.handler(p, msg)
+		p.handler(p.selfPlatform(), msg)
 
 	case socketmode.EventTypeInteractive:
 		p.handleInteractive(evt)
@@ -499,6 +535,24 @@ func parseSlackInnerEventFiles(raw *json.RawMessage) []slackevents.File {
 		return nil
 	}
 	return wrapper.Files
+}
+
+func messageEventFiles(ev *slackevents.MessageEvent) []slackevents.File {
+	if ev == nil || ev.Message == nil || len(ev.Message.Files) == 0 {
+		return nil
+	}
+	out := make([]slackevents.File, 0, len(ev.Message.Files))
+	for _, f := range ev.Message.Files {
+		out = append(out, slackevents.File{
+			ID:                 f.ID,
+			Name:               f.Name,
+			Title:              f.Title,
+			Mimetype:           f.Mimetype,
+			URLPrivate:         f.URLPrivate,
+			URLPrivateDownload: f.URLPrivateDownload,
+		})
+	}
+	return out
 }
 
 // processSlackFileShares downloads Slack file shares and maps them to core
@@ -709,9 +763,35 @@ func (p *Platform) Reply(ctx context.Context, rctx any, content string) error {
 	if !ok {
 		return fmt.Errorf("slack: invalid reply context type %T", rctx)
 	}
+	return p.postMessage(ctx, rc, content, true)
+}
+
+// Send sends a new message (or threaded reply if rctx has timestamp).
+// Patched 2026-05-03: use thread_ts when present so replies in Slack Assistant
+// Chat tab land in the right thread (not the History tab feed).
+func (p *Platform) Send(ctx context.Context, rctx any, content string) error {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("slack: invalid reply context type %T", rctx)
+	}
+	return p.postMessage(ctx, rc, content, false)
+}
+
+func (p *Platform) postMessage(ctx context.Context, rc replyContext, content string, preferSlashResponse bool) error {
+	text := core.MarkdownToSlackMrkdwn(content)
+	if preferSlashResponse && rc.slashResponseURL != "" {
+		_, _, err := p.client.PostMessageContext(ctx, "",
+			slack.MsgOptionResponseURL(rc.slashResponseURL, slack.ResponseTypeInChannel),
+			slack.MsgOptionText(text, false),
+		)
+		if err != nil {
+			return fmt.Errorf("slack: slash command response: %w", err)
+		}
+		return nil
+	}
 
 	opts := []slack.MsgOption{
-		slack.MsgOptionText(core.MarkdownToSlackMrkdwn(content), false),
+		slack.MsgOptionText(text, false),
 	}
 	if rc.timestamp != "" {
 		opts = append(opts, slack.MsgOptionPostMessageParameters(slack.PostMessageParameters{ThreadTimestamp: rc.timestamp}))
@@ -724,26 +804,23 @@ func (p *Platform) Reply(ctx context.Context, rctx any, content string) error {
 	return nil
 }
 
-// Send sends a new message (or threaded reply if rctx has timestamp).
-// Patched 2026-05-03: use thread_ts when present so replies in Slack Assistant
-// Chat tab land in the right thread (not the History tab feed).
-func (p *Platform) Send(ctx context.Context, rctx any, content string) error {
-	rc, ok := rctx.(replyContext)
-	if !ok {
-		return fmt.Errorf("slack: invalid reply context type %T", rctx)
+func slashCommandAckPayload() map[string]string {
+	// Socket Mode slash commands require a valid response body in Ack; an empty
+	// ack makes Slack show "app did not respond". Use an invisible ephemeral
+	// confirmation — the real output is delivered via Reply/response_url.
+	return map[string]string{
+		"response_type": slack.ResponseTypeEphemeral,
+		"text":          "\u200b",
 	}
+}
 
-	opts := []slack.MsgOption{
-		slack.MsgOptionText(core.MarkdownToSlackMrkdwn(content), false),
+func (p *Platform) ackSlashCommand(req *socketmode.Request) {
+	if req == nil || p.socket == nil {
+		return
 	}
-	if rc.timestamp != "" {
-		opts = append(opts, slack.MsgOptionPostMessageParameters(slack.PostMessageParameters{ThreadTimestamp: rc.timestamp}))
+	if err := p.socket.Ack(*req, slashCommandAckPayload()); err != nil {
+		slog.Warn("slack: slash command ack failed", "error", err)
 	}
-	_, _, err := p.client.PostMessageContext(ctx, rc.channel, opts...)
-	if err != nil {
-		return fmt.Errorf("slack: send: %w", err)
-	}
-	return nil
 }
 
 // SendImage uploads and sends an image to the channel.
@@ -759,7 +836,7 @@ func (p *Platform) SendImage(ctx context.Context, rctx any, img core.ImageAttach
 		name = "image.png"
 	}
 
-	_, err := p.client.UploadFileV2Context(ctx, slack.UploadFileV2Parameters{
+	_, err := p.client.UploadFileContext(ctx, slack.UploadFileParameters{
 		Reader:          bytes.NewReader(img.Data),
 		FileSize:        len(img.Data),
 		Filename:        name,
@@ -806,7 +883,7 @@ func (p *Platform) SendFile(ctx context.Context, rctx any, file core.FileAttachm
 		name = "attachment"
 	}
 
-	_, err := p.client.UploadFileV2Context(ctx, slack.UploadFileV2Parameters{
+	_, err := p.client.UploadFileContext(ctx, slack.UploadFileParameters{
 		Reader:          bytes.NewReader(file.Data),
 		FileSize:        len(file.Data),
 		Filename:        name,
@@ -1012,10 +1089,11 @@ func (p *Platform) messageFromSlashCommand(
 		Content:      content,
 		ExtraContent: formatMentionExtraContent(mentions),
 		ReplyCtx: replyContext{
-			channel:       cmd.ChannelID,
-			sessionKey:    sessionKey,
-			lang:          lang,
-			slackMentions: mentions,
+			channel:          cmd.ChannelID,
+			sessionKey:       sessionKey,
+			lang:             lang,
+			slackMentions:    mentions,
+			slashResponseURL: cmd.ResponseURL,
 		},
 	}
 }

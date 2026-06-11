@@ -20,12 +20,13 @@ func TestMessageFromSlashCommandIncludesHookFields(t *testing.T) {
 		},
 	}
 	cmd := slack.SlashCommand{
-		TriggerID: "trigger-123",
-		ChannelID: "D0AK8MAHW22",
-		UserID:    "U02LNUW8KV5",
-		UserName:  "Guiqing Zheng",
-		Command:   "/deploy",
-		Text:      "prod",
+		TriggerID:   "trigger-123",
+		ChannelID:   "D0AK8MAHW22",
+		UserID:      "U02LNUW8KV5",
+		UserName:    "Guiqing Zheng",
+		Command:     "/deploy",
+		Text:        "prod",
+		ResponseURL: "https://hooks.slack.com/commands/T1/123/abc",
 	}
 	msg := p.messageFromSlashCommand(
 		cmd,
@@ -47,6 +48,23 @@ func TestMessageFromSlashCommandIncludesHookFields(t *testing.T) {
 	}
 	if msg.UserID != "U02LNUW8KV5" || msg.UserEmail != "xxx@example.com" {
 		t.Fatalf("user identity = id:%q email:%q", msg.UserID, msg.UserEmail)
+	}
+	rc, ok := msg.ReplyCtx.(replyContext)
+	if !ok {
+		t.Fatalf("ReplyCtx type = %T", msg.ReplyCtx)
+	}
+	if rc.slashResponseURL != cmd.ResponseURL {
+		t.Fatalf("slashResponseURL = %q, want %q", rc.slashResponseURL, cmd.ResponseURL)
+	}
+}
+
+func TestSlashCommandAckPayload(t *testing.T) {
+	payload := slashCommandAckPayload()
+	if payload["response_type"] != slack.ResponseTypeEphemeral {
+		t.Fatalf("response_type = %q, want ephemeral", payload["response_type"])
+	}
+	if payload["text"] == "" {
+		t.Fatal("ack text should not be empty")
 	}
 }
 

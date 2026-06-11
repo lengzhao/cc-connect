@@ -1149,6 +1149,11 @@ app_secret = "your-feishu-app-secret"
 #                         # app_mention 与 message 重复投递的去重窗口（默认 60 秒）
 # state_dir = ""  # Optional override for Slack thread state directory (default <data_dir>/slack/<project>/)
 #                 # 可选，覆盖 Slack 线程状态目录（默认 <data_dir>/slack/<project>/）
+# progress_style = "legacy"  # Progress rendering: legacy | assistant_status | stream
+#                            # legacy = separate chat messages (default)
+#                            # assistant_status = Slack assistant.threads.setStatus shimmer
+#                            # stream = Thinking Steps via chat.startStream + task_update (also refreshes assistant status)
+#                            # 进度展示：legacy（默认多条消息）| assistant_status（状态条）| stream（结构化任务流）
 
 # A2A server (uncomment to enable / 取消注释以启用)
 # Exposes this project as an A2A JSON-RPC agent server.

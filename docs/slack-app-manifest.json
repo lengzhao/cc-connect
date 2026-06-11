@@ -215,6 +215,7 @@
         "channels:history",
         "channels:read",
         "chat:write",
+        "assistant:write",
         "commands",
         "groups:history",
         "groups:read",

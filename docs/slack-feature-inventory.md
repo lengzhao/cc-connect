@@ -70,8 +70,20 @@ The Slack platform was added in commit `eaec71f` with basic functionality:
 | `api_url` | No | Custom Slack Web API base URL. Host-only values are normalized to `/api/` |
 | `allow_from` | No | User allowlist |
 | `share_session_in_channel` | No | Share session across all users in channel |
+| `progress_style` | No | `legacy` (default), `assistant_status`, or `stream` |
 
-### 7. Block Kit Cards (UI Commands)
+### 7. Assistant Progress (P0 + P1)
+
+- `progress_style = assistant_status` — uses `assistant.threads.setStatus` to show a native “bot is thinking / running tool …” shimmer with optional rotating `loading_messages`
+- `progress_style = stream` — uses Slack Thinking Steps (`chat.startStream` + `task_update` chunks) for structured in-thread progress, and also refreshes assistant status while the stream is active
+- `progress_style = legacy` (default) — previous behavior: separate chat messages per thinking/tool event
+- Requires `chat:write`; `assistant:write` is recommended for assistant threads
+- Engine integration via core `card` progress style with `PreviewStarter` / `MessageUpdater` (same pattern as Discord)
+- Native progress requires thinking/tool display to stay enabled; it does not run under `/quiet` (which hides those events)
+- Stream progress uses stable per-entry task IDs and delta `task_update` appends; assistant status refreshes every 90s on long turns
+- If Thinking Steps streaming fails (start/update/finish), progress degrades to `assistant_status` for the rest of the turn instead of disabling progress entirely
+
+### 8. Block Kit Cards (UI Commands)
 
 - `CardSender` — `/help`, `/list`, `/model`, `/mode`, and other card-based commands render as Slack Block Kit messages instead of plain text
 - `CardNavigable` — button and select interactions update the original message in place via `chat.update`

@@ -200,7 +200,7 @@ func (p *Platform) handlePermAction(
 	}
 	if p.handler != nil {
 		userName, userEmail := p.resolveUserNameAndEmail(callback.User.ID)
-		go p.handler(p, &core.Message{
+		go p.handler(p.selfPlatform(), &core.Message{
 			SessionKey: sessionKey,
 			Platform:   "slack",
 			UserID:     callback.User.ID,
@@ -241,7 +241,7 @@ func (p *Platform) handleAskQAction(
 	}
 	if p.handler != nil {
 		userName, userEmail := p.resolveUserNameAndEmail(callback.User.ID)
-		go p.handler(p, &core.Message{
+		go p.handler(p.selfPlatform(), &core.Message{
 			SessionKey: sessionKey,
 			Platform:   "slack",
 			UserID:     callback.User.ID,
@@ -290,7 +290,7 @@ func (p *Platform) handleCmdAction(
 	}
 	slog.Info("slack: card action dispatched as command", "cmd", cmdText, "user", callback.User.ID)
 	userName, userEmail := p.resolveUserNameAndEmail(callback.User.ID)
-	go p.handler(p, &core.Message{
+	go p.handler(p.selfPlatform(), &core.Message{
 		SessionKey: sessionKey,
 		Platform:   "slack",
 		UserID:     callback.User.ID,

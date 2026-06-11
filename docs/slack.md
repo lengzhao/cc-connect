@@ -76,6 +76,7 @@ Under "Scopes" → "Bot Token Scopes", add:
 | `groups:history` | Read private channel messages (optional) |
 | `users:read` | Get user info |
 | `users:read.email` | Get user email (optional; only needed when `include_user_email = true`) |
+| `assistant:write` | Native assistant status + Thinking Steps streaming (when `progress_style` is `assistant_status` or `stream`) |
 
 ---
 
