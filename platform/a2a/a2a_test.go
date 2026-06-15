@@ -386,6 +386,61 @@ func TestSDKAgentCardEndpointUsesFirstForwardedHeaderValue(t *testing.T) {
 	}
 }
 
+func TestProcessingEndIgnoresAlreadyFinishedTask(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{})
+	waiter, ok := p.pending.create("task-1")
+	if !ok {
+		t.Fatal("create pending task failed")
+	}
+	if !p.finishTask("task-1", pendingResult{state: a2a.TaskStateCompleted}) {
+		t.Fatal("finishTask returned false")
+	}
+	if err := p.OnProcessingEnd(context.Background(), replyContext{taskID: "task-1"}, core.ProcessingEndEvent{Kind: core.ProcessingEndCommand}); err != nil {
+		t.Fatalf("OnProcessingEnd() error = %v", err)
+	}
+	select {
+	case <-waiter.done:
+	default:
+		t.Fatal("done channel was not closed")
+	}
+}
+
+func TestJSONRPCSlashCommandAutoCompletes(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "2s"})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		if err := platform.Reply(context.Background(), msg.ReplyCtx, "sessions: 3 active"); err != nil {
+			t.Errorf("Reply() error = %v", err)
+		}
+		notifier, ok := platform.(core.ProcessingEndNotifier)
+		if !ok {
+			t.Fatal("platform does not implement ProcessingEndNotifier")
+		}
+		if err := notifier.OnProcessingEnd(context.Background(), msg.ReplyCtx, core.ProcessingEndEvent{Kind: core.ProcessingEndCommand}); err != nil {
+			t.Errorf("OnProcessingEnd() error = %v", err)
+		}
+	})
+	client := newA2AClient(t, server.URL+"/a2a/", nil)
+
+	result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("/list")),
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	task, ok := result.(*a2a.Task)
+	if !ok {
+		t.Fatalf("SendMessage() result = %T, want *a2a.Task", result)
+	}
+	if task.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("task state = %s, want completed", task.Status.State)
+	}
+	if len(task.Artifacts) != 1 || task.Artifacts[0].Parts[0].Text() != "sessions: 3 active" {
+		t.Fatalf("artifacts = %#v", task.Artifacts)
+	}
+}
+
 func TestJSONRPCSendMessageStreamsMultipleArtifacts(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "2s"})
 	server := httptest.NewServer(p.routes())

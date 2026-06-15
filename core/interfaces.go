@@ -15,6 +15,25 @@ type Platform interface {
 	Stop() error
 }
 
+// ProcessingEndKind classifies why a message-processing path ended.
+type ProcessingEndKind string
+
+const (
+	ProcessingEndCommand ProcessingEndKind = "command"
+)
+
+// ProcessingEndEvent is emitted to platforms that need an explicit completion
+// signal after core finishes processing a message path.
+type ProcessingEndEvent struct {
+	Kind ProcessingEndKind
+}
+
+// ProcessingEndNotifier is an optional platform capability for transports that
+// need to close a request/task after core finishes processing.
+type ProcessingEndNotifier interface {
+	OnProcessingEnd(ctx context.Context, replyCtx any, event ProcessingEndEvent) error
+}
+
 // ErrNotSupported indicates a platform doesn't support a particular operation.
 var ErrNotSupported = errors.New("operation not supported by this platform")
 

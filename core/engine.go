@@ -5129,6 +5129,7 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 			"user_id", msg.UserID, "platform", msg.Platform,
 			"project", e.name, "command", cmdID, "reason", "disabled")
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCommandDisabled), "/"+cmdID))
+		e.notifyProcessingEnd(p, msg.ReplyCtx, ProcessingEndEvent{Kind: ProcessingEndCommand})
 		return true
 	}
 
@@ -5137,6 +5138,7 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 			"user_id", msg.UserID, "platform", msg.Platform,
 			"project", e.name, "command", cmdID, "reason", "unauthorized")
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgAdminRequired), "/"+cmdID))
+		e.notifyProcessingEnd(p, msg.ReplyCtx, ProcessingEndEvent{Kind: ProcessingEndCommand})
 		return true
 	}
 
@@ -5144,6 +5146,9 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		slog.Info("audit: command_executed",
 			"user_id", msg.UserID, "platform", msg.Platform,
 			"project", e.name, "command", cmdID)
+		if builtinCommandCompletesSynchronously(cmdID) {
+			defer e.notifyProcessingEnd(p, msg.ReplyCtx, ProcessingEndEvent{Kind: ProcessingEndCommand})
+		}
 	}
 
 	switch cmdID {
