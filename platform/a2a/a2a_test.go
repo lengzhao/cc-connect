@@ -17,6 +17,21 @@ import (
 	"github.com/chenhg5/cc-connect/core"
 )
 
+func completeA2ATask(t *testing.T, platform core.Platform, replyCtx any) {
+	t.Helper()
+	scp, ok := platform.(core.StreamingCardPlatform)
+	if !ok {
+		t.Fatal("platform does not implement StreamingCardPlatform")
+	}
+	card, err := scp.CreateStreamingCard(context.Background(), replyCtx)
+	if err != nil {
+		t.Fatalf("CreateStreamingCard() error = %v", err)
+	}
+	if err := card.Finalize(context.Background(), ""); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+}
+
 func TestNewDefaults(t *testing.T) {
 	plat, err := New(map[string]any{})
 	if err != nil {
@@ -154,8 +169,8 @@ func TestSDKAgentCardEndpoint(t *testing.T) {
 	if !ok {
 		t.Fatalf("capabilities missing or wrong type: %T", card["capabilities"])
 	}
-	if caps["streaming"] != nil {
-		t.Fatalf("streaming should be omitted when false, got %v", caps["streaming"])
+	if caps["streaming"] != true {
+		t.Fatalf("streaming = %v, want true", caps["streaming"])
 	}
 	if caps["pushNotifications"] != nil {
 		t.Fatalf("pushNotifications should be omitted when false, got %v", caps["pushNotifications"])
@@ -371,6 +386,89 @@ func TestSDKAgentCardEndpointUsesFirstForwardedHeaderValue(t *testing.T) {
 	}
 }
 
+func TestJSONRPCSendMessageStreamsMultipleArtifacts(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "2s"})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		ctx := context.Background()
+		if err := platform.Reply(ctx, msg.ReplyCtx, "part-1"); err != nil {
+			t.Errorf("first Reply() error = %v", err)
+		}
+		if err := platform.Reply(ctx, msg.ReplyCtx, "part-2"); err != nil {
+			t.Errorf("second Reply() error = %v", err)
+		}
+		completeA2ATask(t, platform, msg.ReplyCtx)
+	})
+	client := newA2AClient(t, server.URL+"/a2a/", nil)
+
+	result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello")),
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	task, ok := result.(*a2a.Task)
+	if !ok {
+		t.Fatalf("SendMessage() result = %T, want *a2a.Task", result)
+	}
+	if task.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("task state = %s, want completed", task.Status.State)
+	}
+	if len(task.Artifacts) != 2 {
+		t.Fatalf("artifact count = %d, want 2", len(task.Artifacts))
+	}
+	if task.Artifacts[0].Parts[0].Text() != "part-1" || task.Artifacts[1].Parts[0].Text() != "part-2" {
+		t.Fatalf("artifacts = %#v, want part-1 and part-2", task.Artifacts)
+	}
+}
+
+func TestJSONRPCStreamingCardUpdatesReplaceOneArtifact(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "2s"})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		scp, ok := platform.(core.StreamingCardPlatform)
+		if !ok {
+			t.Fatal("platform does not implement StreamingCardPlatform")
+		}
+		card, err := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+		if err != nil {
+			t.Fatalf("CreateStreamingCard() error = %v", err)
+		}
+		if err := card.Update(context.Background(), "draft"); err != nil {
+			t.Errorf("first Update() error = %v", err)
+		}
+		if err := card.Update(context.Background(), "almost final"); err != nil {
+			t.Errorf("second Update() error = %v", err)
+		}
+		if err := card.Finalize(context.Background(), "final"); err != nil {
+			t.Errorf("Finalize() error = %v", err)
+		}
+	})
+	client := newA2AClient(t, server.URL+"/a2a/", nil)
+
+	result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello")),
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	task, ok := result.(*a2a.Task)
+	if !ok {
+		t.Fatalf("SendMessage() result = %T, want *a2a.Task", result)
+	}
+	if task.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("task state = %s, want completed", task.Status.State)
+	}
+	if len(task.Artifacts) != 1 {
+		t.Fatalf("artifact count = %d, want 1", len(task.Artifacts))
+	}
+	if got := task.Artifacts[0].Parts[0].Text(); got != "final" {
+		t.Fatalf("artifact text = %q, want final", got)
+	}
+}
+
 func TestJSONRPCSendMessageCompletesTaskWithArtifact(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "2s", "api_token": "secret"})
 	server := httptest.NewServer(p.routes())
@@ -385,9 +483,11 @@ func TestJSONRPCSendMessageCompletesTaskWithArtifact(t *testing.T) {
 		if msg.UserID != "alice" {
 			t.Errorf("UserID = %q, want alice", msg.UserID)
 		}
-		if err := platform.Reply(context.Background(), msg.ReplyCtx, "done"); err != nil {
+		ctx := context.Background()
+		if err := platform.Reply(ctx, msg.ReplyCtx, "done"); err != nil {
 			t.Errorf("Reply() error = %v", err)
 		}
+		completeA2ATask(t, platform, msg.ReplyCtx)
 	})
 
 	client := newA2AClient(t, server.URL+"/a2a/", headerInterceptor{
@@ -433,6 +533,7 @@ func TestJSONRPCSendMessageUsesConfiguredUserHeader(t *testing.T) {
 		if err := platform.Reply(context.Background(), msg.ReplyCtx, "done"); err != nil {
 			t.Errorf("Reply() error = %v", err)
 		}
+		completeA2ATask(t, platform, msg.ReplyCtx)
 	})
 
 	client := newA2AClient(t, server.URL+"/a2a/", headerInterceptor{
@@ -524,6 +625,7 @@ func TestJSONRPCGetTaskAfterSendMessage(t *testing.T) {
 		if err := platform.Reply(context.Background(), msg.ReplyCtx, "done"); err != nil {
 			t.Errorf("Reply() error = %v", err)
 		}
+		completeA2ATask(t, platform, msg.ReplyCtx)
 	})
 	client := newA2AClient(t, server.URL+"/a2a/", nil)
 
@@ -660,27 +762,51 @@ func TestPartsToCoreMapsDataRawAndURLParts(t *testing.T) {
 	}
 }
 
-func TestPendingResultCompletesOnce(t *testing.T) {
+func TestFinishTaskCompletesOnce(t *testing.T) {
 	p := &Platform{pending: newPendingStore(defaultMaxTasks, defaultTaskTTL)}
 	waiter, ok := p.pending.create("task-1")
 	if !ok {
 		t.Fatal("create returned false")
 	}
 
-	if !p.completePending("task-1", "done") {
-		t.Fatal("completePending returned false")
+	if !p.finishTask("task-1", pendingResult{state: a2a.TaskStateCompleted}) {
+		t.Fatal("finishTask returned false")
 	}
-	if p.completePending("task-1", "late") {
-		t.Fatal("second completePending returned true")
+	if p.finishTask("task-1", pendingResult{state: a2a.TaskStateCompleted}) {
+		t.Fatal("second finishTask returned true")
 	}
 
 	select {
 	case result := <-waiter.done:
-		if result.content != "done" {
-			t.Fatalf("content = %q, want done", result.content)
+		if result.state != a2a.TaskStateCompleted {
+			t.Fatalf("state = %s, want completed", result.state)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for pending result")
+	}
+}
+
+func TestPushArtifactDoesNotCompleteTask(t *testing.T) {
+	p := &Platform{pending: newPendingStore(defaultMaxTasks, defaultTaskTTL)}
+	waiter, ok := p.pending.create("task-1")
+	if !ok {
+		t.Fatal("create returned false")
+	}
+	if !p.pushArtifact("task-1", "hello") {
+		t.Fatal("pushArtifact returned false")
+	}
+	select {
+	case artifact := <-waiter.artifacts:
+		if artifact.content != "hello" || artifact.artifactID != "" {
+			t.Fatalf("artifact = %+v, want new text artifact hello", artifact)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for artifact")
+	}
+	select {
+	case <-waiter.done:
+		t.Fatal("task should not be completed yet")
+	default:
 	}
 }
 
@@ -723,7 +849,7 @@ func TestPendingStoreCleanupExpired(t *testing.T) {
 	}
 }
 
-func TestStreamingCardFinalizeCompletesPendingTask(t *testing.T) {
+func TestStreamingCardUpdateStreamsArtifactFinalizeCompletes(t *testing.T) {
 	p := &Platform{pending: newPendingStore(defaultMaxTasks, defaultTaskTTL)}
 	waiter, ok := p.pending.create("task-1")
 	if !ok {
@@ -738,6 +864,14 @@ func TestStreamingCardFinalizeCompletesPendingTask(t *testing.T) {
 		t.Fatalf("Update() error = %v", err)
 	}
 	select {
+	case artifact := <-waiter.artifacts:
+		if artifact.content != "working" || artifact.artifactID == "" {
+			t.Fatalf("artifact = %+v, want update artifact working", artifact)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for update artifact")
+	}
+	select {
 	case <-waiter.done:
 		t.Fatal("Update should not complete task")
 	default:
@@ -746,9 +880,17 @@ func TestStreamingCardFinalizeCompletesPendingTask(t *testing.T) {
 		t.Fatalf("Finalize() error = %v", err)
 	}
 	select {
+	case artifact := <-waiter.artifacts:
+		if artifact.content != "final" || artifact.artifactID == "" || !artifact.lastChunk {
+			t.Fatalf("artifact = %+v, want final last update artifact", artifact)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for finalize artifact")
+	}
+	select {
 	case result := <-waiter.done:
-		if result.content != "final" {
-			t.Fatalf("content = %q, want final", result.content)
+		if result.state != a2a.TaskStateCompleted {
+			t.Fatalf("state = %s, want completed", result.state)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for final result")

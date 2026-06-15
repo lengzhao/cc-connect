@@ -198,25 +198,26 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) Reply(ctx context.Context, replyTo any, content string) error {
-	if rc, ok := replyTo.(replyContext); ok {
-		if p.completePending(rc.taskID, content) {
-			return nil
-		}
-		return fmt.Errorf("a2a: task %q is not pending", rc.taskID)
+func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
+	taskID := taskIDFromReplyCtx(replyTo)
+	if taskID == "" {
+		return fmt.Errorf("a2a: unsupported reply context %T", replyTo)
 	}
-	return fmt.Errorf("a2a: unsupported reply context %T", replyTo)
+	if !p.pushArtifact(taskID, content) {
+		return fmt.Errorf("a2a: task %q is not pending", taskID)
+	}
+	return nil
 }
 
 func (p *Platform) Send(_ context.Context, replyCtx any, content string) error {
-	taskID, ok := replyCtx.(string)
-	if !ok || taskID == "" {
+	taskID := taskIDFromReplyCtx(replyCtx)
+	if taskID == "" {
 		return fmt.Errorf("a2a: unsupported send context %T", replyCtx)
 	}
-	if p.completePending(taskID, content) {
-		return nil
+	if !p.pushArtifact(taskID, content) {
+		return fmt.Errorf("a2a: task %q is not pending", taskID)
 	}
-	return fmt.Errorf("a2a: task %q is not pending", taskID)
+	return nil
 }
 
 func (p *Platform) CreateStreamingCard(_ context.Context, replyTo any) (core.StreamingCard, error) {
@@ -224,7 +225,7 @@ func (p *Platform) CreateStreamingCard(_ context.Context, replyTo any) (core.Str
 	if !ok || rc.taskID == "" {
 		return nil, errors.New("a2a: invalid streaming card reply context")
 	}
-	return &streamingCard{platform: p, taskID: rc.taskID}, nil
+	return &streamingCard{platform: p, taskID: rc.taskID, artifactID: sdka2a.NewArtifactID()}, nil
 }
 
 func (p *Platform) routes() http.Handler {
@@ -253,7 +254,7 @@ func (p *Platform) agentCard(endpointURL string) *sdka2a.AgentCard {
 			sdka2a.NewAgentInterface(endpointURL, sdka2a.TransportProtocolJSONRPC),
 		},
 		Capabilities: sdka2a.AgentCapabilities{
-			Streaming: false,
+			Streaming: true,
 		},
 		DefaultInputModes:  []string{"text/plain", "application/json", "application/octet-stream"},
 		DefaultOutputModes: []string{"text/plain"},
@@ -357,11 +358,57 @@ func (p *Platform) authInterceptor() a2asrv.CallInterceptor {
 	return authInterceptor{token: p.apiToken, userHeader: p.userHeader}
 }
 
-func (p *Platform) completePending(taskID, content string) bool {
+func (p *Platform) pushArtifact(taskID, content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return true
+	}
+	return p.pushArtifactEvent(taskID, pendingArtifact{content: content})
+}
+
+func (p *Platform) pushArtifactUpdate(taskID string, artifactID sdka2a.ArtifactID, content string, lastChunk bool) bool {
+	if strings.TrimSpace(content) == "" {
+		return true
+	}
+	return p.pushArtifactEvent(taskID, pendingArtifact{
+		content:    content,
+		artifactID: artifactID,
+		lastChunk:  lastChunk,
+	})
+}
+
+func (p *Platform) pushArtifactEvent(taskID string, event pendingArtifact) bool {
 	if p.pending == nil {
 		return false
 	}
-	return p.pending.complete(taskID, pendingResult{content: content})
+	task, ok := p.pending.get(taskID)
+	if !ok || task == nil {
+		return false
+	}
+	select {
+	case task.artifacts <- event:
+		return true
+	default:
+		slog.Warn("a2a: artifact buffer full", "task_id", taskID)
+		return false
+	}
+}
+
+func (p *Platform) finishTask(taskID string, result pendingResult) bool {
+	if p.pending == nil {
+		return false
+	}
+	return p.pending.finish(taskID, result)
+}
+
+func taskIDFromReplyCtx(replyCtx any) string {
+	switch v := replyCtx.(type) {
+	case replyContext:
+		return v.taskID
+	case string:
+		return v
+	default:
+		return ""
+	}
 }
 
 type sdkExecutor struct {
@@ -443,26 +490,49 @@ func (e *sdkExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorConte
 		}
 		go handler(e.platform, &msg)
 
-		select {
-		case result := <-waiter.done:
-			if result.state == sdka2a.TaskStateCanceled {
-				yield(sdka2a.NewStatusUpdateEvent(execCtx, sdka2a.TaskStateCanceled, nil), nil)
-				return
-			}
-			if result.err != nil {
-				yield(failedEvent(execCtx, result.err), nil)
-				return
-			}
-			if result.content != "" {
-				if !yield(sdka2a.NewArtifactEvent(execCtx, sdka2a.NewTextPart(result.content)), nil) {
+		deadline := time.NewTimer(e.platform.timeout)
+		defer deadline.Stop()
+		for {
+			select {
+			case artifact, ok := <-waiter.artifacts:
+				if !ok {
+					continue
+				}
+				if !yield(artifact.toEvent(execCtx), nil) {
 					return
 				}
+			case result := <-waiter.done:
+				for {
+					select {
+					case artifact, ok := <-waiter.artifacts:
+						if !ok {
+							goto emitTerminal
+						}
+						if !yield(artifact.toEvent(execCtx), nil) {
+							return
+						}
+					default:
+						goto emitTerminal
+					}
+				}
+			emitTerminal:
+				if result.state == sdka2a.TaskStateCanceled {
+					yield(sdka2a.NewStatusUpdateEvent(execCtx, sdka2a.TaskStateCanceled, nil), nil)
+					return
+				}
+				if result.err != nil {
+					yield(failedEvent(execCtx, result.err), nil)
+					return
+				}
+				yield(sdka2a.NewStatusUpdateEvent(execCtx, sdka2a.TaskStateCompleted, nil), nil)
+				return
+			case <-deadline.C:
+				yield(failedEvent(execCtx, fmt.Errorf("a2a: task timed out after %s", e.platform.timeout)), nil)
+				return
+			case <-ctx.Done():
+				yield(failedEvent(execCtx, ctx.Err()), nil)
+				return
 			}
-			yield(sdka2a.NewStatusUpdateEvent(execCtx, sdka2a.TaskStateCompleted, nil), nil)
-		case <-time.After(e.platform.timeout):
-			yield(failedEvent(execCtx, fmt.Errorf("a2a: task timed out after %s", e.platform.timeout)), nil)
-		case <-ctx.Done():
-			yield(failedEvent(execCtx, ctx.Err()), nil)
 		}
 	}
 }
@@ -606,16 +676,30 @@ func (p *Platform) HookContext(replyCtx any) core.HookContext {
 }
 
 type streamingCard struct {
-	platform *Platform
-	taskID   string
+	platform   *Platform
+	taskID     string
+	artifactID sdka2a.ArtifactID
+	lastSent   string
 }
 
-func (c *streamingCard) Update(_ context.Context, _ string) error {
+func (c *streamingCard) Update(_ context.Context, content string) error {
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	c.lastSent = content
+	if !c.platform.pushArtifactUpdate(c.taskID, c.artifactID, content, false) {
+		return fmt.Errorf("a2a: task %q is not pending", c.taskID)
+	}
 	return nil
 }
 
 func (c *streamingCard) Finalize(_ context.Context, content string) error {
-	c.platform.completePending(c.taskID, content)
+	if strings.TrimSpace(content) != "" {
+		_ = c.platform.pushArtifactUpdate(c.taskID, c.artifactID, content, true)
+	}
+	if !c.platform.finishTask(c.taskID, pendingResult{state: sdka2a.TaskStateCompleted}) {
+		return fmt.Errorf("a2a: task %q is not pending", c.taskID)
+	}
 	return nil
 }
 
@@ -632,15 +716,40 @@ type pendingStore struct {
 }
 
 type pendingTask struct {
-	once      sync.Once
+	artifacts chan pendingArtifact
 	done      chan pendingResult
+	doneOnce  sync.Once
 	createdAt time.Time
 }
 
+type pendingArtifact struct {
+	content    string
+	artifactID sdka2a.ArtifactID
+	lastChunk  bool
+}
+
+func (a pendingArtifact) toEvent(info sdka2a.TaskInfoProvider) *sdka2a.TaskArtifactUpdateEvent {
+	var event *sdka2a.TaskArtifactUpdateEvent
+	if a.artifactID == "" {
+		event = sdka2a.NewArtifactEvent(info, sdka2a.NewTextPart(a.content))
+	} else {
+		taskInfo := info.TaskInfo()
+		event = &sdka2a.TaskArtifactUpdateEvent{
+			ContextID: taskInfo.ContextID,
+			TaskID:    taskInfo.TaskID,
+			Artifact: &sdka2a.Artifact{
+				ID:    a.artifactID,
+				Parts: sdka2a.ContentParts{sdka2a.NewTextPart(a.content)},
+			},
+		}
+	}
+	event.LastChunk = a.lastChunk
+	return event
+}
+
 type pendingResult struct {
-	content string
-	err     error
-	state   sdka2a.TaskState
+	err   error
+	state sdka2a.TaskState
 }
 
 func newPendingStore(max int, ttl time.Duration) *pendingStore {
@@ -668,7 +777,11 @@ func (s *pendingStore) create(taskID string) (*pendingTask, bool) {
 	if len(s.items) >= s.max {
 		return nil, false
 	}
-	task := &pendingTask{done: make(chan pendingResult, 1), createdAt: s.now()}
+	task := &pendingTask{
+		artifacts: make(chan pendingArtifact, 64),
+		done:      make(chan pendingResult, 1),
+		createdAt: s.now(),
+	}
 	s.items[taskID] = task
 	return task, true
 }
@@ -681,7 +794,7 @@ func (s *pendingStore) get(taskID string) (*pendingTask, bool) {
 	return task, ok
 }
 
-func (s *pendingStore) complete(taskID string, result pendingResult) bool {
+func (s *pendingStore) finish(taskID string, result pendingResult) bool {
 	s.mu.Lock()
 	task := s.items[taskID]
 	s.mu.Unlock()
@@ -690,7 +803,7 @@ func (s *pendingStore) complete(taskID string, result pendingResult) bool {
 	}
 
 	completed := false
-	task.once.Do(func() {
+	task.doneOnce.Do(func() {
 		task.done <- result
 		close(task.done)
 		completed = true
@@ -699,7 +812,7 @@ func (s *pendingStore) complete(taskID string, result pendingResult) bool {
 }
 
 func (s *pendingStore) cancel(taskID string) {
-	s.complete(taskID, pendingResult{err: context.Canceled, state: sdka2a.TaskStateCanceled})
+	s.finish(taskID, pendingResult{err: context.Canceled, state: sdka2a.TaskStateCanceled})
 }
 
 func (s *pendingStore) delete(taskID string) {
@@ -711,7 +824,7 @@ func (s *pendingStore) delete(taskID string) {
 func (s *pendingStore) cleanupLocked(now time.Time) {
 	for id, task := range s.items {
 		if now.Sub(task.createdAt) > s.ttl {
-			task.once.Do(func() {
+			task.doneOnce.Do(func() {
 				task.done <- pendingResult{err: context.DeadlineExceeded, state: sdka2a.TaskStateFailed}
 				close(task.done)
 			})

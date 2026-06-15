@@ -122,11 +122,15 @@ sequenceDiagram
   SDK->>Platform: AgentExecutor.Execute
   Platform->>Engine: core.Message
   Engine->>Agent: prompt/files
-  Agent-->>Engine: final result
+  Agent-->>Engine: EventText / EventResult
+  Engine->>Platform: Reply / Send / StreamingCard.Update
+  Platform-->>SDK: TaskArtifactUpdateEvent (new message or update)
   Engine->>Platform: StreamingCard.Finalize
-  Platform-->>SDK: artifact + completed
+  Platform-->>SDK: TaskStateCompleted
   SDK-->>Client: A2A Task result
 ```
+
+`Reply` and `Send` emit independent A2A artifacts, matching chat platforms where every call sends a new message. `StreamingCard.Update` updates one stable artifact in place, matching Feishu/Slack progress-message updates. The SDK executor marks the task `completed` only when `StreamingCard.Finalize` is called, the client cancels, or the configured task timeout elapses.
 
 ## Message Mapping
 
@@ -137,4 +141,4 @@ sequenceDiagram
 
 The cc-connect session key is based on the A2A `contextId`: `a2a:<contextId>`. This lets multiple A2A tasks in the same context continue the same agent session. If `contextId` is absent, the platform falls back to the A2A task id.
 
-`StreamingCard.Finalize` is the preferred completion signal. `Reply` and `Send` are fallback paths for engine flows that do not use streaming cards.
+`StreamingCard.Finalize` marks the task completed. `Reply` and `Send` create new artifacts without local buffering; `StreamingCard.Update` replaces the current streaming artifact.
