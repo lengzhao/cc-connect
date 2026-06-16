@@ -498,8 +498,10 @@ func (e *sdkExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorConte
 				if !ok {
 					continue
 				}
-				if !yield(artifact.toEvent(execCtx), nil) {
-					return
+				if event := artifact.toEvent(execCtx); event != nil {
+					if !yield(event, nil) {
+						return
+					}
 				}
 			case result := <-waiter.done:
 				for {
@@ -508,8 +510,10 @@ func (e *sdkExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorConte
 						if !ok {
 							goto emitTerminal
 						}
-						if !yield(artifact.toEvent(execCtx), nil) {
-							return
+						if event := artifact.toEvent(execCtx); event != nil {
+							if !yield(event, nil) {
+								return
+							}
 						}
 					default:
 						goto emitTerminal
@@ -549,7 +553,7 @@ func (p *Platform) toCoreMessage(execCtx *a2asrv.ExecutorContext) (core.Message,
 		return core.Message{}, errors.New("missing A2A message")
 	}
 
-	content, files, err := partsToCore(execCtx.Message.Parts)
+	content, images, audio, files, err := partsToCore(execCtx.Message.Parts)
 	if err != nil {
 		return core.Message{}, err
 	}
@@ -572,6 +576,8 @@ func (p *Platform) toCoreMessage(execCtx *a2asrv.ExecutorContext) (core.Message,
 		ChannelKey: string(execCtx.ContextID),
 		UserID:     userID,
 		Content:    content,
+		Images:     images,
+		Audio:      audio,
 		Files:      files,
 		ReplyCtx: replyContext{
 			taskID:     string(execCtx.TaskID),
@@ -594,42 +600,6 @@ func sessionKeyFor(execCtx *a2asrv.ExecutorContext) string {
 		id = "unknown"
 	}
 	return "a2a:" + id
-}
-
-func partsToCore(parts sdka2a.ContentParts) (string, []core.FileAttachment, error) {
-	var text []string
-	files := make([]core.FileAttachment, 0)
-
-	for _, part := range parts {
-		if part == nil {
-			continue
-		}
-		if value := strings.TrimSpace(part.Text()); value != "" {
-			text = append(text, value)
-			continue
-		}
-		if data := part.Data(); data != nil {
-			b, err := json.Marshal(data)
-			if err != nil {
-				return "", nil, fmt.Errorf("a2a: marshal data part: %w", err)
-			}
-			text = append(text, string(b))
-			continue
-		}
-		if raw := part.Raw(); len(raw) > 0 {
-			files = append(files, core.FileAttachment{
-				FileName: part.Filename,
-				MimeType: part.MediaType,
-				Data:     raw,
-			})
-			continue
-		}
-		if fileURL := part.URL(); fileURL != "" {
-			text = append(text, fmt.Sprintf("File URL: %s", fileURL))
-		}
-	}
-
-	return strings.Join(text, "\n\n"), files, nil
 }
 
 func failedEvent(execCtx *a2asrv.ExecutorContext, err error) *sdka2a.TaskStatusUpdateEvent {
@@ -724,14 +694,23 @@ type pendingTask struct {
 
 type pendingArtifact struct {
 	content    string
+	parts      sdka2a.ContentParts
 	artifactID sdka2a.ArtifactID
 	lastChunk  bool
 }
 
 func (a pendingArtifact) toEvent(info sdka2a.TaskInfoProvider) *sdka2a.TaskArtifactUpdateEvent {
+	parts := a.parts
+	if len(parts) == 0 && strings.TrimSpace(a.content) != "" {
+		parts = sdka2a.ContentParts{sdka2a.NewTextPart(a.content)}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+
 	var event *sdka2a.TaskArtifactUpdateEvent
 	if a.artifactID == "" {
-		event = sdka2a.NewArtifactEvent(info, sdka2a.NewTextPart(a.content))
+		event = sdka2a.NewArtifactEvent(info, parts...)
 	} else {
 		taskInfo := info.TaskInfo()
 		event = &sdka2a.TaskArtifactUpdateEvent{
@@ -739,7 +718,7 @@ func (a pendingArtifact) toEvent(info sdka2a.TaskInfoProvider) *sdka2a.TaskArtif
 			TaskID:    taskInfo.TaskID,
 			Artifact: &sdka2a.Artifact{
 				ID:    a.artifactID,
-				Parts: sdka2a.ContentParts{sdka2a.NewTextPart(a.content)},
+				Parts: parts,
 			},
 		}
 	}

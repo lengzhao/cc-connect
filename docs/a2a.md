@@ -136,8 +136,10 @@ sequenceDiagram
 
 - Text parts are appended to `core.Message.Content`.
 - Data parts are marshaled to JSON and appended to `core.Message.Content`.
-- Raw parts become `core.FileAttachment`.
-- URL parts are appended as `File URL: ...` text.
+- Raw parts are classified by `mediaType` into `core.Message.Images`, `core.Message.Audio`, or `core.Message.Files`, matching Slack/Feishu behavior.
+- URL parts are downloaded when possible and classified the same way; failed downloads fall back to `File URL: ...` text.
+
+Outbound file delivery uses the optional `ImageSender` / `FileSender` capabilities. Each `SendImage` or `SendFile` call emits a separate A2A artifact with a raw part (`filename`, `mediaType`, bytes), while text still flows through `Reply`, `Send`, and `StreamingCard`.
 
 The cc-connect session key is based on the A2A `contextId`: `a2a:<contextId>`. This lets multiple A2A tasks in the same context continue the same agent session. If `contextId` is absent, the platform falls back to the A2A task id.
 

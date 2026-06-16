@@ -799,7 +799,7 @@ func TestJSONRPCRejectsMissingBearer(t *testing.T) {
 }
 
 func TestPartsToCoreMapsDataRawAndURLParts(t *testing.T) {
-	content, files, err := partsToCore(a2a.ContentParts{
+	content, images, audio, files, err := partsToCore(a2a.ContentParts{
 		a2a.NewTextPart("hello"),
 		a2a.NewDataPart(map[string]any{"ok": true}),
 		a2a.NewRawPart([]byte("file-bytes")),
@@ -812,8 +812,173 @@ func TestPartsToCoreMapsDataRawAndURLParts(t *testing.T) {
 	if content != wantContent {
 		t.Fatalf("content = %q, want %q", content, wantContent)
 	}
+	if len(images) != 0 || audio != nil {
+		t.Fatalf("images = %#v audio = %#v, want none", images, audio)
+	}
 	if len(files) != 1 || string(files[0].Data) != "file-bytes" {
 		t.Fatalf("files = %#v, want one raw file", files)
+	}
+}
+
+func TestPartsToCoreClassifiesImageAudioAndFile(t *testing.T) {
+	imagePart := a2a.NewRawPart([]byte{0x89, 'P', 'N', 'G', 1, 2, 3})
+	imagePart.MediaType = "image/png"
+	imagePart.Filename = "photo.png"
+
+	audioPart := a2a.NewRawPart([]byte("audio-data"))
+	audioPart.MediaType = "audio/ogg"
+	audioPart.Filename = "voice.ogg"
+
+	filePart := a2a.NewRawPart([]byte("pdf-data"))
+	filePart.MediaType = "application/pdf"
+	filePart.Filename = "report.pdf"
+
+	content, images, audio, files, err := partsToCore(a2a.ContentParts{imagePart, audioPart, filePart})
+	if err != nil {
+		t.Fatalf("partsToCore() error = %v", err)
+	}
+	if content != "" {
+		t.Fatalf("content = %q, want empty", content)
+	}
+	if len(images) != 1 || images[0].FileName != "photo.png" || string(images[0].Data) != string(imagePart.Raw()) {
+		t.Fatalf("images = %#v", images)
+	}
+	if audio == nil || audio.Format != "ogg" || string(audio.Data) != "audio-data" {
+		t.Fatalf("audio = %#v", audio)
+	}
+	if len(files) != 1 || files[0].FileName != "report.pdf" || string(files[0].Data) != "pdf-data" {
+		t.Fatalf("files = %#v", files)
+	}
+}
+
+func TestPartsToCoreDownloadsURLPart(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("pdf-bytes"))
+	}))
+	defer server.Close()
+
+	content, images, audio, files, err := partsToCore(a2a.ContentParts{
+		a2a.NewFileURLPart(a2a.URL(server.URL+"/report.pdf"), ""),
+	})
+	if err != nil {
+		t.Fatalf("partsToCore() error = %v", err)
+	}
+	if content != "" || len(images) != 0 || audio != nil {
+		t.Fatalf("content/images/audio = %q %#v %#v, want empty", content, images, audio)
+	}
+	if len(files) != 1 || files[0].MimeType != "application/pdf" || string(files[0].Data) != "pdf-bytes" {
+		t.Fatalf("files = %#v", files)
+	}
+}
+
+func TestSendFileEmitsRawArtifact(t *testing.T) {
+	p := &Platform{pending: newPendingStore(defaultMaxTasks, defaultTaskTTL)}
+	waiter, ok := p.pending.create("task-1")
+	if !ok {
+		t.Fatal("create returned false")
+	}
+	if err := p.SendFile(context.Background(), replyContext{taskID: "task-1"}, core.FileAttachment{
+		FileName: "report.pdf",
+		MimeType: "application/pdf",
+		Data:     []byte("pdf-data"),
+	}); err != nil {
+		t.Fatalf("SendFile() error = %v", err)
+	}
+	select {
+	case artifact := <-waiter.artifacts:
+		if len(artifact.parts) != 1 {
+			t.Fatalf("parts = %#v, want one raw part", artifact.parts)
+		}
+		if got := string(artifact.parts[0].Raw()); got != "pdf-data" {
+			t.Fatalf("raw = %q, want pdf-data", got)
+		}
+		if artifact.parts[0].Filename != "report.pdf" || artifact.parts[0].MediaType != "application/pdf" {
+			t.Fatalf("part = %#v", artifact.parts[0])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for artifact")
+	}
+	select {
+	case <-waiter.done:
+		t.Fatal("task should not be completed yet")
+	default:
+	}
+}
+
+func TestSendImageEmitsRawArtifact(t *testing.T) {
+	p := &Platform{pending: newPendingStore(defaultMaxTasks, defaultTaskTTL)}
+	waiter, ok := p.pending.create("task-1")
+	if !ok {
+		t.Fatal("create returned false")
+	}
+	if err := p.SendImage(context.Background(), replyContext{taskID: "task-1"}, core.ImageAttachment{
+		FileName: "photo.png",
+		MimeType: "image/png",
+		Data:     []byte{0x89, 'P', 'N', 'G'},
+	}); err != nil {
+		t.Fatalf("SendImage() error = %v", err)
+	}
+	select {
+	case artifact := <-waiter.artifacts:
+		if len(artifact.parts) != 1 || artifact.parts[0].MediaType != "image/png" {
+			t.Fatalf("parts = %#v", artifact.parts)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for artifact")
+	}
+}
+
+func TestJSONRPCOutboundFileRoundtrip(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"path": "/a2a/", "timeout": "2s"})
+	server := httptest.NewServer(p.routes())
+	defer server.Close()
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		fileSender, ok := platform.(core.FileSender)
+		if !ok {
+			t.Fatal("platform does not implement FileSender")
+		}
+		if err := fileSender.SendFile(context.Background(), msg.ReplyCtx, core.FileAttachment{
+			FileName: "report.pdf",
+			MimeType: "application/pdf",
+			Data:     []byte("pdf-data"),
+		}); err != nil {
+			t.Errorf("SendFile() error = %v", err)
+		}
+		streaming, ok := platform.(core.StreamingCardPlatform)
+		if !ok {
+			t.Fatal("platform does not implement StreamingCardPlatform")
+		}
+		if card, err := streaming.CreateStreamingCard(context.Background(), msg.ReplyCtx); err != nil {
+			t.Errorf("CreateStreamingCard() error = %v", err)
+		} else if err := card.Finalize(context.Background(), ""); err != nil {
+			t.Errorf("Finalize() error = %v", err)
+		}
+	})
+	client := newA2AClient(t, server.URL+"/a2a/", nil)
+
+	result, err := client.SendMessage(context.Background(), &a2a.SendMessageRequest{
+		Message: a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("send file")),
+	})
+	if err != nil {
+		t.Fatalf("SendMessage() error = %v", err)
+	}
+	task, ok := result.(*a2a.Task)
+	if !ok {
+		t.Fatalf("SendMessage() result = %T, want *a2a.Task", result)
+	}
+	if task.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("task state = %s, want completed", task.Status.State)
+	}
+	if len(task.Artifacts) != 1 || len(task.Artifacts[0].Parts) != 1 {
+		t.Fatalf("artifacts = %#v", task.Artifacts)
+	}
+	part := task.Artifacts[0].Parts[0]
+	if got := string(part.Raw()); got != "pdf-data" {
+		t.Fatalf("raw = %q, want pdf-data", got)
+	}
+	if part.Filename != "report.pdf" || part.MediaType != "application/pdf" {
+		t.Fatalf("part = %#v", part)
 	}
 }
 
