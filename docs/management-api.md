@@ -859,6 +859,9 @@ Lists all cron jobs, optionally filtered by project.
         "id": "cron_abc123",
         "project": "my-backend",
         "session_key": "telegram:123:456",
+        "user_id": "456",
+        "user_name": "Alice",
+        "user_email": "alice@example.com",
         "cron_expr": "0 6 * * *",
         "prompt": "Summarize GitHub trending",
         "exec": "",
@@ -912,6 +915,9 @@ Adds a cron job. Either `prompt` or `exec` must be provided, not both.
 |--------------|---------|----------|------------------------------------------------|
 | `project`    | string  | no*      | Project name (*required if multiple projects) |
 | `session_key`| string  | yes      | Target session for prompt jobs                 |
+| `user_id`    | string  | no       | Creator user ID (auto-filled from session_key when omitted) |
+| `user_name`  | string  | no       | Creator display name                         |
+| `user_email` | string  | no       | Creator email                                |
 | `cron_expr`  | string  | yes      | Cron expression (5 or 6 fields)                |
 | `prompt`     | string  | no*      | Prompt to send (*required if no `exec`)        |
 | `exec`       | string  | no*      | Shell command (*required if no `prompt`)       |

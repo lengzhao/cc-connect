@@ -831,6 +831,9 @@ GET /api/v1/status?token=mgmt-secret
         "id": "cron_abc123",
         "project": "my-backend",
         "session_key": "telegram:123:456",
+        "user_id": "456",
+        "user_name": "Alice",
+        "user_email": "alice@example.com",
         "cron_expr": "0 6 * * *",
         "prompt": "Summarize GitHub trending",
         "exec": "",
@@ -884,6 +887,9 @@ GET /api/v1/status?token=mgmt-secret
 |---------------|---------|------|---------------------------------------------|
 | `project`     | string  | 否*  | 项目名称（*多项目时为必填）                 |
 | `session_key` | string  | 是   | prompt 任务的目标会话                       |
+| `user_id`     | string  | 否   | 创建者用户 ID（省略时从 session_key 推断）  |
+| `user_name`   | string  | 否   | 创建者显示名                                |
+| `user_email`  | string  | 否   | 创建者邮箱                                  |
 | `cron_expr`   | string  | 是   | Cron 表达式（5 或 6 个字段）                |
 | `prompt`      | string  | 否*  | 要发送的 prompt（*未提供 `exec` 时为必填）  |
 | `exec`        | string  | 否*  | Shell 命令（*未提供 `prompt` 时为必填）     |

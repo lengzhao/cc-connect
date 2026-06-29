@@ -583,7 +583,7 @@ func parseCronEditValue(field, valueStr string) (any, error) {
 		return v, nil
 	default:
 		// String fields: project, session_key, cron_expr, prompt, exec,
-		// work_dir, description, session_mode, mode
+		// work_dir, description, session_mode, mode, user_id, user_name, user_email
 		return valueStr, nil
 	}
 }
@@ -667,6 +667,9 @@ Editable Fields (string):
   work_dir      Working directory for exec
   description   Short description
   session_mode  reuse or new_per_run
+  user_id       Creator user ID
+  user_name     Creator display name
+  user_email    Creator email
 
 Editable Fields (bool: true/false):
   enabled       Enable or disable the task

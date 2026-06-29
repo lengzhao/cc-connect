@@ -1379,9 +1379,13 @@ func (e *Engine) ActiveSessionKeys() []string {
 // It finds the platform that owns the session key, reconstructs a reply context,
 // and processes the message as if the user sent it.
 func (e *Engine) ExecuteCronJob(job *CronJob) error {
+	userID, userName, userEmail := ResolveCronJobUser(job)
 	e.hooks.Emit(HookEvent{
 		Event:      HookEventCronTriggered,
 		SessionKey: job.SessionKey,
+		UserID:     userID,
+		UserName:   userName,
+		UserEmail:  userEmail,
 		Content:    job.Prompt,
 		Extra:      map[string]any{"job_id": job.ID, "job_description": job.Description},
 	})
@@ -1494,8 +1498,9 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 	msg := &Message{
 		SessionKey:   sessionKey,
 		Platform:     platformName,
-		UserID:       "cron",
-		UserName:     "cron",
+		UserID:       userID,
+		UserName:     userName,
+		UserEmail:    userEmail,
 		Content:      content,
 		ReplyCtx:     replyCtx,
 		ModeOverride: job.Mode,
@@ -13703,6 +13708,7 @@ func (e *Engine) cmdCronAdd(p Platform, msg *Message, args []string) {
 		Enabled:    true,
 		CreatedAt:  time.Now(),
 	}
+	FillCronJobUserFromMessage(job, msg)
 
 	if err := e.cronScheduler.AddJob(job); err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
@@ -13736,6 +13742,7 @@ func (e *Engine) cmdCronAddExec(p Platform, msg *Message, args []string) {
 		Enabled:    true,
 		CreatedAt:  time.Now(),
 	}
+	FillCronJobUserFromMessage(job, msg)
 
 	if err := e.cronScheduler.AddJob(job); err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))

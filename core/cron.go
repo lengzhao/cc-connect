@@ -24,6 +24,9 @@ type CronJob struct {
 	ID          string    `json:"id"`
 	Project     string    `json:"project"`
 	SessionKey  string    `json:"session_key"`
+	UserID      string    `json:"user_id,omitempty"`
+	UserName    string    `json:"user_name,omitempty"`
+	UserEmail   string    `json:"user_email,omitempty"`
 	CronExpr    string    `json:"cron_expr"`
 	Prompt      string    `json:"prompt"`
 	Exec        string    `json:"exec,omitempty"`     // shell command; mutually exclusive with Prompt
@@ -322,6 +325,21 @@ func updateJobField(job *CronJob, field string, value any) error {
 	case "session_key":
 		if v, ok := value.(string); ok {
 			job.SessionKey = v
+			return nil
+		}
+	case "user_id":
+		if v, ok := value.(string); ok {
+			job.UserID = v
+			return nil
+		}
+	case "user_name":
+		if v, ok := value.(string); ok {
+			job.UserName = v
+			return nil
+		}
+	case "user_email":
+		if v, ok := value.(string); ok {
+			job.UserEmail = v
 			return nil
 		}
 	case "cron_expr":
@@ -973,4 +991,75 @@ func padZero(s string) string {
 		return "0" + s
 	}
 	return s
+}
+
+// FillCronJobUserFromMessage copies creator identity from an inbound message.
+func FillCronJobUserFromMessage(job *CronJob, msg *Message) {
+	if job == nil || msg == nil {
+		return
+	}
+	job.UserID = strings.TrimSpace(msg.UserID)
+	job.UserName = strings.TrimSpace(msg.UserName)
+	job.UserEmail = strings.TrimSpace(msg.UserEmail)
+	EnsureCronJobUser(job)
+}
+
+// EnsureCronJobUser fills missing user_id from session_key when possible.
+func EnsureCronJobUser(job *CronJob) {
+	if job == nil {
+		return
+	}
+	if strings.TrimSpace(job.UserID) == "" {
+		job.UserID = userIDFromSessionKey(job.SessionKey)
+	}
+}
+
+// ResolveCronJobUser returns the user identity to use when executing a cron job.
+// Stored fields take precedence; user_id falls back to session_key parsing, then "cron".
+func ResolveCronJobUser(job *CronJob) (userID, userName, userEmail string) {
+	if job == nil {
+		return "cron", "cron", ""
+	}
+	userID = strings.TrimSpace(job.UserID)
+	userName = strings.TrimSpace(job.UserName)
+	userEmail = strings.TrimSpace(job.UserEmail)
+	if userID == "" {
+		userID = userIDFromSessionKey(job.SessionKey)
+	}
+	if userID == "" {
+		userID = "cron"
+	}
+	if userName == "" {
+		if userID == "cron" {
+			userName = "cron"
+		} else {
+			userName = userID
+		}
+	}
+	return userID, userName, userEmail
+}
+
+func userIDFromSessionKey(sessionKey string) string {
+	key := strings.TrimSpace(sessionKey)
+	if key == "" {
+		return ""
+	}
+	// Drop optional workspace prefix: "/path/to/project:platform:..."
+	if strings.HasPrefix(key, "/") {
+		if idx := strings.Index(key, ":"); idx >= 0 {
+			key = key[idx+1:]
+		}
+	}
+	// Format: "platform:channelID:userID" or "platform:type:channelID:userID"
+	parts := strings.SplitN(key, ":", 5)
+	if len(parts) >= 3 && len(parts[1]) == 1 {
+		if len(parts) >= 4 {
+			return parts[3]
+		}
+		return ""
+	}
+	if len(parts) >= 3 {
+		return parts[2]
+	}
+	return ""
 }

@@ -13528,6 +13528,106 @@ func TestExecuteCronJob_ResolvesCronReplyTarget(t *testing.T) {
 	}
 }
 
+func TestExecuteCronJob_InjectStoredUserIdentity(t *testing.T) {
+	var cronHook HookEvent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		if err := json.Unmarshal(body, &cronHook); err != nil {
+			t.Errorf("unmarshal body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	store, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatalf("NewCronStore() error = %v", err)
+	}
+	scheduler := NewCronScheduler(store)
+
+	platform := &stubCronReplyTargetPlatform{
+		stubPlatformEngine: stubPlatformEngine{n: "discord"},
+	}
+	agentSession := newResultAgentSession("cron complete")
+	agent := &resultAgent{session: agentSession}
+
+	e := NewEngine("test", agent, []Platform{platform}, "", LangEnglish)
+	defer e.cancel()
+	e.cronScheduler = scheduler
+	e.injectSender = true
+	e.SetHooks(NewHookManager("test", []HookConfig{{
+		Event: string(HookEventCronTriggered),
+		Type:  "http",
+		URL:   srv.URL,
+		Async: boolPtr(false),
+	}}, "sh", "-c", ""))
+
+	job := &CronJob{
+		ID:          "job-user",
+		SessionKey:  "discord:channel-1:alice",
+		Prompt:      "summarize activity",
+		Description: "Daily summary",
+		UserID:      "alice",
+		UserName:    "Alice",
+		UserEmail:   "alice@example.com",
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatalf("store.Add() error = %v", err)
+	}
+
+	if err := e.ExecuteCronJob(job); err != nil {
+		t.Fatalf("ExecuteCronJob() error = %v", err)
+	}
+
+	if cronHook.UserID != "alice" || cronHook.UserName != "Alice" || cronHook.UserEmail != "alice@example.com" {
+		t.Fatalf("cron hook user = (%q, %q, %q)", cronHook.UserID, cronHook.UserName, cronHook.UserEmail)
+	}
+	if len(agentSession.sentPrompts) != 1 {
+		t.Fatalf("sentPrompts = %#v, want 1", agentSession.sentPrompts)
+	}
+	if !strings.Contains(agentSession.sentPrompts[0], "sender_id=alice") {
+		t.Fatalf("prompt = %q, want sender_id=alice", agentSession.sentPrompts[0])
+	}
+	if !strings.Contains(agentSession.sentPrompts[0], `sender_name="Alice"`) {
+		t.Fatalf("prompt = %q, want sender_name=Alice", agentSession.sentPrompts[0])
+	}
+}
+
+func TestCmdCronAdd_StoresCreatorUser(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := NewCronScheduler(store)
+
+	p := &stubPlatformEngine{n: "plain"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.cronScheduler = cs
+
+	e.handleMessage(p, &Message{
+		SessionKey: "plain:user1",
+		UserID:     "user1",
+		UserName:   "User One",
+		UserEmail:  "user1@example.com",
+		Content:    "/cron add 0 6 * * * daily check",
+		ReplyCtx:   "ctx",
+	})
+
+	jobs := store.ListBySessionKey("plain:user1")
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %d, want 1", len(jobs))
+	}
+	job := jobs[0]
+	if job.UserID != "user1" || job.UserName != "User One" || job.UserEmail != "user1@example.com" {
+		t.Fatalf("stored user = (%q, %q, %q)", job.UserID, job.UserName, job.UserEmail)
+	}
+}
+
 func TestExecuteCronJob_WorkspacePrefixedSessionKey(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewCronStore(dir)

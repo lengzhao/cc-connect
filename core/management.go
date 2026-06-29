@@ -1544,6 +1544,9 @@ func (m *ManagementServer) handleCron(w http.ResponseWriter, r *http.Request) {
 			ID:          GenerateCronID(),
 			Project:     project,
 			SessionKey:  req.SessionKey,
+			UserID:      req.UserID,
+			UserName:    req.UserName,
+			UserEmail:   req.UserEmail,
 			CronExpr:    req.CronExpr,
 			Prompt:      req.Prompt,
 			Exec:        req.Exec,
@@ -1556,6 +1559,7 @@ func (m *ManagementServer) handleCron(w http.ResponseWriter, r *http.Request) {
 			TimeoutMins: req.TimeoutMins,
 			CreatedAt:   time.Now(),
 		}
+		EnsureCronJobUser(job)
 		if err := m.cronScheduler.AddJob(job); err != nil {
 			mgmtError(w, http.StatusBadRequest, err.Error())
 			return

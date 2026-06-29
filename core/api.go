@@ -317,6 +317,9 @@ func (s *APIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 type CronAddRequest struct {
 	Project     string `json:"project"`
 	SessionKey  string `json:"session_key"`
+	UserID      string `json:"user_id,omitempty"`
+	UserName    string `json:"user_name,omitempty"`
+	UserEmail   string `json:"user_email,omitempty"`
 	CronExpr    string `json:"cron_expr"`
 	Prompt      string `json:"prompt"`
 	Exec        string `json:"exec"`
@@ -395,6 +398,9 @@ func (s *APIServer) handleCronAdd(w http.ResponseWriter, r *http.Request) {
 		ID:          GenerateCronID(),
 		Project:     project,
 		SessionKey:  sessionKey,
+		UserID:      req.UserID,
+		UserName:    req.UserName,
+		UserEmail:   req.UserEmail,
 		CronExpr:    req.CronExpr,
 		Prompt:      req.Prompt,
 		Exec:        req.Exec,
@@ -407,6 +413,7 @@ func (s *APIServer) handleCronAdd(w http.ResponseWriter, r *http.Request) {
 		TimeoutMins: req.TimeoutMins,
 	}
 	job.CreatedAt = time.Now()
+	EnsureCronJobUser(job)
 
 	if err := s.cron.AddJob(job); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

@@ -869,3 +869,72 @@ func TestCronScheduler_UpdateJob_EnabledNonBoolPreservesSchedule(t *testing.T) {
 		t.Fatalf("stored job state should be unchanged on validation error, got %+v", stored)
 	}
 }
+
+func TestResolveCronJobUser_StoredFields(t *testing.T) {
+	job := &CronJob{
+		SessionKey: "discord:channel-1:alice",
+		UserID:     "alice",
+		UserName:   "Alice",
+		UserEmail:  "alice@example.com",
+	}
+	userID, userName, userEmail := ResolveCronJobUser(job)
+	if userID != "alice" || userName != "Alice" || userEmail != "alice@example.com" {
+		t.Fatalf("ResolveCronJobUser() = (%q, %q, %q)", userID, userName, userEmail)
+	}
+}
+
+func TestResolveCronJobUser_FallbackFromSessionKey(t *testing.T) {
+	job := &CronJob{SessionKey: "telegram:123:456"}
+	userID, userName, _ := ResolveCronJobUser(job)
+	if userID != "456" {
+		t.Fatalf("userID = %q, want 456", userID)
+	}
+	if userName != "456" {
+		t.Fatalf("userName = %q, want 456", userName)
+	}
+}
+
+func TestResolveCronJobUser_LegacyFallbackCron(t *testing.T) {
+	job := &CronJob{SessionKey: "dingtalk:g:cid"}
+	userID, userName, userEmail := ResolveCronJobUser(job)
+	if userID != "cron" || userName != "cron" || userEmail != "" {
+		t.Fatalf("ResolveCronJobUser() = (%q, %q, %q), want cron/cron/empty", userID, userName, userEmail)
+	}
+}
+
+func TestCronStore_UserFieldsPersistence(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &CronJob{
+		ID: "u1", Project: "proj", SessionKey: "slack:C1:alice",
+		UserID: "alice", UserName: "Alice", UserEmail: "alice@example.com",
+		CronExpr: "0 6 * * *", Prompt: "ping", Enabled: true, CreatedAt: time.Now(),
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reloaded.Get("u1")
+	if got == nil {
+		t.Fatal("job not found after reload")
+	}
+	if got.UserID != "alice" || got.UserName != "Alice" || got.UserEmail != "alice@example.com" {
+		t.Fatalf("user fields = (%q, %q, %q)", got.UserID, got.UserName, got.UserEmail)
+	}
+}
+
+func TestFillCronJobUserFromMessage(t *testing.T) {
+	job := &CronJob{SessionKey: "slack:C1:bob"}
+	FillCronJobUserFromMessage(job, &Message{
+		UserID: "bob", UserName: "Bob", UserEmail: "bob@example.com",
+	})
+	if job.UserID != "bob" || job.UserName != "Bob" || job.UserEmail != "bob@example.com" {
+		t.Fatalf("job user = (%q, %q, %q)", job.UserID, job.UserName, job.UserEmail)
+	}
+}
