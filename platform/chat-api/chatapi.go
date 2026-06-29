@@ -1,0 +1,196 @@
+package chatapi
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/chenhg5/cc-connect/core"
+)
+
+const (
+	defaultListenAddr = ":8030"
+	defaultPath       = "/v1/"
+	defaultTimeout    = 30 * time.Minute
+)
+
+// Platform exposes a Dify-like HTTP + SSE API for custom apps and BFFs.
+type Platform struct {
+	listenAddr     string
+	path           string
+	apiToken       string
+	userHeader     string
+	corsOrigins    []string
+	requestTimeout time.Duration
+	busyPolicy     string
+
+	projectName      string
+	sessionStorePath string
+
+	server   *http.Server
+	handler  core.MessageHandler
+	sessions *core.SessionManager
+	pending  *pendingStore
+
+	mu        sync.Mutex
+	handlerMu sync.RWMutex
+	running   bool
+	cancel    context.CancelFunc
+}
+
+func New(opts map[string]any) (core.Platform, error) {
+	listenAddr := stringOption(opts, "listen_addr", stringOption(opts, "listen", defaultListenAddr))
+	path := normalizePath(stringOption(opts, "path", defaultPath))
+	if path == "" {
+		return nil, errors.New("chat-api: path must start and end with /")
+	}
+
+	timeout, err := durationOption(opts, "request_timeout", defaultTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("chat-api: request_timeout: %w", err)
+	}
+	if _, ok := opts["request_timeout"]; !ok {
+		timeout, err = durationOption(opts, "timeout", defaultTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("chat-api: timeout: %w", err)
+		}
+	}
+
+	maxRuns, err := intOption(opts, "max_runs", defaultMaxRuns)
+	if err != nil {
+		return nil, fmt.Errorf("chat-api: max_runs: %w", err)
+	}
+	runTTL, err := durationOption(opts, "run_ttl", defaultRunTTL)
+	if err != nil {
+		return nil, fmt.Errorf("chat-api: run_ttl: %w", err)
+	}
+
+	userHeader, err := userHeaderOption(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	busyPolicy := strings.ToLower(stringOption(opts, "busy_policy", busyPolicyQueue))
+	if busyPolicy != busyPolicyQueue && busyPolicy != busyPolicyReject {
+		return nil, errors.New("chat-api: busy_policy must be queue or reject")
+	}
+
+	p := &Platform{
+		listenAddr:   listenAddr,
+		path:         path,
+		apiToken:     strings.TrimSpace(stringOption(opts, "api_token", stringOption(opts, "token", ""))),
+		userHeader:   userHeader,
+		corsOrigins:  stringSliceOption(opts, "cors_origins"),
+		requestTimeout: timeout,
+		busyPolicy:   busyPolicy,
+		projectName:  stringOption(opts, "cc_project", ""),
+		pending:      newPendingStore(maxRuns, runTTL),
+	}
+	p.sessionStorePath = sessionStorePathFromOpts(opts)
+	return p, nil
+}
+
+func (p *Platform) Name() string {
+	return "chat-api"
+}
+
+func (p *Platform) Start(handler core.MessageHandler) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.running {
+		return nil
+	}
+
+	serveCtx, cancel := context.WithCancel(context.Background())
+	p.setHandler(handler)
+	p.cancel = cancel
+	p.server = &http.Server{
+		Addr:              p.listenAddr,
+		Handler:           p.routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	ln, err := net.Listen("tcp", p.listenAddr)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("chat-api: listen %s: %w", p.listenAddr, err)
+	}
+
+	p.running = true
+	go func() {
+		<-serveCtx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := p.server.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("chat-api: shutdown server", "error", err)
+		}
+	}()
+	go func() {
+		if err := p.server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("chat-api: serve", "error", err)
+		}
+	}()
+
+	slog.Info("chat-api: server started", "listen_addr", p.listenAddr, "path", p.path)
+	return nil
+}
+
+func (p *Platform) Stop() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.running {
+		return nil
+	}
+	if p.cancel != nil {
+		p.cancel()
+	}
+	p.running = false
+	if p.server == nil {
+		return nil
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("chat-api: stop server: %w", err)
+	}
+	return nil
+}
+
+func (p *Platform) setHandler(handler core.MessageHandler) {
+	p.handlerMu.Lock()
+	defer p.handlerMu.Unlock()
+	p.handler = handler
+}
+
+func (p *Platform) getHandler() core.MessageHandler {
+	p.handlerMu.RLock()
+	defer p.handlerMu.RUnlock()
+	return p.handler
+}
+
+func (p *Platform) routes() http.Handler {
+	mux := http.NewServeMux()
+	wrap := func(h http.HandlerFunc) http.HandlerFunc {
+		return p.corsHTTP(p.authHTTP(h))
+	}
+	mux.HandleFunc(p.path+"conversations", wrap(p.handleConversations))
+	mux.HandleFunc(p.path+"conversations/", wrap(p.handleConversationSub))
+	mux.HandleFunc(p.path+"chat-messages", wrap(p.handleChatMessages))
+	mux.HandleFunc(p.path+"runs/", wrap(p.handleRunRoutes))
+	return mux
+}
+
+func init() {
+	core.RegisterPlatform("chat-api", New)
+}
+
+var _ core.Platform = (*Platform)(nil)
+var _ core.StreamingCardPlatform = (*Platform)(nil)
+var _ core.HookContextProvider = (*Platform)(nil)
+var _ core.ProcessingEndNotifier = (*Platform)(nil)
