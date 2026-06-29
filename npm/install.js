@@ -7,7 +7,6 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 const http = require("http");
-const zlib = require("zlib");
 
 const PACKAGE = require("./package.json");
 const VERSION = `v${PACKAGE.version.replace(/^v/, "")}`;
