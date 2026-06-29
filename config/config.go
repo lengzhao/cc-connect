@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -119,6 +120,21 @@ type Config struct {
 	// setting so the reaper policy is consistent across projects; per-project
 	// configuration is intentionally not supported.
 	WorkspaceIdleTimeoutMins *int `toml:"workspace_idle_timeout_mins,omitempty"`
+	// Shell overrides the default shell used for /shell commands, cron exec,
+	// hooks, and webhook exec. On Unix the default is "sh"; on Windows it is
+	// "powershell.exe". Set to an absolute path (e.g. "/bin/zsh") to use a
+	// different shell. Supported: sh, bash, zsh, fish, cmd, powershell, pwsh.
+	Shell string `toml:"shell,omitempty"`
+	// ShellProfile is prepended to every shell command before execution. Useful
+	// for sourcing shell profiles so that user-defined functions and aliases are
+	// available. Example: "source ~/.zshrc"
+	ShellProfile string `toml:"shell_profile,omitempty"`
+	// MaxAttachmentSizeMB is the per-file size limit, in MiB, for attachments
+	// sent through `cc-connect send --file/--image/--audio/--video` and the
+	// /send API. 0 (the default) means use core.DefaultMaxAttachmentSize
+	// (50 MiB). Raise it to send larger files; the request body limit on the
+	// API side scales with this value to account for base64 expansion.
+	MaxAttachmentSizeMB int `toml:"max_attachment_size_mb,omitempty"`
 }
 
 // CronConfig controls cron job behavior.
@@ -183,6 +199,7 @@ type DisplayConfig struct {
 	ThinkingMaxLen       *int    `toml:"thinking_max_len"`       // max chars for thinking messages; 0 = no truncation; default 300
 	ToolMaxLen           *int    `toml:"tool_max_len"`           // max chars for tool use messages; 0 = no truncation; default 500
 	ToolMessages         *bool   `toml:"tool_messages"`          // whether tool progress messages are shown; default true
+	HistoryMaxLen        *int    `toml:"history_max_len"`        // max chars per /history entry; 0 = no truncation; default 1000
 	ShowContextIndicator *bool   `toml:"show_context_indicator"` // whether [ctx: ~N%] suffix is shown; default true
 	ReplyFooter          *bool   `toml:"reply_footer"`           // whether Codex-like footer is shown; default true
 }
@@ -270,12 +287,16 @@ type SpeechConfig struct {
 
 // TTSConfig configures text-to-speech output (mirrors SpeechConfig style).
 type TTSConfig struct {
-	Enabled    bool   `toml:"enabled"`
-	Provider   string `toml:"provider"`     // "qwen" | "openai" | "minimax" | "mimo" | "espeak" | "pico" | "edge"
-	Voice      string `toml:"voice"`        // default voice name (for edge: "zh-CN-XiaoxiaoNeural"; for pico: "zh-CN"; for espeak: "zh"; for mimo: "mimo_default" / "冰糖" / "Mia" …)
-	TTSMode    string `toml:"tts_mode"`     // "voice_only" (default) | "always"
-	MaxTextLen int    `toml:"max_text_len"` // max rune count before skipping TTS; 0 = no limit
-	OpenAI     struct {
+	Enabled      bool                      `toml:"enabled"`
+	Provider     string                    `toml:"provider"`      // "qwen" | "openai" | "minimax" | "mimo" | "espeak" | "pico" | "edge"
+	Voice        string                    `toml:"voice"`         // default voice name (for edge: "zh-CN-XiaoxiaoNeural"; for pico: "zh-CN"; for espeak: "zh"; for mimo: "mimo_default" / "冰糖" / "Mia" …)
+	VoiceID      string                    `toml:"voice_id"`      // alias for voice; useful for MiniMax voice IDs
+	Speed        float64                   `toml:"speed"`         // optional speaking speed multiplier; 0 = provider default
+	LanguageType string                    `toml:"language_type"` // optional provider-specific language hint
+	TTSMode      string                    `toml:"tts_mode"`      // "voice_only" (default) | "always"
+	MaxTextLen   int                       `toml:"max_text_len"`  // max rune count before skipping TTS; 0 = no limit
+	Agents       map[string]TTSAgentConfig `toml:"agents"`        // per-project/agent voice overrides keyed by [[projects]].name
+	OpenAI       struct {
 		APIKey  string `toml:"api_key"`
 		BaseURL string `toml:"base_url"`
 		Model   string `toml:"model"`
@@ -286,15 +307,131 @@ type TTSConfig struct {
 		Model   string `toml:"model"`
 	} `toml:"qwen"`
 	MiniMax struct {
-		APIKey  string `toml:"api_key"`
-		BaseURL string `toml:"base_url"`
-		Model   string `toml:"model"`
+		APIKey     string `toml:"api_key"`
+		BaseURL    string `toml:"base_url"`
+		Model      string `toml:"model"`
+		ConfigFile string `toml:"config_file"` // optional JSON auth file; default data_dir/config/minimax.json when api_key is empty
 	} `toml:"minimax"`
 	Mimo struct {
 		APIKey  string `toml:"api_key"`
 		BaseURL string `toml:"base_url"`
 		Model   string `toml:"model"`
 	} `toml:"mimo"`
+}
+
+// TTSAgentConfig overrides global [tts] synthesis parameters for one project.
+// Keys are project names, which map naturally to cc-connect's agent workspaces
+// (for example assistant, reviewer).
+type TTSAgentConfig struct {
+	Provider     string  `toml:"provider,omitempty"`
+	Voice        string  `toml:"voice,omitempty"`
+	VoiceID      string  `toml:"voice_id,omitempty"`
+	Speed        float64 `toml:"speed,omitempty"`
+	LanguageType string  `toml:"language_type,omitempty"`
+	MaxTextLen   *int    `toml:"max_text_len,omitempty"`
+}
+
+// ResolvedTTSConfig is the effective TTS config for a single project after
+// applying [tts.agents.<project>] overrides.
+type ResolvedTTSConfig struct {
+	Enabled      bool
+	Provider     string
+	Voice        string
+	Speed        float64
+	LanguageType string
+	TTSMode      string
+	MaxTextLen   int
+}
+
+// ResolveTTSConfigForProject returns the effective TTS settings for projectName.
+// Legacy [tts].voice remains supported; [tts].voice_id is treated as an alias
+// and takes precedence when both are set.
+func ResolveTTSConfigForProject(tts TTSConfig, projectName string) ResolvedTTSConfig {
+	res := ResolvedTTSConfig{
+		Enabled:      tts.Enabled,
+		Provider:     strings.TrimSpace(tts.Provider),
+		Voice:        firstNonEmpty(tts.VoiceID, tts.Voice),
+		Speed:        tts.Speed,
+		LanguageType: tts.LanguageType,
+		TTSMode:      tts.TTSMode,
+		MaxTextLen:   tts.MaxTextLen,
+	}
+	if tts.Agents == nil {
+		return res
+	}
+	agent, ok := tts.Agents[projectName]
+	if !ok {
+		return res
+	}
+	if v := strings.TrimSpace(agent.Provider); v != "" {
+		res.Provider = v
+	}
+	if v := firstNonEmpty(agent.VoiceID, agent.Voice); v != "" {
+		res.Voice = v
+	}
+	if agent.Speed > 0 {
+		res.Speed = agent.Speed
+	}
+	if v := strings.TrimSpace(agent.LanguageType); v != "" {
+		res.LanguageType = v
+	}
+	if agent.MaxTextLen != nil {
+		res.MaxTextLen = *agent.MaxTextLen
+	}
+	return res
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// MiniMaxLocalConfig is the JSON shape used by Agent Studio / MiniMax skills.
+type MiniMaxLocalConfig struct {
+	APIKey  string `json:"api_key"`
+	APIHost string `json:"api_host"`
+	BaseURL string `json:"base_url"`
+}
+
+// LoadMiniMaxLocalConfig reads a MiniMax JSON config without exposing secrets.
+// It returns an empty config when the file does not exist.
+func LoadMiniMaxLocalConfig(dataDir, configFile string) (MiniMaxLocalConfig, error) {
+	if strings.TrimSpace(configFile) == "" {
+		configFile = filepath.Join(dataDir, "config", "minimax.json")
+	}
+	configFile = expandUserPath(configFile)
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return MiniMaxLocalConfig{}, nil
+		}
+		return MiniMaxLocalConfig{}, fmt.Errorf("read minimax config: %w", err)
+	}
+	var cfg MiniMaxLocalConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return MiniMaxLocalConfig{}, fmt.Errorf("parse minimax config: %w", err)
+	}
+	return cfg, nil
+}
+
+func expandUserPath(path string) string {
+	// Only the current user's home shorthand is expanded; ~user paths are left
+	// unchanged to avoid platform-specific user lookup behavior.
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
 }
 
 // HeartbeatConfig controls periodic heartbeat for a project.
@@ -410,6 +547,10 @@ type ProjectConfig struct {
 	// cc-connect, hiding sessions created by direct CLI usage in the same work_dir.
 	// Default is false (show all sessions).
 	FilterExternalSessions *bool `toml:"filter_external_sessions,omitempty"`
+	// Shell overrides the global shell for this project. See Config.Shell.
+	Shell string `toml:"shell,omitempty"`
+	// ShellProfile overrides the global shell_profile for this project.
+	ShellProfile string `toml:"shell_profile,omitempty"`
 }
 
 type AgentConfig struct {
@@ -778,6 +919,52 @@ func EffectiveDisplay(cfg *Config, proj *ProjectConfig) (mode string, thinkingMe
 	return
 }
 
+// EffectiveHistoryMaxLen returns the per-entry /history truncation length.
+// Resolution: project [display] > global [display] > default 1000. A value
+// of 0 disables truncation.
+func EffectiveHistoryMaxLen(cfg *Config, proj *ProjectConfig) int {
+	if proj != nil && proj.Display != nil && proj.Display.HistoryMaxLen != nil {
+		return *proj.Display.HistoryMaxLen
+	}
+	if cfg != nil && cfg.Display.HistoryMaxLen != nil {
+		return *cfg.Display.HistoryMaxLen
+	}
+	return 1000
+}
+
+// EffectiveShell returns the shell binary, flag, and init command for the project.
+// Resolution: per-project > global > platform default.
+// The flag is auto-detected: "/C" for cmd, "-Command" for powershell/pwsh, "-c" for everything else.
+func EffectiveShell(cfg *Config, proj *ProjectConfig) (shell, flag, shellProfile string) {
+	s := ""
+	p := ""
+	if proj != nil {
+		s = proj.Shell
+		p = proj.ShellProfile
+	}
+	if s == "" {
+		s = cfg.Shell
+	}
+	if p == "" {
+		p = cfg.ShellProfile
+	}
+	if s == "" {
+		if runtime.GOOS == "windows" {
+			return "powershell.exe", "-Command", p
+		}
+		return "sh", "-c", p
+	}
+	base := strings.ToLower(filepath.Base(s))
+	switch {
+	case base == "cmd" || base == "cmd.exe":
+		return s, "/C", p
+	case strings.HasPrefix(base, "powershell") || strings.HasPrefix(base, "pwsh"):
+		return s, "-Command", p
+	default:
+		return s, "-c", p
+	}
+}
+
 // EffectiveCardMode returns the card rendering mode for the project: "rich" (Feishu Card 2.0)
 // or "legacy" (default plain messages). Per-project overrides global.
 func EffectiveCardMode(cfg *Config, proj *ProjectConfig) string {
@@ -897,6 +1084,9 @@ func validateDisplayConfig(prefix string, display *DisplayConfig) error {
 		default:
 			return fmt.Errorf("config: %s.card_mode must be \"legacy\" or \"rich\"", prefix)
 		}
+	}
+	if display.HistoryMaxLen != nil && *display.HistoryMaxLen < 0 {
+		return fmt.Errorf("config: %s.history_max_len must be >= 0", prefix)
 	}
 	return nil
 }
@@ -3305,6 +3495,11 @@ func GetGlobalSettings() map[string]any {
 		result["tool_max_len"] = *cfg.Display.ToolMaxLen
 	} else {
 		result["tool_max_len"] = 500
+	}
+	if cfg.Display.HistoryMaxLen != nil {
+		result["history_max_len"] = *cfg.Display.HistoryMaxLen
+	} else {
+		result["history_max_len"] = 1000
 	}
 	// Stream preview
 	spEnabled := true

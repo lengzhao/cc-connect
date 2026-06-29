@@ -71,6 +71,13 @@ type streamProgressHandle struct {
 	wasTruncated  bool
 }
 
+// slackPreviewHandle points at the in-flight streaming-preview message so
+// UpdateMessage can edit it in place via chat.update (legacy progress_style).
+type slackPreviewHandle struct {
+	channel   string
+	timestamp string
+}
+
 func (p *Platform) threadTarget(replyCtx any) (channel, threadTS string, ok bool) {
 	rc, ok := replyCtx.(replyContext)
 	if !ok || rc.channel == "" {
@@ -88,41 +95,65 @@ func (p *Platform) threadTarget(replyCtx any) (channel, threadTS string, ok bool
 
 // SendPreviewStart implements core.PreviewStarter for native Slack progress.
 func (p *Platform) SendPreviewStart(ctx context.Context, rctx any, content string) (any, error) {
-	if !p.isNativeProgressEnabled() {
-		return nil, fmt.Errorf("slack: native progress not enabled")
+	if p.isNativeProgressEnabled() {
+		rc, ok := rctx.(replyContext)
+		if !ok {
+			return nil, fmt.Errorf("slack: invalid reply context type %T", rctx)
+		}
+		payload, ok := core.ParseProgressCardPayload(content)
+		if !ok || payload == nil {
+			return nil, fmt.Errorf("slack: invalid progress payload")
+		}
+		handle := &nativeProgressHandle{
+			replyCtx: rc,
+			mode:     p.nativeProgressMode(),
+		}
+		if err := p.applyNativeProgressPayload(ctx, handle, payload); err != nil {
+			return nil, err
+		}
+		return handle, nil
 	}
 	rc, ok := rctx.(replyContext)
 	if !ok {
 		return nil, fmt.Errorf("slack: invalid reply context type %T", rctx)
 	}
-	payload, ok := core.ParseProgressCardPayload(content)
-	if !ok || payload == nil {
-		return nil, fmt.Errorf("slack: invalid progress payload")
+	opts := []slack.MsgOption{
+		slack.MsgOptionText(core.MarkdownToSlackMrkdwn(content), false),
 	}
-	handle := &nativeProgressHandle{
-		replyCtx: rc,
-		mode:     p.nativeProgressMode(),
+	if rc.timestamp != "" {
+		opts = append(opts, slack.MsgOptionPostMessageParameters(slack.PostMessageParameters{ThreadTimestamp: rc.timestamp}))
 	}
-	if err := p.applyNativeProgressPayload(ctx, handle, payload); err != nil {
-		return nil, err
+	_, ts, err := p.client.PostMessageContext(ctx, rc.channel, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("slack: send preview: %w", err)
 	}
-	return handle, nil
+	return &slackPreviewHandle{channel: rc.channel, timestamp: ts}, nil
 }
 
 // UpdateMessage implements core.MessageUpdater for native Slack progress.
 func (p *Platform) UpdateMessage(ctx context.Context, previewHandle any, content string) error {
-	if !p.isNativeProgressEnabled() {
-		return fmt.Errorf("slack: native progress not enabled")
+	if p.isNativeProgressEnabled() {
+		handle, ok := previewHandle.(*nativeProgressHandle)
+		if !ok || handle == nil {
+			return fmt.Errorf("slack: invalid native progress handle %T", previewHandle)
+		}
+		payload, ok := core.ParseProgressCardPayload(content)
+		if !ok || payload == nil {
+			return fmt.Errorf("slack: invalid progress payload")
+		}
+		return p.applyNativeProgressPayload(ctx, handle, payload)
 	}
-	handle, ok := previewHandle.(*nativeProgressHandle)
-	if !ok || handle == nil {
-		return fmt.Errorf("slack: invalid native progress handle %T", previewHandle)
+	h, ok := previewHandle.(*slackPreviewHandle)
+	if !ok {
+		return fmt.Errorf("slack: invalid preview handle type %T", previewHandle)
 	}
-	payload, ok := core.ParseProgressCardPayload(content)
-	if !ok || payload == nil {
-		return fmt.Errorf("slack: invalid progress payload")
+	_, _, _, err := p.client.UpdateMessageContext(ctx, h.channel, h.timestamp,
+		slack.MsgOptionText(core.MarkdownToSlackMrkdwn(content), false),
+	)
+	if err != nil {
+		return fmt.Errorf("slack: update preview: %w", err)
 	}
-	return p.applyNativeProgressPayload(ctx, handle, payload)
+	return nil
 }
 
 func (p *Platform) applyNativeProgressPayload(ctx context.Context, handle *nativeProgressHandle, payload *core.ProgressCardPayload) error {

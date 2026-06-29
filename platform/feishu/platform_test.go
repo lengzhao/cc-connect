@@ -1784,17 +1784,23 @@ func TestResolveMentions_LongestMatchFirst(t *testing.T) {
 	}
 }
 
-func TestResolveMentions_CardFormat(t *testing.T) {
+// TestResolveMentions_MarkdownContent verifies that @name inside markdown
+// content (which would trigger MsgTypeInteractive) is still resolved to the
+// MsgTypeText at syntax (<at user_id="...">name</at>).
+func TestResolveMentions_MarkdownContent(t *testing.T) {
 	p := &Platform{platformName: "feishu", resolveMentions: true}
 	p.chatMemberCache.Store("oc_chat", &chatMemberEntry{
 		members:   map[string]string{"张三": "ou_zhangsan"},
 		fetchedAt: time.Now(),
 	})
-	// Content with complex markdown triggers card format
+	// Content with complex markdown
 	input := "# 巡检报告\n\n@张三 请查看\n\n```\nstatus: ok\n```"
 	result := p.resolveMentionsInContent(context.Background(), "oc_chat", input)
-	if !strings.Contains(result, "<at id=ou_zhangsan></at>") {
-		t.Fatalf("card format should use <at id=...>, got %q", result)
+	if !strings.Contains(result, `<at user_id="ou_zhangsan">张三</at>`) {
+		t.Fatalf("markdown content should resolve to text format <at user_id=...>, got %q", result)
+	}
+	if strings.Contains(result, "<at id=") {
+		t.Fatalf("card format <at id=...> must not be emitted (no mention event); got %q", result)
 	}
 }
 
@@ -1992,5 +1998,336 @@ func TestCardAction_NavSlow_NilCard_NoRefresh(t *testing.T) {
 
 	if got := mock.refreshCalled.Load(); got != 0 {
 		t.Fatalf("RefreshCard should not be called for nil card, called %d times", got)
+	}
+}
+
+// TestOnMessage_OldMessageAfterRestartIsFiltered verifies that a Feishu message whose
+// create_time is before the process start time is silently dropped.  This is the
+// expected "drop replayed pre-restart messages" behaviour described in issue #972.
+func TestOnMessage_OldMessageAfterRestartIsFiltered(t *testing.T) {
+	// Simulate a daemon "restart" by pinning StartTime to now.
+	restartTime := time.Now()
+	orig := core.StartTime
+	core.StartTime = restartTime
+	defer func() { core.StartTime = orig }()
+
+	platformAny, err := New(map[string]any{"app_id": "cli_xxx", "app_secret": "secret"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ip, ok := platformAny.(*interactivePlatform)
+	if !ok {
+		t.Fatalf("platform type = %T, want *interactivePlatform", platformAny)
+	}
+
+	handlerCalled := false
+	ip.handler = func(_ core.Platform, _ *core.Message) {
+		handlerCalled = true
+	}
+
+	// A message created 10 minutes before the restart — must be dropped.
+	oldCreateTime := strconv.FormatInt(restartTime.Add(-10*time.Minute).UnixMilli(), 10)
+	msgID := "om_old_test"
+	chatID := "oc_test"
+	openID := "ou_test"
+	msgType := "text"
+	chatType := "p2p"
+	senderType := "user"
+	content := `{"text":"hello"}`
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderId:   &larkim.UserId{OpenId: &openID},
+				SenderType: &senderType,
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   &msgID,
+				ChatId:      &chatID,
+				ChatType:    &chatType,
+				MessageType: &msgType,
+				Content:     &content,
+				CreateTime:  &oldCreateTime,
+			},
+		},
+	}
+
+	if err := ip.onMessage(context.Background(), event); err != nil {
+		t.Fatalf("onMessage() error = %v", err)
+	}
+	if handlerCalled {
+		t.Error("handler should NOT be called for pre-restart message (create_time before StartTime)")
+	}
+}
+
+// TestOnMessage_NewMessageAfterRestartIsProcessed verifies that a Feishu message whose
+// create_time is after the process start time is delivered to the handler normally.
+// Regression test for issue #972: new messages must not be mis-classified as "old".
+func TestOnMessage_NewMessageAfterRestartIsProcessed(t *testing.T) {
+	// Simulate a daemon "restart" by pinning StartTime to 5 minutes ago.
+	restartTime := time.Now().Add(-5 * time.Minute)
+	orig := core.StartTime
+	core.StartTime = restartTime
+	defer func() { core.StartTime = orig }()
+
+	platformAny, err := New(map[string]any{"app_id": "cli_xxx", "app_secret": "secret"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ip, ok := platformAny.(*interactivePlatform)
+	if !ok {
+		t.Fatalf("platform type = %T, want *interactivePlatform", platformAny)
+	}
+
+	var (
+		wg          sync.WaitGroup
+		receivedMsg *core.Message
+	)
+	wg.Add(1)
+	ip.handler = func(_ core.Platform, msg *core.Message) {
+		defer wg.Done()
+		receivedMsg = msg
+	}
+
+	// A message created 2 minutes AFTER restart — must be processed.
+	newCreateTime := strconv.FormatInt(restartTime.Add(2*time.Minute).UnixMilli(), 10)
+	msgID := "om_new_test"
+	chatID := "oc_test"
+	openID := "ou_test"
+	msgType := "text"
+	chatType := "p2p"
+	senderType := "user"
+	content := `{"text":"/list"}`
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderId:   &larkim.UserId{OpenId: &openID},
+				SenderType: &senderType,
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   &msgID,
+				ChatId:      &chatID,
+				ChatType:    &chatType,
+				MessageType: &msgType,
+				Content:     &content,
+				CreateTime:  &newCreateTime,
+			},
+		},
+	}
+
+	if err := ip.onMessage(context.Background(), event); err != nil {
+		t.Fatalf("onMessage() error = %v", err)
+	}
+	wg.Wait()
+	if receivedMsg == nil {
+		t.Error("handler should be called for post-restart message (create_time after StartTime)")
+	}
+}
+
+// TestOnMessage_GracePeriodMessageIsProcessed verifies that a message created within
+// the 2-second grace window just before StartTime is NOT dropped (issue #972 edge case).
+func TestOnMessage_GracePeriodMessageIsProcessed(t *testing.T) {
+	restartTime := time.Now()
+	orig := core.StartTime
+	core.StartTime = restartTime
+	defer func() { core.StartTime = orig }()
+
+	platformAny, err := New(map[string]any{"app_id": "cli_xxx", "app_secret": "secret"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ip, ok := platformAny.(*interactivePlatform)
+	if !ok {
+		t.Fatalf("platform type = %T, want *interactivePlatform", platformAny)
+	}
+
+	var (
+		wg          sync.WaitGroup
+		receivedMsg *core.Message
+	)
+	wg.Add(1)
+	ip.handler = func(_ core.Platform, msg *core.Message) {
+		defer wg.Done()
+		receivedMsg = msg
+	}
+
+	// A message created 1 second before restart — within the 2s grace window, must pass.
+	graceCreateTime := strconv.FormatInt(restartTime.Add(-1*time.Second).UnixMilli(), 10)
+	msgID := "om_grace_test"
+	chatID := "oc_test"
+	openID := "ou_test"
+	msgType := "text"
+	chatType := "p2p"
+	senderType := "user"
+	content := `{"text":"grace"}`
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderId:   &larkim.UserId{OpenId: &openID},
+				SenderType: &senderType,
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   &msgID,
+				ChatId:      &chatID,
+				ChatType:    &chatType,
+				MessageType: &msgType,
+				Content:     &content,
+				CreateTime:  &graceCreateTime,
+			},
+		},
+	}
+
+	if err := ip.onMessage(context.Background(), event); err != nil {
+		t.Fatalf("onMessage() error = %v", err)
+	}
+	wg.Wait()
+	if receivedMsg == nil {
+		t.Error("handler should be called for message within the 2s grace window")
+	}
+}
+
+func TestCmdAction_WithoutAfterClick_DispatchesAndReturnsNil(t *testing.T) {
+	platformAny, err := New(map[string]any{"app_id": "cli_xxx", "app_secret": "secret", "enable_feishu_card": true})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ip, ok := platformAny.(*interactivePlatform)
+	if !ok {
+		t.Fatalf("platform type = %T, want *interactivePlatform", platformAny)
+	}
+
+	msgCh := make(chan *core.Message, 1)
+	ip.handler = func(_ core.Platform, msg *core.Message) { msgCh <- msg }
+
+	resp, err := ip.onCardAction(&callback.CardActionTriggerEvent{
+		Event: &callback.CardActionTriggerRequest{
+			Operator: &callback.Operator{OpenID: "ou_user1"},
+			Action:   &callback.CallBackAction{Value: map[string]any{"action": "cmd:/verify F9F-162"}},
+			Context:  &callback.Context{OpenChatID: "oc_chat1", OpenMessageID: "om_msg1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("onCardAction() error = %v", err)
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response without after_click, got %#v", resp)
+	}
+
+	select {
+	case msg := <-msgCh:
+		if msg.Content != "/verify F9F-162" {
+			t.Fatalf("dispatched content = %q, want /verify F9F-162", msg.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected command to be dispatched")
+	}
+}
+
+func TestCmdAction_WithAfterClick_DispatchesAndReturnsCard(t *testing.T) {
+	platformAny, err := New(map[string]any{"app_id": "cli_xxx", "app_secret": "secret", "enable_feishu_card": true})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ip, ok := platformAny.(*interactivePlatform)
+	if !ok {
+		t.Fatalf("platform type = %T, want *interactivePlatform", platformAny)
+	}
+
+	msgCh := make(chan *core.Message, 1)
+	ip.handler = func(_ core.Platform, msg *core.Message) { msgCh <- msg }
+
+	afterClick := map[string]any{
+		"title":     "✅ Done",
+		"color":     "green",
+		"markdown":  "Command recorded.",
+		"link_text": "↗ Open",
+		"link_url":  "https://example.com/task/123",
+	}
+
+	resp, err := ip.onCardAction(&callback.CardActionTriggerEvent{
+		Event: &callback.CardActionTriggerRequest{
+			Operator: &callback.Operator{OpenID: "ou_user1"},
+			Action: &callback.CallBackAction{Value: map[string]any{
+				"action":      "cmd:/run-task 123",
+				"after_click": afterClick,
+			}},
+			Context: &callback.Context{OpenChatID: "oc_chat1", OpenMessageID: "om_msg1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("onCardAction() error = %v", err)
+	}
+	if resp == nil || resp.Card == nil {
+		t.Fatalf("expected card response with after_click, got %#v", resp)
+	}
+	if resp.Card.Type != "raw" {
+		t.Fatalf("card type = %q, want raw", resp.Card.Type)
+	}
+	cardData, ok := resp.Card.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("card data type = %T, want map[string]any", resp.Card.Data)
+	}
+	header, ok := cardData["header"].(map[string]any)
+	if !ok {
+		t.Fatalf("card header type = %T, want map[string]any", cardData["header"])
+	}
+	if header["template"] != "green" {
+		t.Fatalf("card color = %q, want green", header["template"])
+	}
+
+	select {
+	case msg := <-msgCh:
+		if msg.Content != "/run-task 123" {
+			t.Fatalf("dispatched content = %q, want /run-task 123", msg.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected command to be dispatched")
+	}
+}
+
+func TestCmdAction_WithAfterClick_SessionKeyRoutes(t *testing.T) {
+	platformAny, err := New(map[string]any{"app_id": "cli_xxx", "app_secret": "secret", "enable_feishu_card": true})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ip, ok := platformAny.(*interactivePlatform)
+	if !ok {
+		t.Fatalf("platform type = %T, want *interactivePlatform", platformAny)
+	}
+
+	const wantSessionKey = "custom-session-abc"
+	msgCh := make(chan *core.Message, 1)
+	ip.handler = func(_ core.Platform, msg *core.Message) { msgCh <- msg }
+
+	resp, err := ip.onCardAction(&callback.CardActionTriggerEvent{
+		Event: &callback.CardActionTriggerRequest{
+			Operator: &callback.Operator{OpenID: "ou_user1"},
+			Action: &callback.CallBackAction{Value: map[string]any{
+				"action":      "cmd:/hello",
+				"session_key": wantSessionKey,
+				"after_click": map[string]any{"title": "✅ Sent"},
+			}},
+			Context: &callback.Context{OpenChatID: "oc_chat1", OpenMessageID: "om_msg1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("onCardAction() error = %v", err)
+	}
+	if resp == nil || resp.Card == nil {
+		t.Fatalf("expected card response, got %#v", resp)
+	}
+
+	select {
+	case msg := <-msgCh:
+		if msg.SessionKey != wantSessionKey {
+			t.Fatalf("session key = %q, want %q", msg.SessionKey, wantSessionKey)
+		}
+		if msg.Content != "/hello" {
+			t.Fatalf("content = %q, want /hello", msg.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected command to be dispatched with correct session key")
 	}
 }

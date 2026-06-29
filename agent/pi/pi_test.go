@@ -121,7 +121,7 @@ func TestNew_DefaultCmd(t *testing.T) {
 // ── Agent interface methods ──────────────────────────────────
 
 func TestAgent_NameAndDisplay(t *testing.T) {
-	a := &Agent{}
+	a := &Agent{cmd: "pi"}
 	if a.Name() != "pi" {
 		t.Errorf("Name() = %q", a.Name())
 	}
@@ -645,11 +645,11 @@ func TestCleanAttachments_NonexistentDir(t *testing.T) {
 
 func TestPiSessionAttachmentDirsAreIsolated(t *testing.T) {
 	workDir := t.TempDir()
-	s1, err := newPiSession(context.Background(), "pi", workDir, "", "", "", "", nil)
+	s1, err := newPiSession(context.Background(), "pi", nil, workDir, "", "", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s2, err := newPiSession(context.Background(), "pi", workDir, "", "", "", "", nil)
+	s2, err := newPiSession(context.Background(), "pi", nil, workDir, "", "", "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1186,7 +1186,7 @@ func TestHandleMessageEnd_UserRole(t *testing.T) {
 // ── piSession lifecycle ──────────────────────────────────────
 
 func TestPiSession_NewWithResumeID(t *testing.T) {
-	s, err := newPiSession(context.Background(), "echo", "/tmp", "model", "default", "", "resume-id", nil)
+	s, err := newPiSession(context.Background(), "echo", nil, "/tmp", "model", "default", "", "resume-id", nil)
 	if err != nil {
 		t.Fatalf("newPiSession: %v", err)
 	}
@@ -1202,7 +1202,7 @@ func TestPiSession_ContinueSessionTreatedAsFresh(t *testing.T) {
 	// Claude Code to pick up the latest CLI session via --continue. Agents that
 	// don't support --continue must treat it as "" (fresh session), otherwise
 	// they pass the literal "__continue__" as a session ID which always fails.
-	s, err := newPiSession(context.Background(), "echo", "/tmp", "", "default", "", core.ContinueSession, nil)
+	s, err := newPiSession(context.Background(), "echo", nil, "/tmp", "", "default", "", core.ContinueSession, nil)
 	if err != nil {
 		t.Fatalf("newPiSession: %v", err)
 	}
@@ -1214,7 +1214,7 @@ func TestPiSession_ContinueSessionTreatedAsFresh(t *testing.T) {
 }
 
 func TestPiSession_NewWithoutResumeID(t *testing.T) {
-	s, err := newPiSession(context.Background(), "echo", "/tmp", "", "default", "", "", nil)
+	s, err := newPiSession(context.Background(), "echo", nil, "/tmp", "", "default", "", "", nil)
 	if err != nil {
 		t.Fatalf("newPiSession: %v", err)
 	}
@@ -1226,7 +1226,7 @@ func TestPiSession_NewWithoutResumeID(t *testing.T) {
 }
 
 func TestPiSession_SendWhenClosed(t *testing.T) {
-	s, _ := newPiSession(context.Background(), "echo", "/tmp", "", "default", "", "", nil)
+	s, _ := newPiSession(context.Background(), "echo", nil, "/tmp", "", "default", "", "", nil)
 	s.Close()
 
 	err := s.Send("hello", nil, nil)
@@ -1255,7 +1255,7 @@ func TestPiSession_Events(t *testing.T) {
 }
 
 func TestPiSession_Close(t *testing.T) {
-	s, _ := newPiSession(context.Background(), "echo", "/tmp", "", "default", "", "", nil)
+	s, _ := newPiSession(context.Background(), "echo", nil, "/tmp", "", "default", "", "", nil)
 
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -1363,7 +1363,7 @@ func TestPiSession_ReadLoopWithEcho(t *testing.T) {
 	line1, _ := json.Marshal(sessionEvent)
 	line2, _ := json.Marshal(textEvent)
 
-	s, err := newPiSession(context.Background(), "sh", "/tmp", "", "default", "", "", nil)
+	s, err := newPiSession(context.Background(), "sh", nil, "/tmp", "", "default", "", "", nil)
 	if err != nil {
 		t.Fatalf("newPiSession: %v", err)
 	}
@@ -1438,5 +1438,422 @@ loop:
 	}
 	if s.CurrentSessionID() != "echo-sess" {
 		t.Errorf("sessionID = %q, want echo-sess", s.CurrentSessionID())
+	}
+}
+
+// ── loadModelsContextWindows ─────────────────────────────────
+
+func TestLoadModelsContextWindows(t *testing.T) {
+	savedEnv := os.Getenv("PI_CODING_AGENT_DIR")
+	t.Cleanup(func() {
+		if savedEnv != "" {
+			_ = os.Setenv("PI_CODING_AGENT_DIR", savedEnv)
+		} else {
+			_ = os.Unsetenv("PI_CODING_AGENT_DIR")
+		}
+	})
+
+	tmpDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", tmpDir)
+
+	modelsJSON := map[string]any{
+		"providers": map[string]any{
+			"provider-a": map[string]any{
+				"models": []any{
+					map[string]any{"id": "model-alpha", "contextWindow": float64(128_000)},
+					map[string]any{"id": "model-beta", "contextWindow": float64(200_000)},
+				},
+			},
+			"provider-b": map[string]any{
+				"models": []any{
+					map[string]any{"id": "model-gamma", "contextWindow": float64(1_000_000)},
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(modelsJSON)
+	if err := os.WriteFile(filepath.Join(tmpDir, "models.json"), data, 0o644); err != nil {
+		t.Fatalf("write models.json: %v", err)
+	}
+
+	m := loadModelsContextWindows()
+	if m == nil {
+		t.Fatal("loadModelsContextWindows returned nil")
+	}
+
+	// Bare IDs.
+	if m["model-alpha"] != 128_000 {
+		t.Errorf("model-alpha = %d, want 128_000", m["model-alpha"])
+	}
+	if m["model-beta"] != 200_000 {
+		t.Errorf("model-beta = %d, want 200_000", m["model-beta"])
+	}
+	if m["model-gamma"] != 1_000_000 {
+		t.Errorf("model-gamma = %d, want 1_000_000", m["model-gamma"])
+	}
+
+	// Fully-qualified provider/ID.
+	if m["provider-a/model-alpha"] != 128_000 {
+		t.Errorf("provider-a/model-alpha = %d, want 128_000", m["provider-a/model-alpha"])
+	}
+	if m["provider-b/model-gamma"] != 1_000_000 {
+		t.Errorf("provider-b/model-gamma = %d, want 1_000_000", m["provider-b/model-gamma"])
+	}
+}
+
+func TestLoadModelsContextWindows_FileNotFound(t *testing.T) {
+	savedEnv := os.Getenv("PI_CODING_AGENT_DIR")
+	t.Cleanup(func() {
+		if savedEnv != "" {
+			_ = os.Setenv("PI_CODING_AGENT_DIR", savedEnv)
+		} else {
+			_ = os.Unsetenv("PI_CODING_AGENT_DIR")
+		}
+	})
+
+	tmpDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", tmpDir)
+	// No models.json written.
+
+	m := loadModelsContextWindows()
+	if m != nil {
+		t.Errorf("expected nil for missing models.json, got %v", m)
+	}
+}
+
+func TestLoadModelsContextWindows_MalformedJSON(t *testing.T) {
+	savedEnv := os.Getenv("PI_CODING_AGENT_DIR")
+	t.Cleanup(func() {
+		if savedEnv != "" {
+			_ = os.Setenv("PI_CODING_AGENT_DIR", savedEnv)
+		} else {
+			_ = os.Unsetenv("PI_CODING_AGENT_DIR")
+		}
+	})
+
+	tmpDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", tmpDir)
+	if err := os.WriteFile(filepath.Join(tmpDir, "models.json"), []byte("{invalid"), 0o644); err != nil {
+		t.Fatalf("write models.json: %v", err)
+	}
+
+	m := loadModelsContextWindows()
+	if m != nil {
+		t.Errorf("expected nil for malformed JSON, got %v", m)
+	}
+}
+
+// ── handleAgentEnd ───────────────────────────────────────────
+
+func TestHandleAgentEnd(t *testing.T) {
+	s := newTestSession()
+	defer s.cancel()
+	s.modelsCW = map[string]int{
+		"test-model":               200_000,
+		"test-provider/test-model": 200_000,
+	}
+
+	s.handleEvent(map[string]any{
+		"type": "agent_end",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "text", "text": "hello"},
+				},
+			},
+			map[string]any{
+				"role":  "assistant",
+				"model": "test-model",
+				"content": []any{
+					map[string]any{"type": "text", "text": "hi there"},
+				},
+				"usage": map[string]any{
+					"input":      float64(5000),
+					"output":     float64(300),
+					"cacheRead":  float64(40000),
+					"cacheWrite": float64(2000),
+				},
+			},
+		},
+	})
+
+	usage := s.GetContextUsage()
+	if usage == nil {
+		t.Fatal("GetContextUsage returned nil after agent_end with usage")
+	}
+
+	// UsedTokens = input + cacheWrite + cacheRead (mirrors claudecode pattern).
+	wantUsed := 5000 + 2000 + 40000 // 47000
+	if usage.UsedTokens != wantUsed {
+		t.Errorf("UsedTokens = %d, want %d", usage.UsedTokens, wantUsed)
+	}
+	// TotalTokens = UsedTokens + output.
+	wantTotal := wantUsed + 300 // 47300
+	if usage.TotalTokens != wantTotal {
+		t.Errorf("TotalTokens = %d, want %d", usage.TotalTokens, wantTotal)
+	}
+	if usage.InputTokens != 5000 {
+		t.Errorf("InputTokens = %d, want 5000", usage.InputTokens)
+	}
+	if usage.OutputTokens != 300 {
+		t.Errorf("OutputTokens = %d, want 300", usage.OutputTokens)
+	}
+	if usage.CachedInputTokens != 40000 {
+		t.Errorf("CachedInputTokens = %d, want 40000", usage.CachedInputTokens)
+	}
+	if usage.CacheCreationInputTokens != 2000 {
+		t.Errorf("CacheCreationInputTokens = %d, want 2000", usage.CacheCreationInputTokens)
+	}
+	if usage.ContextWindow != 200_000 {
+		t.Errorf("ContextWindow = %d, want 200_000", usage.ContextWindow)
+	}
+}
+
+func TestHandleAgentEnd_NoMessages(t *testing.T) {
+	s := newTestSession()
+	defer s.cancel()
+
+	s.handleEvent(map[string]any{
+		"type":     "agent_end",
+		"messages": []any{},
+	})
+
+	if s.GetContextUsage() != nil {
+		t.Error("GetContextUsage should be nil when agent_end has no messages")
+	}
+}
+
+func TestHandleAgentEnd_NoAssistantMessage(t *testing.T) {
+	s := newTestSession()
+	defer s.cancel()
+
+	s.handleEvent(map[string]any{
+		"type": "agent_end",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "text", "text": "hello"},
+				},
+			},
+		},
+	})
+
+	if s.GetContextUsage() != nil {
+		t.Error("GetContextUsage should be nil when no assistant message exists")
+	}
+}
+
+func TestHandleAgentEnd_NoUsage(t *testing.T) {
+	s := newTestSession()
+	defer s.cancel()
+
+	s.handleEvent(map[string]any{
+		"type": "agent_end",
+		"messages": []any{
+			map[string]any{
+				"role":  "assistant",
+				"model": "test-model",
+				"content": []any{
+					map[string]any{"type": "text", "text": "hi"},
+				},
+				// no "usage" key
+			},
+		},
+	})
+
+	if s.GetContextUsage() != nil {
+		t.Error("GetContextUsage should be nil when assistant message has no usage")
+	}
+}
+
+func TestHandleAgentEnd_FallbackContextWindow(t *testing.T) {
+	s := newTestSession()
+	defer s.cancel()
+	// Empty modelsCW (no entry for "unknown-model").
+	s.modelsCW = map[string]int{}
+
+	s.handleEvent(map[string]any{
+		"type": "agent_end",
+		"messages": []any{
+			map[string]any{
+				"role":  "assistant",
+				"model": "unknown-model",
+				"usage": map[string]any{
+					"input":      float64(1000),
+					"output":     float64(100),
+					"cacheRead":  float64(0),
+					"cacheWrite": float64(0),
+				},
+			},
+		},
+	})
+
+	usage := s.GetContextUsage()
+	if usage == nil {
+		t.Fatal("GetContextUsage returned nil")
+	}
+	if usage.ContextWindow != 200_000 {
+		t.Errorf("ContextWindow = %d, want 200_000 (fallback)", usage.ContextWindow)
+	}
+}
+
+func TestHandleAgentEnd_NilModelsCW(t *testing.T) {
+	s := newTestSession()
+	defer s.cancel()
+	// modelsCW is nil (not loaded).
+	s.modelsCW = nil
+
+	s.handleEvent(map[string]any{
+		"type": "agent_end",
+		"messages": []any{
+			map[string]any{
+				"role":  "assistant",
+				"model": "any-model",
+				"usage": map[string]any{
+					"input":      float64(500),
+					"output":     float64(50),
+					"cacheRead":  float64(0),
+					"cacheWrite": float64(0),
+				},
+			},
+		},
+	})
+
+	usage := s.GetContextUsage()
+	if usage == nil {
+		t.Fatal("GetContextUsage returned nil")
+	}
+	if usage.ContextWindow != 200_000 {
+		t.Errorf("ContextWindow = %d, want 200_000 (nil-map fallback)", usage.ContextWindow)
+	}
+}
+
+// ── GetContextUsage ──────────────────────────────────────────
+
+func TestGetContextUsage_NilBeforeAgentEnd(t *testing.T) {
+	s := newTestSession()
+	defer s.cancel()
+
+	if usage := s.GetContextUsage(); usage != nil {
+		t.Errorf("GetContextUsage should be nil before any agent_end, got %+v", usage)
+	}
+}
+
+func TestGetContextUsage_ReturnsCopy(t *testing.T) {
+	s := newTestSession()
+	defer s.cancel()
+	s.modelsCW = map[string]int{"m": 100_000}
+
+	s.handleEvent(map[string]any{
+		"type": "agent_end",
+		"messages": []any{
+			map[string]any{
+				"role":  "assistant",
+				"model": "m",
+				"usage": map[string]any{
+					"input":      float64(100),
+					"output":     float64(50),
+					"cacheRead":  float64(0),
+					"cacheWrite": float64(0),
+				},
+			},
+		},
+	})
+
+	u1 := s.GetContextUsage()
+	u2 := s.GetContextUsage()
+	if u1 == u2 {
+		t.Error("GetContextUsage should return different pointers (copy)")
+	}
+	if u1.UsedTokens != u2.UsedTokens {
+		t.Error("copies should have same values")
+	}
+}
+
+func TestHandleAgentEnd_WalksBackwardsForLastAssistant(t *testing.T) {
+	s := newTestSession()
+	defer s.cancel()
+	s.modelsCW = map[string]int{"model-a": 100_000, "model-b": 200_000}
+
+	// Two assistant messages — only the last one's usage should be captured.
+	s.handleEvent(map[string]any{
+		"type": "agent_end",
+		"messages": []any{
+			map[string]any{
+				"role":  "assistant",
+				"model": "model-a",
+				"usage": map[string]any{
+					"input":  float64(100),
+					"output": float64(10),
+				},
+			},
+			map[string]any{
+				"role":  "assistant",
+				"model": "model-b",
+				"usage": map[string]any{
+					"input":      float64(8000),
+					"output":     float64(500),
+					"cacheRead":  float64(3000),
+					"cacheWrite": float64(1000),
+				},
+			},
+		},
+	})
+
+	usage := s.GetContextUsage()
+	if usage == nil {
+		t.Fatal("GetContextUsage returned nil")
+	}
+	// Should use model-b (last assistant), not model-a.
+	if usage.ContextWindow != 200_000 {
+		t.Errorf("ContextWindow = %d, want 200_000 (from model-b)", usage.ContextWindow)
+	}
+	if usage.InputTokens != 8000 {
+		t.Errorf("InputTokens = %d, want 8000 (from model-b)", usage.InputTokens)
+	}
+	if usage.OutputTokens != 500 {
+		t.Errorf("OutputTokens = %d, want 500 (from model-b)", usage.OutputTokens)
+	}
+}
+
+func TestHandleAgentEnd_SkipsAssistantWithoutUsage(t *testing.T) {
+	s := newTestSession()
+	defer s.cancel()
+	s.modelsCW = map[string]int{"real-model": 500_000}
+
+	// First assistant has no usage, second has usage — walk backwards should
+	// skip the first and pick the second.
+	s.handleEvent(map[string]any{
+		"type": "agent_end",
+		"messages": []any{
+			map[string]any{
+				"role":  "assistant",
+				"model": "no-usage-model",
+				// no "usage"
+			},
+			map[string]any{
+				"role":  "assistant",
+				"model": "real-model",
+				"usage": map[string]any{
+					"input":      float64(3000),
+					"output":     float64(200),
+					"cacheRead":  float64(1000),
+					"cacheWrite": float64(500),
+				},
+			},
+		},
+	})
+
+	usage := s.GetContextUsage()
+	if usage == nil {
+		t.Fatal("GetContextUsage returned nil — should have found the second assistant")
+	}
+	if usage.ContextWindow != 500_000 {
+		t.Errorf("ContextWindow = %d, want 500_000", usage.ContextWindow)
+	}
+	if usage.InputTokens != 3000 {
+		t.Errorf("InputTokens = %d, want 3000", usage.InputTokens)
 	}
 }

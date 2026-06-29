@@ -143,6 +143,7 @@ type Platform struct {
 	dedup            *core.MessageDedup
 	botOpenID        string
 	peerBots         map[string]string // app_id -> friendly alias, for quoted-reply attribution
+	mentionMap       map[string]string // agent name -> open_id (for outbound @ resolution)
 	userNameCache    sync.Map          // open_id -> display name
 	chatNameCache    sync.Map          // chat_id -> chat name
 	chatMemberCache  sync.Map          // chatID -> *chatMemberEntry
@@ -173,6 +174,80 @@ type Platform struct {
 	richCardImagePending    map[string]*richCardImageUpload
 	richCardImageFailed     map[string]struct{}
 	richCardImageUploadFunc func(context.Context, string) (string, error)
+
+	// imageBatch coalesces consecutive image messages from the same session
+	// arriving within imageBatchWindow. Without this, sending N images in rapid
+	// succession from the Feishu mobile client (which posts each as a separate
+	// message) caused the first (oldest create_time) image to be dropped by
+	// core/engine's create_time watermark (PR #1168), so only N-1 images were
+	// ever delivered to the agent (issue #1395).
+	imageBatchMu     sync.Mutex
+	imageBatch       map[string]*imageBatchEntry
+	imageBatchWindow time.Duration // quiet period before flushing a batch; 0 means use defaultImageBatchWindow
+}
+
+// defaultImageBatchWindow is the quiet period after the last image in a
+// session before the buffered batch is dispatched as a single multi-image
+// message. 500ms covers real-world mobile sending intervals (we've observed
+// ~330ms between consecutive sends from the Feishu mobile client when a user
+// taps "send" repeatedly) while remaining responsive for sequential single
+// image sends. Operators that need a longer or shorter window can override
+// it via the platform option `image_batch_window_ms`.
+const defaultImageBatchWindow = 500 * time.Millisecond
+
+// batchWindow returns the effective image-batch coalesce window for this
+// Platform. Tests and zero-initialised Platforms fall back to the default so
+// they never schedule a zero-duration timer (which would fire immediately and
+// defeat batching).
+func (p *Platform) batchWindow() time.Duration {
+	if p.imageBatchWindow > 0 {
+		return p.imageBatchWindow
+	}
+	return defaultImageBatchWindow
+}
+
+// coerceMilliseconds normalises numeric TOML values (which decode as int64 or
+// float64) into an integer millisecond count.
+func coerceMilliseconds(v any) (int64, error) {
+	switch x := v.(type) {
+	case int:
+		return int64(x), nil
+	case int32:
+		return int64(x), nil
+	case int64:
+		return x, nil
+	case uint:
+		return int64(x), nil
+	case uint32:
+		return int64(x), nil
+	case uint64:
+		return int64(x), nil
+	case float32:
+		return int64(x), nil
+	case float64:
+		return int64(x), nil
+	default:
+		return 0, fmt.Errorf("expected number, got %T", v)
+	}
+}
+
+// imageBatchEntry holds image data accumulated for one session while we wait
+// to see if more images are coming. timer is stopped and replaced on every
+// new image to coalesce the window; the pointer is captured by the timer
+// callback so an in-flight (or stale) timer can detect that its entry has
+// been superseded and exit without dispatching.
+type imageBatchEntry struct {
+	sessionKey   string
+	userID       string
+	userName     string
+	chatName     string
+	rctx         replyContext
+	quoted       quotedMessage
+	images       []core.ImageAttachment
+	messageIDs   []string
+	createTimeMs int64
+	parentID     string
+	timer        *time.Timer
 }
 
 type interactivePlatform struct {
@@ -247,6 +322,22 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		}
 	}
 
+	// Parse mention_map for outbound bot-to-bot @ resolution.
+	// Maps agent-friendly names (e.g. "Collector-B") to Feishu open_ids,
+	// so that when an agent writes @Collector-B in its reply, cc-connect
+	// converts it to a native Feishu <at> tag that triggers a notification.
+	var mentionMap map[string]string
+	if mentionMapRaw, ok := opts["mention_map"]; ok {
+		if mm, ok := mentionMapRaw.(map[string]any); ok {
+			mentionMap = make(map[string]string, len(mm))
+			for name, id := range mm {
+				if idStr, ok := id.(string); ok && idStr != "" {
+					mentionMap[name] = idStr
+				}
+			}
+		}
+	}
+
 	progressStyle := "legacy"
 	if v, ok := opts["progress_style"].(string); ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
@@ -261,6 +352,18 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	useInteractiveCard := true
 	if v, ok := opts["enable_feishu_card"].(bool); ok {
 		useInteractiveCard = v
+	}
+
+	imageBatchWindow := defaultImageBatchWindow
+	if raw, ok := opts["image_batch_window_ms"]; ok {
+		ms, err := coerceMilliseconds(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: invalid image_batch_window_ms %v: %w", name, raw, err)
+		}
+		if ms < 0 {
+			return nil, fmt.Errorf("%s: image_batch_window_ms must be >= 0, got %d", name, ms)
+		}
+		imageBatchWindow = time.Duration(ms) * time.Millisecond
 	}
 
 	// Webhook mode configuration (for Lark international version)
@@ -304,6 +407,9 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		callbackPath:               callbackPath,
 		encryptKey:                 encryptKey,
 		peerBots:                   peerBots,
+		mentionMap:                 mentionMap,
+		imageBatch:                 make(map[string]*imageBatchEntry),
+		imageBatchWindow:           imageBatchWindow,
 	}
 	if !useInteractiveCard {
 		base.self = base
@@ -677,13 +783,14 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
 		h := p.getHandler()
 		go h(p.dispatchPlatform(), &core.Message{
-			SessionKey: sessionKey,
-			Platform:   p.platformName,
-			UserID:     userID,
-			UserName:   p.resolveUserName(userID),
-			ChatName:   p.resolveChatName(chatID),
-			Content:    responseText,
-			ReplyCtx:   rctx,
+			SessionKey:           sessionKey,
+			Platform:             p.platformName,
+			UserID:               userID,
+			UserName:             p.resolveUserName(userID),
+			ChatName:             p.resolveChatName(chatID),
+			Content:              responseText,
+			ReplyCtx:             rctx,
+			IsPermissionResponse: true,
 		})
 
 		permLabel, _ := event.Event.Action.Value["perm_label"].(string)
@@ -736,7 +843,7 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 		}, nil
 	}
 
-	// cmd: — async command dispatch
+	// cmd: — async command dispatch, with optional in-place card replacement
 	if strings.HasPrefix(actionVal, "cmd:") {
 		cmdText := strings.TrimPrefix(actionVal, "cmd:")
 		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
@@ -753,6 +860,30 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 			Content:    cmdText,
 			ReplyCtx:   rctx,
 		})
+
+		if ac, ok := event.Event.Action.Value["after_click"].(map[string]any); ok {
+			if title, _ := ac["title"].(string); title != "" {
+				color, _ := ac["color"].(string)
+				if color == "" {
+					color = "green"
+				}
+				cb := core.NewCard().Title(title, color)
+				if md, _ := ac["markdown"].(string); md != "" {
+					cb.Markdown(md)
+				}
+				if linkText, _ := ac["link_text"].(string); linkText != "" {
+					if linkURL, _ := ac["link_url"].(string); linkURL != "" {
+						cb.Divider().Markdown("[" + linkText + "](" + linkURL + ")")
+					}
+				}
+				return &callback.CardActionTriggerResponse{
+					Card: &callback.Card{
+						Type: "raw",
+						Data: renderCardMap(cb.Build(), sessionKey),
+					},
+				}, nil
+			}
+		}
 	}
 
 	return nil, nil
@@ -965,6 +1096,135 @@ func (p *Platform) dispatchCoreMessage(msg *core.Message) {
 	h(p.dispatchPlatform(), msg)
 }
 
+// bufferImage adds a freshly-downloaded image to the per-session batch buffer.
+// Consecutive image-only messages from the same session (same chatID + userID
+// + parentID) coalesce into a single multi-image dispatch after imageBatchWindow
+// of quiet time. A context mismatch (different parentID or userID) flushes the
+// existing batch immediately before the new one starts.
+//
+// The timer callback captures the entry pointer; flushImageBatchByRef verifies
+// the entry hasn't been superseded before dispatching, so a stale timer firing
+// after a replace or Stop will be a safe no-op.
+func (p *Platform) bufferImage(sessionKey string, entry *imageBatchEntry) {
+	p.imageBatchMu.Lock()
+	if p.imageBatch == nil {
+		// Lazy-init so tests that construct &Platform{} directly can still
+		// exercise the image path without remembering to allocate the map.
+		p.imageBatch = make(map[string]*imageBatchEntry)
+	}
+
+	// If a batch for this session exists with different context (parentID or
+	// userID), flush it first so we never mix unrelated batches.
+	var toFlush *imageBatchEntry
+	if existing, ok := p.imageBatch[sessionKey]; ok {
+		if existing.parentID != entry.parentID || existing.userID != entry.userID {
+			if existing.timer != nil {
+				existing.timer.Stop()
+			}
+			delete(p.imageBatch, sessionKey)
+			toFlush = existing
+		}
+	}
+
+	if existing, ok := p.imageBatch[sessionKey]; ok {
+		// Append into the existing batch and reset its timer.
+		if existing.timer != nil {
+			existing.timer.Stop()
+		}
+		existing.images = append(existing.images, entry.images...)
+		existing.messageIDs = append(existing.messageIDs, entry.messageIDs...)
+		if entry.createTimeMs > existing.createTimeMs {
+			existing.createTimeMs = entry.createTimeMs
+		}
+		ref := existing
+		existing.timer = time.AfterFunc(p.batchWindow(), func() {
+			p.flushImageBatchByRef(sessionKey, ref)
+		})
+	} else {
+		// Start a fresh batch with its own timer.
+		ref := entry
+		entry.timer = time.AfterFunc(p.batchWindow(), func() {
+			p.flushImageBatchByRef(sessionKey, ref)
+		})
+		p.imageBatch[sessionKey] = entry
+	}
+
+	p.imageBatchMu.Unlock()
+
+	if toFlush != nil {
+		p.dispatchImageBatchEntry(toFlush)
+	}
+}
+
+// flushImageBatchByRef dispatches the batch iff the map still points at the
+// same entry pointer (i.e. the timer wasn't superseded). Called by the
+// AfterFunc timer callback.
+func (p *Platform) flushImageBatchByRef(sessionKey string, ref *imageBatchEntry) {
+	p.imageBatchMu.Lock()
+	current, ok := p.imageBatch[sessionKey]
+	if !ok || current != ref {
+		p.imageBatchMu.Unlock()
+		return
+	}
+	if current.timer != nil {
+		current.timer.Stop()
+	}
+	delete(p.imageBatch, sessionKey)
+	p.imageBatchMu.Unlock()
+
+	p.dispatchImageBatchEntry(current)
+}
+
+// flushImageBatches synchronously dispatches any pending image batches.
+// Intended to be called from Stop() so buffered images aren't lost when
+// cc-connect shuts down.
+func (p *Platform) flushImageBatches() {
+	p.imageBatchMu.Lock()
+	pending := p.imageBatch
+	p.imageBatch = make(map[string]*imageBatchEntry)
+	p.imageBatchMu.Unlock()
+
+	for _, entry := range pending {
+		if entry.timer != nil {
+			entry.timer.Stop()
+		}
+		p.dispatchImageBatchEntry(entry)
+	}
+}
+
+// dispatchImageBatchEntry emits a single core.Message carrying all images
+// that were buffered into this batch entry. The newest create_time is used
+// as UserMessageTimeMs so the merged message preserves the user's intended
+// ordering, and the newest message_id is used as the canonical id.
+func (p *Platform) dispatchImageBatchEntry(entry *imageBatchEntry) {
+	if len(entry.images) == 0 {
+		return
+	}
+	lastIdx := len(entry.messageIDs) - 1
+	canonicalID := entry.messageIDs[lastIdx]
+	for _, mid := range entry.messageIDs {
+		if p.isMessageRecalled(mid) {
+			slog.Debug(p.tag()+": recalled image batch member dropped",
+				"message_id", mid, "batch_size", len(entry.images))
+		}
+	}
+	slog.Info(p.tag()+": dispatched image batch",
+		"session_key", entry.sessionKey,
+		"image_count", len(entry.images),
+		"message_ids", entry.messageIDs,
+	)
+	p.dispatchCoreMessage(&core.Message{
+		SessionKey: entry.sessionKey, Platform: p.platformName,
+		MessageID: canonicalID,
+		UserID:    entry.userID, UserName: entry.userName, ChatName: entry.chatName,
+		Content:           "",
+		ExtraContent:      entry.quoted.text,
+		Images:            append(entry.quoted.images, entry.images...),
+		ReplyCtx:          entry.rctx,
+		UserMessageTimeMs: entry.createTimeMs,
+	})
+}
+
 func (p *Platform) onMessageRecalled(_ context.Context, event *larkim.P2MessageRecalledV1) error {
 	if event == nil || event.Event == nil {
 		return nil
@@ -1033,6 +1293,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 		return nil
 	}
 
+	var createTimeMs int64
 	if msg.CreateTime != nil {
 		if ms, err := strconv.ParseInt(*msg.CreateTime, 10, 64); err == nil {
 			msgTime := time.Unix(ms/1000, (ms%1000)*int64(time.Millisecond))
@@ -1040,6 +1301,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 				slog.Debug(p.tag()+": ignoring old message after restart", "create_time", *msg.CreateTime)
 				return nil
 			}
+			createTimeMs = ms
 		}
 	}
 
@@ -1128,7 +1390,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	// blocked by IO-heavy operations (image/audio download, handler HTTP calls).
 	// The dedup and old-message checks above remain synchronous to guarantee
 	// correctness before spawning the goroutine.
-	go p.dispatchMessage(ctx, msgType, content, mentions, messageID, sessionKey, userID, chatID, rctx, parentID)
+	go p.dispatchMessage(ctx, msgType, content, mentions, messageID, sessionKey, userID, chatID, rctx, parentID, createTimeMs)
 
 	return nil
 }
@@ -1145,7 +1407,7 @@ func (p *Platform) replyUnauthorizedAccess(ctx context.Context, rctx replyContex
 // dispatchMessage handles the message content parsing, media download, and
 // handler invocation. It runs in its own goroutine so that onMessage returns
 // quickly and does not block the SDK event loop.
-func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, messageID, sessionKey, userID, chatID string, rctx replyContext, parentID string) {
+func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, messageID, sessionKey, userID, chatID string, rctx replyContext, parentID string, createTimeMs int64) {
 	if p.isMessageRecalled(messageID) {
 		slog.Debug(p.tag()+": recalled message ignored in async dispatch", "message_id", messageID)
 		return
@@ -1191,6 +1453,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			MessageID: messageID,
 			UserID:    userID, UserName: userName, ChatName: chatName,
 			Content: text, ExtraContent: quoted.text, Images: quoted.images, ReplyCtx: rctx,
+			UserMessageTimeMs: createTimeMs,
 		})
 
 	case "image":
@@ -1209,12 +1472,36 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			}
 			return
 		}
+		// Batch consecutive image-only messages from the same session into a
+		// single multi-image dispatch. Feishu mobile sends N batch-selected
+		// images as N separate events with very close create_time values;
+		// dispatching each immediately causes core/engine's create_time
+		// watermark (PR #1168) to drop the oldest image (issue #1395).
+		// We only coalesce plain image messages (no quoted context) because
+		// quoted images are usually a single image replying to a prior text.
+		if parentID == "" {
+			p.bufferImage(sessionKey, &imageBatchEntry{
+				sessionKey:   sessionKey,
+				userID:       userID,
+				userName:     userName,
+				chatName:     chatName,
+				rctx:         rctx,
+				images:       []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
+				messageIDs:   []string{messageID},
+				createTimeMs: createTimeMs,
+				parentID:     parentID,
+			})
+			return
+		}
 		p.dispatchCoreMessage(&core.Message{
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
 			UserID:    userID, UserName: userName, ChatName: chatName,
-			Images:   []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
-			ReplyCtx: rctx,
+			Content:           "",
+			ExtraContent:      quoted.text,
+			Images:            append(quoted.images, core.ImageAttachment{MimeType: mimeType, Data: imgData}),
+			ReplyCtx:          rctx,
+			UserMessageTimeMs: createTimeMs,
 		})
 
 	case "audio":
@@ -1245,7 +1532,8 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 				Format:   "ogg",
 				Duration: audioBody.Duration / 1000,
 			},
-			ReplyCtx: rctx,
+			ReplyCtx:          rctx,
+			UserMessageTimeMs: createTimeMs,
 		})
 
 	case "post":
@@ -1259,7 +1547,8 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			MessageID: messageID,
 			UserID:    userID, UserName: userName, ChatName: chatName,
 			Content: text, ExtraContent: quoted.text, Images: append(quoted.images, images...),
-			ReplyCtx: rctx,
+			ReplyCtx:          rctx,
+			UserMessageTimeMs: createTimeMs,
 		})
 
 	case "file":
@@ -1291,7 +1580,8 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 				Data:     fileData,
 				FileName: fileBody.FileName,
 			}},
-			ReplyCtx: rctx,
+			ReplyCtx:          rctx,
+			UserMessageTimeMs: createTimeMs,
 		})
 
 	case "merge_forward":
@@ -1304,10 +1594,11 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
 			UserID:    userID, UserName: userName, ChatName: chatName,
-			Content:  text,
-			Images:   images,
-			Files:    files,
-			ReplyCtx: rctx,
+			Content:           text,
+			Images:            images,
+			Files:             files,
+			ReplyCtx:          rctx,
+			UserMessageTimeMs: createTimeMs,
 		}
 		p.dispatchCoreMessage(coreMsg)
 
@@ -1328,6 +1619,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 				MessageID: messageID,
 				UserID:    userID, UserName: userName, ChatName: chatName,
 				Content: "[sticker]", ExtraContent: quoted.text, ReplyCtx: rctx,
+				UserMessageTimeMs: createTimeMs,
 			})
 			return
 		}
@@ -1335,8 +1627,9 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
 			UserID:    userID, UserName: userName, ChatName: chatName,
-			Images:   []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
-			ReplyCtx: rctx,
+			Images:            []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
+			ReplyCtx:          rctx,
+			UserMessageTimeMs: createTimeMs,
 		})
 
 	case "media":
@@ -1372,6 +1665,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			MessageID: messageID,
 			UserID:    userID, UserName: userName, ChatName: chatName,
 			Content: text, ExtraContent: quoted.text, Images: images, ReplyCtx: rctx,
+			UserMessageTimeMs: createTimeMs,
 		})
 
 	default:
@@ -1545,42 +1839,59 @@ func (p *Platform) getChatMembers(ctx context.Context, chatID string) map[string
 
 // resolveMentionsInContent replaces @name with Feishu at tags in raw content
 // (before JSON serialization). Reverse-matches against the chat member list,
-// longest name first. Uses the correct at syntax based on predicted message type.
+// longest name first. Always emits the MsgTypeText at syntax
+// (<at user_id="...">name</at>) because Feishu only fires mention events for
+// <at> inside MsgTypeText — not inside cards or post messages.
 func (p *Platform) resolveMentionsInContent(ctx context.Context, chatID, content string) string {
 	if !p.resolveMentions || chatID == "" || !strings.Contains(content, "@") {
 		return content
 	}
+	// Build merged name -> open_id map.
+	// Layer 1: group member display names (existing behavior, lower priority).
+	// Layer 2: mentionMap entries (explicit config, higher priority).
+	merged := make(map[string]string)
+
 	members := p.getChatMembers(ctx, chatID)
-	if len(members) == 0 {
+	for name, openID := range members {
+		if openID != "" {
+			merged[name] = openID
+		}
+	}
+
+	p.mu.RLock()
+	for name, openID := range p.mentionMap {
+		if openID != "" {
+			merged[name] = openID
+		}
+	}
+	p.mu.RUnlock()
+
+	if len(merged) == 0 {
 		return content
 	}
+
 	// Sort names longest-first to avoid partial matches.
-	names := make([]string, 0, len(members))
-	for name := range members {
+	names := make([]string, 0, len(merged))
+	for name := range merged {
 		names = append(names, name)
 	}
 	sort.Slice(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
 
-	useCardFormat := predictMsgType(content) == larkim.MsgTypeInteractive
 	result := content
 	for _, name := range names {
 		pattern := "@" + name
 		if !strings.Contains(result, pattern) {
 			continue
 		}
-		openID := members[name]
+		openID := merged[name]
 		if openID == "" {
-			slog.Debug(p.tag()+": skipping ambiguous mention", "name", name)
-			continue
+			continue // ambiguous member, skip
 		}
-		var atTag string
-		if useCardFormat {
-			atTag = fmt.Sprintf(`<at id=%s></at>`, openID)
-		} else {
-			escapedName := html.EscapeString(name)
-			atTag = fmt.Sprintf(`<at user_id="%s">%s</at>`, openID, escapedName)
-		}
-		slog.Debug(p.tag()+": mention resolved", "name", name, "card_format", useCardFormat)
+		// Always use the MsgTypeText at syntax so Feishu fires a mention
+		// event. The card variant (<at id=...></at>) renders the name but
+		// does NOT notify the target, which defeats bot-to-bot mentions.
+		escapedName := html.EscapeString(name)
+		atTag := fmt.Sprintf(`<at user_id="%s">%s</at>`, openID, escapedName)
 		result = strings.ReplaceAll(result, pattern, atTag)
 	}
 	return result
@@ -2354,16 +2665,22 @@ func (p *Platform) Send(ctx context.Context, rctx any, content string) error {
 // SendWithStatusFooter implements core.StatusFooterSender: send a reply with
 // the body content followed by a small/dim status-footer block. Always uses
 // the interactive card path so the footer can render with text_size:
-// "notation". Falls back to plain Send when the footer is empty.
+// "notation". Falls back to plain Send when the footer is empty or the content
+// contains a resolved @mention (Feishu only fires mention events for <at> tags
+// inside MsgTypeText, not inside cards).
 func (p *Platform) SendWithStatusFooter(ctx context.Context, rctx any, content, footer string) error {
-	if strings.TrimSpace(footer) == "" {
-		return p.Send(ctx, rctx, content)
-	}
 	rc, ok := rctx.(replyContext)
 	if !ok {
 		return fmt.Errorf("%s: invalid reply context type %T", p.tag(), rctx)
 	}
+	// Resolve mentions first so we can detect whether a real @mention is
 	content = p.resolveMentionsInContent(ctx, rc.chatID, content)
+	if strings.TrimSpace(footer) == "" || strings.Contains(content, `<at user_id=`) || strings.Contains(content, `<at id=`) {
+		if strings.TrimSpace(footer) != "" {
+			content += "\n\n" + footer
+		}
+		return p.Send(ctx, rctx, content)
+	}
 	processedBody := sanitizeMarkdownURLs(preprocessFeishuMarkdown(content))
 	processedFooter := sanitizeMarkdownURLs(preprocessFeishuMarkdown(footer))
 	cardJSON := buildCardJSONWithStatusFooter(processedBody, processedFooter)
@@ -2486,7 +2803,15 @@ func detectFeishuFileType(mimeType, fileName string) string {
 		return larkim.FileTypeXls
 	case strings.HasSuffix(name, ".ppt") || strings.HasSuffix(name, ".pptx"):
 		return larkim.FileTypePpt
-	case mimeType == "video/mp4" || strings.HasSuffix(name, ".mp4"):
+	// Feishu's file API only has "mp4" as the video type. We map all common
+	// video MIME types and extensions to FileTypeMp4 so the message renders
+	// as a native video player bubble rather than a generic file download.
+	// Actual playback compatibility (e.g. webm/mkv) depends on the Feishu
+	// client platform; mp4 H.264 has the broadest support.
+	case strings.HasPrefix(mimeType, "video/") ||
+		strings.HasSuffix(name, ".mp4") || strings.HasSuffix(name, ".mov") ||
+		strings.HasSuffix(name, ".avi") || strings.HasSuffix(name, ".m4v") ||
+		strings.HasSuffix(name, ".mkv") || strings.HasSuffix(name, ".webm"):
 		return larkim.FileTypeMp4
 	case mimeType == "audio/ogg" || mimeType == "audio/opus" || mimeType == "application/ogg" || strings.HasSuffix(name, ".ogg") || strings.HasSuffix(name, ".opus"):
 		return larkim.FileTypeOpus
@@ -2585,21 +2910,15 @@ func detectMimeType(data []byte) string {
 	return "image/png"
 }
 
-// predictMsgType returns the message type that buildReplyContent will choose,
-// without actually building the content. Used to select the correct at syntax
-// before building.
-func predictMsgType(content string) string {
-	if !containsMarkdown(content) {
-		return larkim.MsgTypeText
-	}
-	if countMarkdownTables(content) <= maxCardTables {
-		return larkim.MsgTypeInteractive
-	}
-	return larkim.MsgTypePost
-}
-
 func buildReplyContent(content string) (msgType string, body string) {
-	if !containsMarkdown(content) {
+	// Feishu does not generate mention events for <at> tags in card/post
+	// messages sent by bots. Force MsgTypeText when a real mention is present
+	// (resolved to an <at user_id="..."> or <at id=...> tag) so Feishu
+	// recognizes it and notifies the target bot. Checking the resolved tag
+	// instead of a bare "@" avoids false positives on email addresses, URLs,
+	// and escaped characters.
+	hasMention := strings.Contains(content, `<at user_id=`) || strings.Contains(content, `<at id=`)
+	if !containsMarkdown(content) || hasMention {
 		b, _ := json.Marshal(map[string]string{"text": content})
 		return larkim.MsgTypeText, string(b)
 	}
@@ -4244,6 +4563,8 @@ func (p *Platform) Stop() error {
 			slog.Error(p.tag()+": webhook server shutdown error", "error", err)
 		}
 	}
+	// Flush any pending image batches so buffered images aren't lost on shutdown.
+	p.flushImageBatches()
 	return nil
 }
 
@@ -4330,7 +4651,82 @@ func (p *Platform) SendAudio(ctx context.Context, rctx any, audio []byte, format
 		return fmt.Errorf("%s: build audio message: %w", p.tag(), err)
 	}
 
+	// Diagnostic for QA-reported intermittent "audio rendered as file" in
+	// P2P reply mode (see internal task t-20260615-cqjbk1). Tracking the
+	// API path lets operators correlate Feishu client renders to whether
+	// we used Reply (in-thread) or Create (new message) when issues
+	// recur. The Reply path has historically had narrower MsgType
+	// support on some Feishu desktop client versions.
+	if p.shouldUseThreadOrReplyAPI(rc) {
+		slog.Debug(p.tag()+": SendAudio using Reply API",
+			"file_key", fileKey, "msg_id", rc.messageID, "format", format)
+	} else {
+		slog.Debug(p.tag()+": SendAudio using Create API",
+			"file_key", fileKey, "chat_id", rc.chatID, "format", format)
+	}
+
 	return p.sendMediaMessage(ctx, rc, larkim.MsgTypeAudio, audioContent)
+}
+
+// SendVideo uploads video bytes to Feishu and sends a native video
+// (MsgTypeMedia) message. Implements core.VideoSender.
+//
+// Feishu's File API only recognises "mp4" as the video file_type, so
+// every input is uploaded under that label. Actual playback depends on
+// the Feishu client (mp4 H.264 has the broadest support); other
+// containers like webm / mkv typically still upload but may render as
+// a download tile on some clients. The fallback path to SendFile in
+// engine.go preserves at least delivery when this happens.
+func (p *Platform) SendVideo(ctx context.Context, rctx any, video []byte, format string, fileName string) error {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("%s: SendVideo: invalid reply context type %T", p.tag(), rctx)
+	}
+	if fileName == "" {
+		if format != "" {
+			fileName = "video." + format
+		} else {
+			fileName = "video.mp4"
+		}
+	}
+
+	var uploadResp *larkim.CreateFileResp
+	if err := p.withTransientRetry(ctx, "upload video", func() error {
+		return p.withFreshTenantAccessTokenRetry(ctx, "upload video", func(client *lark.Client, options ...larkcore.RequestOptionFunc) error {
+			req := larkim.NewCreateFileReqBuilder().
+				Body(larkim.NewCreateFileReqBodyBuilder().
+					FileType(larkim.FileTypeMp4).
+					FileName(fileName).
+					File(bytes.NewReader(video)).
+					Build()).
+				Build()
+			var err error
+			uploadResp, err = client.Im.File.Create(ctx, req, options...)
+			if err != nil {
+				return fmt.Errorf("%s: upload video: %w", p.tag(), err)
+			}
+			if !uploadResp.Success() {
+				return fmt.Errorf("%s: upload video code=%d msg=%s", p.tag(), uploadResp.Code, uploadResp.Msg)
+			}
+			return nil
+		})
+	}); err != nil {
+		return err
+	}
+	if uploadResp.Data == nil || uploadResp.Data.FileKey == nil {
+		return fmt.Errorf("%s: upload video: no file_key returned", p.tag())
+	}
+	fileKey := *uploadResp.Data.FileKey
+
+	slog.Debug(p.tag()+": video uploaded", "file_key", fileKey, "format", format, "size", len(video))
+
+	mediaMsg := larkim.MessageMedia{FileKey: fileKey}
+	mediaContent, err := mediaMsg.String()
+	if err != nil {
+		return fmt.Errorf("%s: build video message: %w", p.tag(), err)
+	}
+
+	return p.sendMediaMessage(ctx, rc, larkim.MsgTypeMedia, mediaContent)
 }
 
 type postElement struct {
@@ -5890,10 +6286,9 @@ func buildRichCardJSONBytes(status core.CardStatus, steps []core.ToolStep, markd
 				continue
 			}
 			footerElements = append(footerElements, map[string]any{
-				"tag":        "markdown",
-				"content":    sanitizeCardMarkdownForCard(line),
-				"text_size":  "notation",
-				"text_color": "grey",
+				"tag":       "markdown",
+				"content":   sanitizeCardMarkdownForCard(line),
+				"text_size": "notation",
 			})
 		}
 	}
