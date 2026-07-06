@@ -579,6 +579,9 @@ func (s *APIServer) handleCronEdit(w http.ResponseWriter, r *http.Request) {
 type TimerAddRequest struct {
 	Project     string `json:"project"`
 	SessionKey  string `json:"session_key"`
+	UserID      string `json:"user_id,omitempty"`
+	UserName    string `json:"user_name,omitempty"`
+	UserEmail   string `json:"user_email,omitempty"`
 	Delay       string `json:"delay"` // relative ("2h") or absolute ISO time
 	Prompt      string `json:"prompt"`
 	Exec        string `json:"exec"`
@@ -661,6 +664,9 @@ func (s *APIServer) handleTimerAdd(w http.ResponseWriter, r *http.Request) {
 		ID:          GenerateTimerID(),
 		Project:     project,
 		SessionKey:  sessionKey,
+		UserID:      req.UserID,
+		UserName:    req.UserName,
+		UserEmail:   req.UserEmail,
 		ScheduledAt: fireAt,
 		Prompt:      req.Prompt,
 		Exec:        req.Exec,
@@ -673,6 +679,7 @@ func (s *APIServer) handleTimerAdd(w http.ResponseWriter, r *http.Request) {
 		TimeoutMins: req.TimeoutMins,
 		CreatedAt:   time.Now(),
 	}
+	EnsureTimerJobUser(job)
 
 	if err := s.timer.AddJob(job); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

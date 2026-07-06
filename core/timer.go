@@ -18,6 +18,9 @@ type TimerJob struct {
 	ID          string    `json:"id"`
 	Project     string    `json:"project"`
 	SessionKey  string    `json:"session_key"`
+	UserID      string    `json:"user_id,omitempty"`
+	UserName    string    `json:"user_name,omitempty"`
+	UserEmail   string    `json:"user_email,omitempty"`
 	ScheduledAt time.Time `json:"scheduled_at"` // absolute fire time
 	Prompt      string    `json:"prompt"`
 	Exec        string    `json:"exec,omitempty"`     // shell command; mutually exclusive with Prompt
@@ -39,7 +42,37 @@ func (j *TimerJob) IsShellJob() bool {
 	return j.Exec != ""
 }
 
-const defaultTimerJobTimeout = 30 * time.Minute
+const (
+	defaultTimerJobTimeout = 30 * time.Minute
+)
+
+// FillTimerJobUserFromMessage copies creator identity from an inbound message.
+func FillTimerJobUserFromMessage(job *TimerJob, msg *Message) {
+	if job == nil || msg == nil {
+		return
+	}
+	job.UserID, job.UserName, job.UserEmail = userIdentityFromMessage(msg)
+	EnsureTimerJobUser(job)
+}
+
+// EnsureTimerJobUser fills missing user_id from session_key when possible.
+func EnsureTimerJobUser(job *TimerJob) {
+	if job == nil {
+		return
+	}
+	ensureJobUserID(job.SessionKey, &job.UserID)
+}
+
+// ResolveTimerJobUser returns the user identity to use when executing a timer job.
+// Stored fields take precedence; user_id falls back to session_key parsing, then "timer".
+// The synthetic identity "cron" is never used; encountering it logs a warning.
+func ResolveTimerJobUser(job *TimerJob) (userID, userName, userEmail string) {
+	if job == nil {
+		slog.Warn("timer: job is nil, using synthetic user identity", "fallback", timerSyntheticUserID)
+		return timerSyntheticUserID, timerSyntheticUserID, ""
+	}
+	return resolveScheduledJobUser(timerUserPolicy, job.ID, job.SessionKey, job.UserID, job.UserName, job.UserEmail)
+}
 
 // ExecutionTimeout returns how long the scheduler waits for the job goroutine to finish.
 func (j *TimerJob) ExecutionTimeout() time.Duration {
@@ -238,10 +271,10 @@ func (s *TimerStore) ListPending() []*TimerJob {
 
 // TimerScheduler runs one-shot timer jobs using time.AfterFunc.
 type TimerScheduler struct {
-	store    *TimerStore
-	engines  map[string]*Engine
-	mu       sync.RWMutex
-	timers   map[string]*time.Timer // job ID → active timer
+	store              *TimerStore
+	engines            map[string]*Engine
+	mu                 sync.RWMutex
+	timers             map[string]*time.Timer // job ID → active timer
 	defaultSilent      bool
 	defaultSessionMode string
 }

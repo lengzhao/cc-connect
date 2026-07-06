@@ -1378,10 +1378,10 @@ func TestProcessInteractiveEvents_NonTerminalResultContinuesTurn(t *testing.T) {
 	session := e.sessions.GetOrCreateActive(sessionKey)
 	agentSession := newControllableSession("s1")
 	state := &interactiveState{
-		agentSession:                  agentSession,
-		platform:                      p,
-		replyCtx:                      "ctx-1",
-		currentTurnUserMessageTimeMs:  100,
+		agentSession:                   agentSession,
+		platform:                       p,
+		replyCtx:                       "ctx-1",
+		currentTurnUserMessageTimeMs:   100,
 		lastCompletedUserMessageTimeMs: 0,
 	}
 	e.interactiveStates[sessionKey] = state
@@ -10956,12 +10956,12 @@ func TestBuildAgentPrompt_InjectTimestamp(t *testing.T) {
 
 type stubTZPlatform struct{ tz string }
 
-func (s stubTZPlatform) Name() string                            { return "stub" }
-func (s stubTZPlatform) Start(MessageHandler) error              { return nil }
+func (s stubTZPlatform) Name() string                             { return "stub" }
+func (s stubTZPlatform) Start(MessageHandler) error               { return nil }
 func (s stubTZPlatform) Reply(context.Context, any, string) error { return nil }
 func (s stubTZPlatform) Send(context.Context, any, string) error  { return nil }
-func (s stubTZPlatform) Stop() error                             { return nil }
-func (s stubTZPlatform) UserTimezone(string) string              { return s.tz }
+func (s stubTZPlatform) Stop() error                              { return nil }
+func (s stubTZPlatform) UserTimezone(string) string               { return s.tz }
 
 func TestBuildAgentPrompt_InjectTimestampUsesPlatformTimezone(t *testing.T) {
 	e := newTestEngine()
@@ -13628,6 +13628,107 @@ func TestCmdCronAdd_StoresCreatorUser(t *testing.T) {
 	}
 }
 
+func TestExecuteTimerJob_InjectStoredUserIdentity(t *testing.T) {
+	var timerHook HookEvent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		if err := json.Unmarshal(body, &timerHook); err != nil {
+			t.Errorf("unmarshal body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	store, err := NewTimerStore(dir)
+	if err != nil {
+		t.Fatalf("NewTimerStore() error = %v", err)
+	}
+	sched := NewTimerScheduler(store)
+
+	platform := &stubCronReplyTargetPlatform{
+		stubPlatformEngine: stubPlatformEngine{n: "discord"},
+	}
+	agentSession := newResultAgentSession("timer complete")
+	agent := &resultAgent{session: agentSession}
+
+	e := NewEngine("test", agent, []Platform{platform}, "", LangEnglish)
+	defer e.cancel()
+	e.SetTimerScheduler(sched)
+	e.injectSender = true
+	e.SetHooks(NewHookManager("test", []HookConfig{{
+		Event: string(HookEventTimerTriggered),
+		Type:  "http",
+		URL:   srv.URL,
+		Async: boolPtr(false),
+	}}, "sh", "-c", ""))
+
+	job := &TimerJob{
+		ID:          "job-user",
+		SessionKey:  "discord:channel-1:alice",
+		ScheduledAt: time.Now(),
+		Prompt:      "check status",
+		Description: "Status check",
+		UserID:      "alice",
+		UserName:    "Alice",
+		UserEmail:   "alice@example.com",
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatalf("store.Add() error = %v", err)
+	}
+
+	if err := e.ExecuteTimerJob(job); err != nil {
+		t.Fatalf("ExecuteTimerJob() error = %v", err)
+	}
+
+	if timerHook.UserID != "alice" || timerHook.UserName != "Alice" || timerHook.UserEmail != "alice@example.com" {
+		t.Fatalf("timer hook user = (%q, %q, %q)", timerHook.UserID, timerHook.UserName, timerHook.UserEmail)
+	}
+	if len(agentSession.sentPrompts) != 1 {
+		t.Fatalf("sentPrompts = %#v, want 1", agentSession.sentPrompts)
+	}
+	if !strings.Contains(agentSession.sentPrompts[0], "sender_id=alice") {
+		t.Fatalf("prompt = %q, want sender_id=alice", agentSession.sentPrompts[0])
+	}
+	if strings.Contains(agentSession.sentPrompts[0], "sender_id=cron") {
+		t.Fatalf("prompt must not contain sender_id=cron: %q", agentSession.sentPrompts[0])
+	}
+}
+
+func TestCmdTimerAdd_StoresCreatorUser(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewTimerStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := NewTimerScheduler(store)
+
+	p := &stubPlatformEngine{n: "plain"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetTimerScheduler(ts)
+
+	e.handleMessage(p, &Message{
+		SessionKey: "plain:user1",
+		UserID:     "user1",
+		UserName:   "User One",
+		UserEmail:  "user1@example.com",
+		Content:    "/timer add 2h check inbox",
+		ReplyCtx:   "ctx",
+	})
+
+	jobs := store.ListBySessionKey("plain:user1")
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %d, want 1", len(jobs))
+	}
+	job := jobs[0]
+	if job.UserID != "user1" || job.UserName != "User One" || job.UserEmail != "user1@example.com" {
+		t.Fatalf("stored user = (%q, %q, %q)", job.UserID, job.UserName, job.UserEmail)
+	}
+}
+
 func TestExecuteCronJob_WorkspacePrefixedSessionKey(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewCronStore(dir)
@@ -15739,8 +15840,8 @@ func TestIsAllowResponse_WithMultipleMentions(t *testing.T) {
 func TestIsAllowResponse_NotInsideOtherWord(t *testing.T) {
 	cases := []string{
 		"禁止允许这种",
-		"不允许这样",   // "不允许" has its own deny entry, but as part of "不允许这样" the user clearly is denying / negating, never allowing.
-		"我不太允许这件事", // long sentence, no token equals "允许"
+		"不允许这样",                            // "不允许" has its own deny entry, but as part of "不允许这样" the user clearly is denying / negating, never allowing.
+		"我不太允许这件事",                         // long sentence, no token equals "允许"
 		"please don't allowall the things", // FieldsFunc keeps "allowall" intact, but it is the approveAll single-token form, not allow.
 		"hello world",
 		"",
@@ -15768,7 +15869,7 @@ func TestIsDenyResponse_WithMention(t *testing.T) {
 	}
 
 	negatives := []string{
-		"拒绝症患者",       // embedded — must not match
+		"拒绝症患者",        // embedded — must not match
 		"我们都不应该 hello", // unrelated
 	}
 	for _, s := range negatives {

@@ -1,9 +1,11 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,7 +115,6 @@ func TestMutePlatform_DiscardMessages(t *testing.T) {
 		t.Errorf("mutePlatform should delegate Name(), got %q", mp.Name())
 	}
 }
-
 
 func TestCronJob_MuteField(t *testing.T) {
 	job := &CronJob{ID: "m1", Mute: false}
@@ -894,11 +895,42 @@ func TestResolveCronJobUser_FallbackFromSessionKey(t *testing.T) {
 	}
 }
 
-func TestResolveCronJobUser_LegacyFallbackCron(t *testing.T) {
-	job := &CronJob{SessionKey: "dingtalk:g:cid"}
+func TestResolveCronJobUser_SyntheticFallbackWhenUnresolved(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	job := &CronJob{ID: "c1", SessionKey: "dingtalk:g:cid"}
 	userID, userName, userEmail := ResolveCronJobUser(job)
 	if userID != "cron" || userName != "cron" || userEmail != "" {
 		t.Fatalf("ResolveCronJobUser() = (%q, %q, %q), want cron/cron/empty", userID, userName, userEmail)
+	}
+	logs := buf.String()
+	if !strings.Contains(logs, `using synthetic user identity`) || !strings.Contains(logs, "cron") {
+		t.Fatalf("expected synthetic cron warning, got: %s", logs)
+	}
+}
+
+func TestResolveCronJobUser_AllowsStoredCronWithWarning(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	job := &CronJob{
+		ID:         "c2",
+		SessionKey: "telegram:123:456",
+		UserID:     "cron",
+		UserName:   "cron",
+	}
+	userID, userName, _ := ResolveCronJobUser(job)
+	if userID != "cron" || userName != "cron" {
+		t.Fatalf("ResolveCronJobUser() = (%q, %q), want cron/cron", userID, userName)
+	}
+	logs := buf.String()
+	if !strings.Contains(logs, `using synthetic user identity`) {
+		t.Fatalf("expected synthetic cron warning, got: %s", logs)
 	}
 }
 

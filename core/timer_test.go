@@ -1,8 +1,11 @@
 package core
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,11 +20,11 @@ func TestParseDelayOrTime_Relative(t *testing.T) {
 		{"1h30m", false},
 		{"2h30m15s", false},
 		{"500ms", false},
-		{"0s", true},       // zero = not positive
-		{"-1h", true},      // negative
-		{"", true},         // empty
-		{"garbage", true},  // invalid
-		{"2", true},        // bare number
+		{"0s", true},      // zero = not positive
+		{"-1h", true},     // negative
+		{"", true},        // empty
+		{"garbage", true}, // invalid
+		{"2", true},       // bare number
 	}
 
 	for _, tt := range tests {
@@ -524,5 +527,107 @@ func TestTimerStore_FilePath(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Dir(store.path)); err != nil {
 		t.Errorf("timers directory not created: %v", err)
+	}
+}
+
+func TestResolveTimerJobUser_StoredFields(t *testing.T) {
+	job := &TimerJob{
+		SessionKey: "discord:channel-1:alice",
+		UserID:     "alice",
+		UserName:   "Alice",
+		UserEmail:  "alice@example.com",
+	}
+	userID, userName, userEmail := ResolveTimerJobUser(job)
+	if userID != "alice" || userName != "Alice" || userEmail != "alice@example.com" {
+		t.Fatalf("ResolveTimerJobUser() = (%q, %q, %q)", userID, userName, userEmail)
+	}
+}
+
+func TestResolveTimerJobUser_FallbackFromSessionKey(t *testing.T) {
+	job := &TimerJob{SessionKey: "telegram:123:456"}
+	userID, userName, _ := ResolveTimerJobUser(job)
+	if userID != "456" {
+		t.Fatalf("userID = %q, want 456", userID)
+	}
+	if userName != "456" {
+		t.Fatalf("userName = %q, want 456", userName)
+	}
+}
+
+func TestResolveTimerJobUser_RejectsCron(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	job := &TimerJob{
+		ID:         "t1",
+		SessionKey: "telegram:123:456",
+		UserID:     "cron",
+		UserName:   "cron",
+	}
+	userID, userName, _ := ResolveTimerJobUser(job)
+	if userID == "cron" || userName == "cron" {
+		t.Fatalf("ResolveTimerJobUser() must not return cron, got (%q, %q)", userID, userName)
+	}
+	if userID != "456" {
+		t.Fatalf("userID = %q, want 456 from session_key", userID)
+	}
+	logs := buf.String()
+	if !strings.Contains(logs, `rejected user_id`) || !strings.Contains(logs, "cron") {
+		t.Fatalf("expected cron rejection warning in logs, got: %s", logs)
+	}
+}
+
+func TestResolveTimerJobUser_SyntheticFallbackWhenUnresolved(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	job := &TimerJob{ID: "t2", SessionKey: "dingtalk:g:cid"}
+	userID, userName, _ := ResolveTimerJobUser(job)
+	if userID != "timer" || userName != "timer" {
+		t.Fatalf("ResolveTimerJobUser() = (%q, %q), want timer/timer", userID, userName)
+	}
+	if !strings.Contains(buf.String(), "unable to resolve user identity") {
+		t.Fatalf("expected unresolved identity warning, got: %s", buf.String())
+	}
+}
+
+func TestFillTimerJobUserFromMessage(t *testing.T) {
+	job := &TimerJob{SessionKey: "slack:C1:bob"}
+	FillTimerJobUserFromMessage(job, &Message{
+		UserID: "bob", UserName: "Bob", UserEmail: "bob@example.com",
+	})
+	if job.UserID != "bob" || job.UserName != "Bob" || job.UserEmail != "bob@example.com" {
+		t.Fatalf("job user = (%q, %q, %q)", job.UserID, job.UserName, job.UserEmail)
+	}
+}
+
+func TestTimerStore_UserFieldsPersistence(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewTimerStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &TimerJob{
+		ID: "u1", Project: "proj", SessionKey: "slack:C1:alice",
+		UserID: "alice", UserName: "Alice", UserEmail: "alice@example.com",
+		ScheduledAt: time.Now().Add(time.Hour), Prompt: "ping", CreatedAt: time.Now(),
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewTimerStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reloaded.Get("u1")
+	if got == nil {
+		t.Fatal("job not found after reload")
+	}
+	if got.UserID != "alice" || got.UserName != "Alice" || got.UserEmail != "alice@example.com" {
+		t.Fatalf("user fields = (%q, %q, %q)", got.UserID, got.UserName, got.UserEmail)
 	}
 }

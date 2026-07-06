@@ -1592,9 +1592,13 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 // notification (unless muted), and either runs a shell command or injects a
 // synthetic message into the agent session.
 func (e *Engine) ExecuteTimerJob(job *TimerJob) error {
+	userID, userName, userEmail := ResolveTimerJobUser(job)
 	e.hooks.Emit(HookEvent{
 		Event:      HookEventTimerTriggered,
 		SessionKey: job.SessionKey,
+		UserID:     userID,
+		UserName:   userName,
+		UserEmail:  userEmail,
 		Content:    job.Prompt,
 		Extra:      map[string]any{"job_id": job.ID, "job_description": job.Description},
 	})
@@ -1702,8 +1706,9 @@ func (e *Engine) ExecuteTimerJob(job *TimerJob) error {
 	msg := &Message{
 		SessionKey:   sessionKey,
 		Platform:     platformName,
-		UserID:       "timer",
-		UserName:     "timer",
+		UserID:       userID,
+		UserName:     userName,
+		UserEmail:    userEmail,
 		Content:      content,
 		ReplyCtx:     replyCtx,
 		ModeOverride: job.Mode,
@@ -13986,6 +13991,7 @@ func (e *Engine) cmdTimerAdd(p Platform, msg *Message, args []string) {
 		Prompt:      prompt,
 		CreatedAt:   time.Now(),
 	}
+	FillTimerJobUserFromMessage(job, msg)
 
 	if err := e.timerScheduler.AddJob(job); err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
@@ -14024,6 +14030,7 @@ func (e *Engine) cmdTimerAddExec(p Platform, msg *Message, args []string) {
 		Exec:        shellCmd,
 		CreatedAt:   time.Now(),
 	}
+	FillTimerJobUserFromMessage(job, msg)
 
 	if err := e.timerScheduler.AddJob(job); err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))

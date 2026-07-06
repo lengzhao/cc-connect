@@ -48,7 +48,9 @@ func (j *CronJob) IsShellJob() bool {
 	return j.Exec != ""
 }
 
-const defaultCronJobTimeout = 30 * time.Minute
+const (
+	defaultCronJobTimeout = 30 * time.Minute
+)
 
 var (
 	ErrCronJobNotFound     = errors.New("cron job not found")
@@ -759,7 +761,6 @@ type mutePlatform struct {
 func (m *mutePlatform) Reply(_ context.Context, _ any, _ string) error { return nil }
 func (m *mutePlatform) Send(_ context.Context, _ any, _ string) error  { return nil }
 
-
 func GenerateCronID() string {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
@@ -998,9 +999,7 @@ func FillCronJobUserFromMessage(job *CronJob, msg *Message) {
 	if job == nil || msg == nil {
 		return
 	}
-	job.UserID = strings.TrimSpace(msg.UserID)
-	job.UserName = strings.TrimSpace(msg.UserName)
-	job.UserEmail = strings.TrimSpace(msg.UserEmail)
+	job.UserID, job.UserName, job.UserEmail = userIdentityFromMessage(msg)
 	EnsureCronJobUser(job)
 }
 
@@ -1009,57 +1008,16 @@ func EnsureCronJobUser(job *CronJob) {
 	if job == nil {
 		return
 	}
-	if strings.TrimSpace(job.UserID) == "" {
-		job.UserID = userIDFromSessionKey(job.SessionKey)
-	}
+	ensureJobUserID(job.SessionKey, &job.UserID)
 }
 
 // ResolveCronJobUser returns the user identity to use when executing a cron job.
 // Stored fields take precedence; user_id falls back to session_key parsing, then "cron".
+// Using the synthetic identity "cron" always logs a warning.
 func ResolveCronJobUser(job *CronJob) (userID, userName, userEmail string) {
 	if job == nil {
-		return "cron", "cron", ""
+		slog.Warn("cron: job is nil, using synthetic user identity", "fallback", cronSyntheticUserID)
+		return cronSyntheticUserID, cronSyntheticUserID, ""
 	}
-	userID = strings.TrimSpace(job.UserID)
-	userName = strings.TrimSpace(job.UserName)
-	userEmail = strings.TrimSpace(job.UserEmail)
-	if userID == "" {
-		userID = userIDFromSessionKey(job.SessionKey)
-	}
-	if userID == "" {
-		userID = "cron"
-	}
-	if userName == "" {
-		if userID == "cron" {
-			userName = "cron"
-		} else {
-			userName = userID
-		}
-	}
-	return userID, userName, userEmail
-}
-
-func userIDFromSessionKey(sessionKey string) string {
-	key := strings.TrimSpace(sessionKey)
-	if key == "" {
-		return ""
-	}
-	// Drop optional workspace prefix: "/path/to/project:platform:..."
-	if strings.HasPrefix(key, "/") {
-		if idx := strings.Index(key, ":"); idx >= 0 {
-			key = key[idx+1:]
-		}
-	}
-	// Format: "platform:channelID:userID" or "platform:type:channelID:userID"
-	parts := strings.SplitN(key, ":", 5)
-	if len(parts) >= 3 && len(parts[1]) == 1 {
-		if len(parts) >= 4 {
-			return parts[3]
-		}
-		return ""
-	}
-	if len(parts) >= 3 {
-		return parts[2]
-	}
-	return ""
+	return resolveScheduledJobUser(cronUserPolicy, job.ID, job.SessionKey, job.UserID, job.UserName, job.UserEmail)
 }
