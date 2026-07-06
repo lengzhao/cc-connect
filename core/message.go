@@ -259,6 +259,8 @@ type HistoryEntry struct {
 	Role      string    `json:"role"` // "user" or "assistant"
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
+	UserID    string    `json:"user_id,omitempty"`   // sender id (user messages only)
+	UserName  string    `json:"user_name,omitempty"` // sender display name (user messages only)
 }
 
 // AgentSessionInfo describes one session as reported by the agent backend.

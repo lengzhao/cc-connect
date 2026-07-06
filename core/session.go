@@ -80,13 +80,34 @@ func (s *Session) unlock(update bool) {
 }
 
 func (s *Session) AddHistory(role, content string) {
+	s.AddHistoryEntry(HistoryEntry{
+		Role:    role,
+		Content: content,
+	})
+}
+
+// AddUserHistory records a user message with optional sender identity.
+func (s *Session) AddUserHistory(content, userID, userName string) {
+	storedName := userName
+	if storedName == userID {
+		storedName = ""
+	}
+	s.AddHistoryEntry(HistoryEntry{
+		Role:     "user",
+		Content:  content,
+		UserID:   userID,
+		UserName: storedName,
+	})
+}
+
+// AddHistoryEntry appends one history entry. Zero Timestamp is set to time.Now().
+func (s *Session) AddHistoryEntry(entry HistoryEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.History = append(s.History, HistoryEntry{
-		Role:      role,
-		Content:   content,
-		Timestamp: time.Now(),
-	})
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now()
+	}
+	s.History = append(s.History, entry)
 }
 
 // recordPastAgentSessionID saves the current AgentSessionID to PastAgentSessionIDs

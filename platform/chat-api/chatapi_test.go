@@ -43,6 +43,9 @@ func TestNewDefaults(t *testing.T) {
 	if !strings.EqualFold(p.userHeader, "X-Chat-API-User") {
 		t.Fatalf("userHeader = %q", p.userHeader)
 	}
+	if !strings.EqualFold(p.userNameHeader, "X-Chat-API-User-Name") {
+		t.Fatalf("userNameHeader = %q", p.userNameHeader)
+	}
 	if p.busyPolicy != busyPolicyQueue {
 		t.Fatalf("busyPolicy = %q, want queue", p.busyPolicy)
 	}
@@ -63,6 +66,172 @@ func TestPairHistoryAndMessageID(t *testing.T) {
 	}
 	if countCompletedTurns(entries) != 1 {
 		t.Fatalf("completed turns = %d, want 1", countCompletedTurns(entries))
+	}
+}
+
+func TestPairHistoryWithUserIdentity(t *testing.T) {
+	entries := []core.HistoryEntry{
+		{Role: "user", Content: "q1", UserID: "uid_a", UserName: "Alice", Timestamp: time.Unix(100, 0)},
+		{Role: "assistant", Content: "a1", Timestamp: time.Unix(101, 0)},
+		{Role: "user", Content: "q2", UserID: "uid_b", Timestamp: time.Unix(200, 0)},
+		{Role: "assistant", Content: "a2", Timestamp: time.Unix(201, 0)},
+	}
+	pairs := pairHistory("s1", entries)
+	if len(pairs) != 2 {
+		t.Fatalf("pairs len = %d, want 2", len(pairs))
+	}
+	if pairs[0].UserID != "uid_a" || pairs[0].UserName != "Alice" {
+		t.Fatalf("first pair user = %+v", pairs[0])
+	}
+	if pairs[1].UserID != "uid_b" || pairs[1].UserName != "" {
+		t.Fatalf("second pair user = %+v", pairs[1])
+	}
+}
+
+func TestMessagesHTTPReturnsUserIdentity(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+	s := sm.NewSession("chat-api:user_001", "chat")
+	s.AddUserHistory("hello", "uid_a", "Alice")
+	s.AddHistory("assistant", "hi")
+	s.AddUserHistory("follow up", "uid_b", "Bob")
+	s.AddHistory("assistant", "sure")
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+s.ID+"/messages?limit=10", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Messages []map[string]any `json:"messages"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Data.Messages) != 2 {
+		t.Fatalf("messages = %+v", resp.Data.Messages)
+	}
+	latest := resp.Data.Messages[0]
+	if latest["user_id"] != "uid_b" || latest["user_name"] != "Bob" {
+		t.Fatalf("latest message user fields = %+v", latest)
+	}
+	older := resp.Data.Messages[1]
+	if older["user_id"] != "uid_a" || older["user_name"] != "Alice" {
+		t.Fatalf("older message user fields = %+v", older)
+	}
+}
+
+func TestChatMessagesPassesUserNameToHandler(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+	_ = sm.NewSession("chat-api:user_001", "default")
+
+	var gotID, gotName string
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		gotID = msg.UserID
+		gotName = msg.UserName
+		if scp, ok := platform.(core.StreamingCardPlatform); ok {
+			card, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+			_ = card.Finalize(context.Background(), "ok")
+		}
+	})
+
+	body := `{"query":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-User-Name", "Alice")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotID != "user_001" || gotName != "Alice" {
+		t.Fatalf("handler user = (%q, %q), want (user_001, Alice)", gotID, gotName)
+	}
+}
+
+func TestSharedChannelGuestCanPostAndRead(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+	ownerSession := sm.NewSession("chat-api:user_a", "team chat")
+
+	var guestSessionKey string
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		guestSessionKey = msg.SessionKey
+		if scp, ok := platform.(core.StreamingCardPlatform); ok {
+			card, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+			_ = card.Finalize(context.Background(), "reply")
+		}
+	})
+
+	body := `{"conversation_id":"` + ownerSession.ID + `","query":"from guest"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_b")
+	req.Header.Set("X-Chat-API-User-Name", "Bob")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("guest post status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	wantKey := sessionKeyForConversation(ownerSession.ID)
+	if guestSessionKey != wantKey {
+		t.Fatalf("guest session key = %q, want %q", guestSessionKey, wantKey)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/conversations?limit=10", nil)
+	listReq.Header.Set("Authorization", "Bearer secret")
+	listReq.Header.Set("X-Chat-API-User", "user_b")
+	listRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(listRec, listReq)
+	var listResp struct {
+		Data struct {
+			Conversations []conversationView `json:"conversations"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(listRec.Body.Bytes(), &listResp)
+	if len(listResp.Data.Conversations) != 0 {
+		t.Fatalf("guest list should be empty, got %+v", listResp.Data.Conversations)
+	}
+
+	msgReq := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+ownerSession.ID+"/messages?limit=10", nil)
+	msgReq.Header.Set("Authorization", "Bearer secret")
+	msgRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(msgRec, msgReq)
+	if msgRec.Code != http.StatusOK {
+		t.Fatalf("guest read status = %d body=%s", msgRec.Code, msgRec.Body.String())
+	}
+}
+
+func TestGuestCannotPatchOwnedConversation(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+	s := sm.NewSession("chat-api:user_a", "team chat")
+
+	body := `{"name":"hijacked"}`
+	req := httptest.NewRequest(http.MethodPatch, "/v1/conversations/"+s.ID, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_b")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("guest patch status = %d, want 404", rec.Code)
+	}
+	if s.GetName() != "team chat" {
+		t.Fatalf("name changed to %q", s.GetName())
 	}
 }
 
@@ -193,12 +362,12 @@ func TestChatMessagesImplicitCreate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if gotKey != "chat-api:user_new" {
-		t.Fatalf("session key = %q", gotKey)
-	}
 	sessions := sm.ListSessions("chat-api:user_new")
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %d, want 1", len(sessions))
+	}
+	if gotKey != sessionKeyForConversation(sessions[0].ID) {
+		t.Fatalf("session key = %q, want %q", gotKey, sessionKeyForConversation(sessions[0].ID))
 	}
 	if sessions[0].GetName() != "first message" {
 		t.Fatalf("name = %q, want truncated query", sessions[0].GetName())

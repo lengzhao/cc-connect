@@ -24,7 +24,8 @@
 ## Conventions
 
 - Envelope: `{"ok": true, "data": ...}` / `{"ok": false, "error": "..."}`
-- User: `X-Chat-API-User` on writes; query or header on reads
+- User: `X-Chat-API-User` on writes; optional `X-Chat-API-User-Name` for display name; query or header on reads
+- History messages include `user_id` / `user_name` when stored
 - `message_id`: `{conversation_id}:{turn_index}`
 - Client disconnect does **not** stop the agent turn; use `POST /runs/{run_id}/cancel` to abort
 
@@ -47,5 +48,6 @@ listen_addr = ":8030"
 path = "/v1/"
 api_token = "your-service-token"
 user_header = "X-Chat-API-User"
+user_name_header = "X-Chat-API-User-Name"
 busy_policy = "queue"
 ```

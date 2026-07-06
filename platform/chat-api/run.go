@@ -28,10 +28,12 @@ type runState struct {
 	messageID      string
 	created        time.Time
 
-	mu         sync.Mutex
-	latestText string
-	sentText   string
-	finalized  bool
+	mu              sync.Mutex
+	latestThinking string
+	sentThinking   string
+	answerText     string
+	sentAnswer     string
+	finalized       bool
 	sse        *sseWriter
 	detached   bool
 
@@ -107,9 +109,10 @@ func newRunState(id, user, sessionKey, conversationID, messageID string, sse *ss
 	}
 }
 
-func (r *runState) setLatestText(text string) {
+func (r *runState) setStreamContent(thinking, answer string) {
 	r.mu.Lock()
-	r.latestText = text
+	r.latestThinking = thinking
+	r.answerText = answer
 	r.mu.Unlock()
 	select {
 	case r.notify <- struct{}{}:
@@ -125,6 +128,13 @@ func (r *runState) detach() {
 }
 
 func (r *runState) flushDelta() error {
+	if err := r.flushThinkingDelta(); err != nil {
+		return err
+	}
+	return r.flushAnswerDelta()
+}
+
+func (r *runState) flushThinkingDelta() error {
 	r.mu.Lock()
 	sse := r.sse
 	messageID := r.messageID
@@ -132,8 +142,37 @@ func (r *runState) flushDelta() error {
 		r.mu.Unlock()
 		return nil
 	}
-	curr := r.latestText
-	prev := r.sentText
+	curr := r.latestThinking
+	prev := r.sentThinking
+	r.mu.Unlock()
+
+	delta := textDelta(prev, curr)
+	if delta == "" {
+		return nil
+	}
+	if err := sse.Event("thinking_delta", map[string]string{
+		"message_id": messageID,
+		"text":       delta,
+	}); err != nil {
+		r.detach()
+		return err
+	}
+	r.mu.Lock()
+	r.sentThinking = curr
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *runState) flushAnswerDelta() error {
+	r.mu.Lock()
+	sse := r.sse
+	messageID := r.messageID
+	if sse == nil || r.detached {
+		r.mu.Unlock()
+		return nil
+	}
+	curr := r.answerText
+	prev := r.sentAnswer
 	r.mu.Unlock()
 
 	delta := textDelta(prev, curr)
@@ -148,7 +187,7 @@ func (r *runState) flushDelta() error {
 		return err
 	}
 	r.mu.Lock()
-	r.sentText = curr
+	r.sentAnswer = curr
 	r.mu.Unlock()
 	return nil
 }
@@ -170,21 +209,22 @@ func (r *runState) replyContext() replyContext {
 	}
 }
 
-func (r *runState) latestAnswer(fallback string) string {
+func (r *runState) finalAnswer(fallback string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if fallback != "" {
 		return fallback
 	}
-	return r.latestText
+	return r.answerText
 }
 
-func (s *pendingStore) setLatestText(id, text string) bool {
+func (s *pendingStore) setStreamContent(id, content string) bool {
 	run := s.get(id)
 	if run == nil {
 		return false
 	}
-	run.setLatestText(text)
+	thinking, answer := parseStreamingCardContent(content)
+	run.setStreamContent(thinking, answer)
 	return true
 }
 
@@ -220,7 +260,7 @@ func (s *pendingStore) finish(id string, result pendingResult) bool {
 	run.mu.Lock()
 	run.finalized = true
 	if result.answer == "" {
-		result.answer = run.latestText
+		result.answer = run.answerText
 	}
 	run.mu.Unlock()
 	if !run.complete(result) {

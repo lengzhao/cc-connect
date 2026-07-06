@@ -26,10 +26,11 @@ type Platform struct {
 	path           string
 	apiToken       string
 	userHeader     string
+	userNameHeader string
 	corsOrigins    []string
 	requestTimeout time.Duration
 	busyPolicy     string
-
+	includeAnswerInMessageEnd bool
 	projectName      string
 	sessionStorePath string
 
@@ -75,6 +76,10 @@ func New(opts map[string]any) (core.Platform, error) {
 	if err != nil {
 		return nil, err
 	}
+	userNameHeader, err := userNameHeaderOption(opts)
+	if err != nil {
+		return nil, err
+	}
 
 	busyPolicy := strings.ToLower(stringOption(opts, "busy_policy", busyPolicyQueue))
 	if busyPolicy != busyPolicyQueue && busyPolicy != busyPolicyReject {
@@ -84,12 +89,14 @@ func New(opts map[string]any) (core.Platform, error) {
 	p := &Platform{
 		listenAddr:   listenAddr,
 		path:         path,
-		apiToken:     strings.TrimSpace(stringOption(opts, "api_token", stringOption(opts, "token", ""))),
-		userHeader:   userHeader,
+		apiToken:       strings.TrimSpace(stringOption(opts, "api_token", stringOption(opts, "token", ""))),
+		userHeader:     userHeader,
+		userNameHeader: userNameHeader,
 		corsOrigins:  stringSliceOption(opts, "cors_origins"),
 		requestTimeout: timeout,
-		busyPolicy:   busyPolicy,
-		projectName:  stringOption(opts, "cc_project", ""),
+		busyPolicy:                busyPolicy,
+		includeAnswerInMessageEnd: boolOption(opts, "include_answer_in_message_end", false),
+		projectName:               stringOption(opts, "cc_project", ""),
 		pending:      newPendingStore(maxRuns, runTTL),
 	}
 	p.sessionStorePath = sessionStorePathFromOpts(opts)

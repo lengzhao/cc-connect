@@ -30,14 +30,15 @@ Implements `core.Platform`, `StreamingCardPlatform`, `HookContextProvider` — s
 
 | API | cc-connect |
 |-----|------------|
-| `user` (header) | `session_key = chat-api:{user}` |
-| `conversation_id` | `Session.ID` under that key |
+| `user`（创建者 / 发送者） | 列表归属 `chat-api:{user}`；`Message.UserID` |
+| `user_name`（可选 header） | `Message.UserName` + 历史 `HistoryEntry` |
+| `conversation_id` | `Session.ID`；Engine `session_key = chat-api:conv:{id}` |
 | `message_id` | `{conversation_id}:{turn_index}` |
-| History | Pair adjacent `user` + `assistant` `HistoryEntry` |
+| History | 相邻 `user` + `assistant` 配对 |
 
-- **List**: `SessionManager.ListSessions("chat-api:{user}")`
-- **Create**: implicit via `NewSession` on first `chat-messages` without `conversation_id`; explicit `POST /conversations` removed in v1
-- **Switch**: `SwitchSession` before dispatch when `conversation_id` present
+- **List**: `ListSessions("chat-api:{owner}")` — 仅创建者可见
+- **Participate**: `FindByID(conversation_id)` — 任意知情 user 可发消息 / 读历史
+- **Create**: 隐式 `NewSession(chat-api:{creator})` on first message
 - **Persist**: Engine `sessions.json`
 
 ## Busy session policy
@@ -63,6 +64,7 @@ Do **not** duplicate TryLock logic in chat-api; let Engine own queue semantics.
 
 - `Authorization: Bearer <api_token>` when configured
 - End-user `user` only via `user_header` on writes; reads allow query `user=` OR header
+- Optional display name via `user_name_header` (default `X-Chat-API-User-Name`); persisted per user history entry as `user_id` / `user_name`
 - Platform does not verify user ownership — BFF must authenticate first
 
 ## HTTP surface (v1)
@@ -102,7 +104,7 @@ Pagination: unified `cursor` + `next_cursor` + `has_more`.
 | Cursor pagination | Over sorted sessions / paired messages |
 | query/answer pairing | View layer over `GetHistory` |
 | SSE writer | Maps StreamingCard to HTTP |
-| Ownership checks | `conversation_id` ∈ `ListSessions(chat-api:{user})` |
+| Ownership checks | list/rename/delete: owner only; messages: `FindByID` |
 
 ## v1 limitations
 

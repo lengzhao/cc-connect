@@ -234,6 +234,23 @@ func TestSession_History(t *testing.T) {
 	}
 }
 
+func TestSession_AddUserHistory(t *testing.T) {
+	s := &Session{}
+	s.AddUserHistory("hello", "uid_1", "Alice")
+	s.AddUserHistory("again", "uid_2", "uid_2")
+
+	all := s.GetHistory(0)
+	if len(all) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(all))
+	}
+	if all[0].UserID != "uid_1" || all[0].UserName != "Alice" {
+		t.Fatalf("first entry = %+v", all[0])
+	}
+	if all[1].UserID != "uid_2" || all[1].UserName != "" {
+		t.Fatalf("second entry should omit duplicate display name, got %+v", all[1])
+	}
+}
+
 func TestSession_ConcurrentHistory(t *testing.T) {
 	s := &Session{}
 	var wg sync.WaitGroup

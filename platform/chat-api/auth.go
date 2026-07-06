@@ -6,8 +6,10 @@ import (
 )
 
 const (
-	defaultUserHeader = "X-Chat-API-User"
-	maxUserLen        = 128
+	defaultUserHeader     = "X-Chat-API-User"
+	defaultUserNameHeader = "X-Chat-API-User-Name"
+	maxUserLen            = 128
+	maxUserNameLen        = 128
 )
 
 func (p *Platform) authHTTP(next http.HandlerFunc) http.HandlerFunc {
@@ -45,7 +47,7 @@ func (p *Platform) setCORS(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, "+p.userHeader)
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, "+p.userHeader+", "+p.userNameHeader)
 			return
 		}
 	}
@@ -81,6 +83,23 @@ func (p *Platform) resolveUser(w http.ResponseWriter, r *http.Request, writeOnly
 	return user, true
 }
 
+// resolveUserName returns the optional display name from user_name_header.
+// Empty means the caller should fall back to the user id.
+func (p *Platform) resolveUserName(r *http.Request) string {
+	name := strings.TrimSpace(r.Header.Get(p.userNameHeader))
+	if name == "" || len(name) > maxUserNameLen {
+		return ""
+	}
+	return name
+}
+
+func displayUserName(userID, userName string) string {
+	if userName != "" {
+		return userName
+	}
+	return userID
+}
+
 func validUser(user string) bool {
 	if user == "" || len(user) > maxUserLen {
 		return false
@@ -100,4 +119,9 @@ func validUser(user string) bool {
 
 func sessionKeyForUser(user string) string {
 	return "chat-api:" + user
+}
+
+// sessionKeyForConversation routes Engine state per shared conversation (Slack channel scope).
+func sessionKeyForConversation(conversationID string) string {
+	return "chat-api:conv:" + conversationID
 }

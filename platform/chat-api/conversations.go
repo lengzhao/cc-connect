@@ -84,7 +84,7 @@ func (p *Platform) handlePatchConversation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	sessions := p.sessionsOrReload()
-	s := p.findSession(sessions, user, conversationID)
+	s := p.findOwnedConversation(sessions, user, conversationID)
 	if s == nil {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
@@ -140,16 +140,12 @@ func (p *Platform) handleConversationMessages(w http.ResponseWriter, r *http.Req
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 		return
 	}
-	user, ok := p.resolveUser(w, r, false)
-	if !ok {
-		return
-	}
-	if p.sessionsOrReload() == nil {
+	sessions := p.sessionsOrReload()
+	if sessions == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	sessions := p.sessionsOrReload()
-	s := p.findSession(sessions, user, conversationID)
+	s := p.findConversation(sessions, conversationID)
 	if s == nil {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
@@ -171,12 +167,19 @@ func (p *Platform) handleConversationMessages(w http.ResponseWriter, r *http.Req
 	}
 	messages := make([]map[string]any, len(page))
 	for i, m := range page {
-		messages[i] = map[string]any{
+		msg := map[string]any{
 			"id":         m.ID,
 			"query":      m.Query,
 			"answer":     m.Answer,
 			"created_at": m.CreatedAt,
 		}
+		if m.UserID != "" {
+			msg["user_id"] = m.UserID
+		}
+		if m.UserName != "" {
+			msg["user_name"] = m.UserName
+		}
+		messages[i] = msg
 	}
 	data := map[string]any{
 		"limit":    clampLimit(limit),

@@ -55,6 +55,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	userName := displayUserName(user, p.resolveUserName(r))
 	sessions := p.sessionsOrReload()
 	if sessions == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
@@ -92,17 +93,16 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	if implicitCreate {
 		session = sessions.NewSession(sessionKey, "default")
 	} else {
-		if !p.sessionOwnedByUser(sessions, user, body.ConversationID) {
+		session = sessions.FindByID(body.ConversationID)
+		if session == nil {
 			writeErr(w, http.StatusNotFound, "not found")
 			return
 		}
-		var err error
-		session, err = sessions.SwitchSession(sessionKey, body.ConversationID)
-		if err != nil {
-			writeErr(w, http.StatusNotFound, "not found")
-			return
+		if p.sessionOwnedByUser(sessions, user, body.ConversationID) {
+			_, _ = sessions.SwitchSession(sessionKey, body.ConversationID)
 		}
 	}
+	engineSessionKey := sessionKeyForConversation(session.ID)
 
 	if p.busyPolicy == busyPolicyReject && session.Busy() {
 		writeErr(w, http.StatusConflict, "conversation busy")
@@ -125,7 +125,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run := newRunState(runID, user, sessionKey, session.ID, msgID, sse)
+	run := newRunState(runID, user, engineSessionKey, session.ID, msgID, sse)
 	if !p.pending.create(run) {
 		_ = sse.Error("too many concurrent requests")
 		return
@@ -149,11 +149,11 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 
 	autoName := body.AutoGenerateName == nil || *body.AutoGenerateName
 	msg := core.Message{
-		SessionKey: sessionKey,
+		SessionKey: engineSessionKey,
 		Platform:   p.Name(),
 		MessageID:  runID,
 		UserID:     user,
-		UserName:   user,
+		UserName:   userName,
 		Content:    query,
 		Images:     images,
 		Files:      files,
@@ -193,7 +193,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 			p.emitTerminalSSE(run, result)
 			return
 		case <-deadline.C:
-			p.dispatchStop(sessionKey, user, rc)
+			p.dispatchStop(engineSessionKey, user, rc)
 			p.pending.cancelTimeout(runID)
 			_ = sse.Error("request timed out")
 			return
@@ -213,6 +213,8 @@ func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 	if sse == nil {
 		return
 	}
+	_ = run.flushDelta()
+
 	switch {
 	case result.queued:
 		_ = sse.Event("message_queued", map[string]any{
@@ -226,11 +228,16 @@ func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 	case result.err != nil:
 		_ = sse.Error(result.err.Error())
 	default:
-		_ = sse.Event("message_end", map[string]string{
+		payload := map[string]string{
 			"message_id":      msgID,
 			"conversation_id": conversationID,
-			"answer":          run.latestAnswer(result.answer),
-		})
+		}
+		if p.includeAnswerInMessageEnd {
+			if ans := run.finalAnswer(result.answer); ans != "" {
+				payload["answer"] = ans
+			}
+		}
+		_ = sse.Event("message_end", payload)
 	}
 }
 
@@ -305,7 +312,7 @@ func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
 		}
 		return nil
 	}
-	if !p.pending.setLatestText(rc.runID, content) {
+	if !p.pending.setStreamContent(rc.runID, content) {
 		return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
 	}
 	return nil
@@ -332,15 +339,8 @@ func (p *Platform) OnProcessingEnd(_ context.Context, replyCtx any, _ core.Proce
 	if run == nil {
 		return nil
 	}
-	run.mu.Lock()
-	if run.finalized {
-		run.mu.Unlock()
-		return nil
-	}
-	run.finalized = true
-	answer := run.latestText
-	run.mu.Unlock()
-	p.pending.finish(rc.runID, pendingResult{answer: answer})
+	// Fallback for synchronous command paths; normal SSE turns complete via streamingCard.Finalize.
+	p.pending.finish(rc.runID, pendingResult{answer: run.finalAnswer("")})
 	return nil
 }
 
@@ -367,16 +367,26 @@ func (c *streamingCard) Update(_ context.Context, content string) error {
 		return nil
 	}
 	c.lastSent = content
-	if !c.platform.pending.setLatestText(c.runID, content) {
+	if !c.platform.pending.setStreamContent(c.runID, content) {
 		return fmt.Errorf("chat-api: run %q is not pending", c.runID)
 	}
 	return nil
 }
 
 func (c *streamingCard) Finalize(_ context.Context, content string) error {
-	answer := c.lastSent
+	raw := c.lastSent
 	if strings.TrimSpace(content) != "" {
-		answer = content
+		raw = content
+		c.lastSent = raw
+	}
+	if strings.TrimSpace(raw) != "" {
+		if !c.platform.pending.setStreamContent(c.runID, raw) {
+			return fmt.Errorf("chat-api: run %q is not pending", c.runID)
+		}
+	}
+	_, answer := parseStreamingCardContent(raw)
+	if answer == "" {
+		answer = strings.TrimSpace(raw)
 	}
 	if !c.platform.pending.finish(c.runID, pendingResult{answer: answer}) {
 		return fmt.Errorf("chat-api: run %q is not pending", c.runID)

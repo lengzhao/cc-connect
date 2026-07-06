@@ -3665,7 +3665,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	turnStart := time.Now()
 
 	e.i18n.DetectAndSet(msg.Content)
-	session.AddHistory("user", msg.Content)
+	session.AddUserHistory(msg.Content, msg.UserID, msg.UserName)
 	// Persist user message immediately so crashes between user input and
 	// assistant reply don't lose it (the assistant-side Save below depends
 	// on the turn completing without a process crash).
@@ -5778,9 +5778,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					e.send(queued.platform, queued.replyCtx, replyContent)
 				}
 
-				session.AddHistory("user", queued.content)
+				session.AddUserHistory(queued.content, queued.userID, queued.userName)
 				// Persist queued user message immediately (mirror of the
-				// initial AddHistory("user",...) save above).
+				// initial AddUserHistory save above).
 				sessions.Save()
 
 				if idleTimer != nil {
@@ -6038,7 +6038,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 
 		drainEvents(as.Events())
 
-		session.AddHistory("user", queued.content)
+		session.AddUserHistory(queued.content, queued.userID, queued.userName)
 
 		sendDone := make(chan error, 1)
 		go func() {

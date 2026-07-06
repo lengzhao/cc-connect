@@ -120,3 +120,30 @@ func userHeaderOption(opts map[string]any) (string, error) {
 	}
 	return http.CanonicalHeaderKey(header), nil
 }
+
+func userNameHeaderOption(opts map[string]any) (string, error) {
+	header := stringOption(opts, "user_name_header", defaultUserNameHeader)
+	if header == "" {
+		return "", errors.New("chat-api: user_name_header must not be empty")
+	}
+	return http.CanonicalHeaderKey(header), nil
+}
+
+func boolOption(opts map[string]any, key string, fallback bool) bool {
+	if opts == nil {
+		return fallback
+	}
+	v, ok := opts[key]
+	if !ok || v == nil {
+		return fallback
+	}
+	switch b := v.(type) {
+	case bool:
+		return b
+	case string:
+		b = strings.TrimSpace(strings.ToLower(b))
+		return b == "true" || b == "1" || b == "yes"
+	default:
+		return fallback
+	}
+}

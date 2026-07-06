@@ -16,6 +16,8 @@ type pairedMessage struct {
 	ID        string
 	Query     string
 	Answer    string
+	UserID    string
+	UserName  string
 	CreatedAt int64
 	TurnIndex int
 }
@@ -59,6 +61,8 @@ func pairHistory(conversationID string, entries []core.HistoryEntry) []pairedMes
 			ID:        messageID(conversationID, turn),
 			Query:     user.Content,
 			Answer:    assistant.Content,
+			UserID:    user.UserID,
+			UserName:  user.UserName,
 			CreatedAt: user.Timestamp.Unix(),
 			TurnIndex: turn,
 		})
@@ -216,7 +220,14 @@ func (p *Platform) sessionOwnedByUser(sessions *core.SessionManager, user, conve
 	return false
 }
 
-func (p *Platform) findSession(sessions *core.SessionManager, user, conversationID string) *core.Session {
+func (p *Platform) findConversation(sessions *core.SessionManager, conversationID string) *core.Session {
+	if sessions == nil {
+		return nil
+	}
+	return sessions.FindByID(conversationID)
+}
+
+func (p *Platform) findOwnedConversation(sessions *core.SessionManager, user, conversationID string) *core.Session {
 	if !p.sessionOwnedByUser(sessions, user, conversationID) {
 		return nil
 	}
