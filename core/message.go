@@ -167,11 +167,11 @@ type LocationAttachment struct {
 
 // Message represents a unified incoming message from any platform.
 type Message struct {
-	SessionKey   string // unique key for user context, e.g. "feishu:{chatID}:{userID}"
+	SessionKey   string // unique key for conversation context, e.g. "feishu:{chatID}:{userID}" or opaque API conversation ID
 	Platform     string
 	MessageID    string // platform message ID for tracing
 	Recalled     bool   // true for platform message recall/delete events targeting MessageID
-	ChannelID    string
+	ChannelID    string // legacy/platform identifier; prefer ChannelKey for workspace binding in new platform code
 	UserID       string
 	UserName     string
 	UserEmail    string

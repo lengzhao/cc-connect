@@ -85,10 +85,10 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | 列表 | `GET /conversations` 仅返回该 user **创建**的会话 |
 | 参与 | 持有 `conversation_id` 即可发消息、读历史（不必在列表中） |
 | Engine | `session_key = {conversation_id}`（`conv_` 前缀随机 ID，不可猜测） |
-| 工作区 | 可选 `channel` → `Message.ChannelKey`，供 Engine multi-workspace 解析 `work_dir` |
+| 工作区 | 可选 `channel` → `Message.ChannelKey`，供 Engine multi-workspace 解析 `work_dir`；未传则使用项目默认 `work_dir` |
 | 管理 | 重命名 / 删除仅**创建者**（owner）可操作 |
 
-`conversation_id` 与 `channel` **正交**：前者决定 agent 对话上下文，后者决定工作目录绑定（同 channel 下多个 conversation 可共享目录）。
+`conversation_id` 与 `channel` **正交**：前者决定 agent 对话上下文，后者决定工作目录绑定（同 channel 下多个 conversation 可共享目录）。未传 `X-Chat-API-Channel` 时不做 channel/workspace 绑定，使用项目默认 `work_dir`。
 
 **`user` 传递**
 

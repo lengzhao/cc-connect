@@ -763,6 +763,17 @@ func (e *Engine) SetMultiWorkspace(baseDir, bindingStorePath string) {
 	go e.runIdleReaper()
 }
 
+// BindWorkspaceForChannel binds a platform channel to a workspace directory.
+// It is primarily used by integration tests and setup flows that already know
+// the target workspace and do not need the conversational init flow.
+func (e *Engine) BindWorkspaceForChannel(platformName, channelID, channelName, workspace string) {
+	if e.workspaceBindings == nil || channelID == "" || workspace == "" {
+		return
+	}
+	projectKey := "project:" + e.name
+	e.workspaceBindings.Bind(projectKey, workspaceChannelKey(platformName, channelID), channelName, normalizeWorkspacePath(workspace))
+}
+
 // SetWorkspaceIdleTimeout overrides the workspace idle reaper timeout.
 // Must be called after SetMultiWorkspace. A zero value disables reaping.
 func (e *Engine) SetWorkspaceIdleTimeout(d time.Duration) {
@@ -2243,7 +2254,7 @@ func (e *Engine) Start() error {
 	readyCount := 0
 	pendingCount := 0
 	for _, p := range e.platforms {
-		if binder, ok := p.(ChatAPIBinder); ok {
+		if binder, ok := p.(SessionManagerBinder); ok {
 			binder.BindSessions(e.sessions)
 		}
 		_, isAsync := p.(AsyncRecoverablePlatform)
@@ -2894,9 +2905,15 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	agent := e.agent
 	interactiveKey := msg.SessionKey
 	if resolvedWorkspace != "" && wsSessions != nil {
-		sessions = wsSessions
 		agent = wsAgent
 		interactiveKey = resolvedWorkspace + ":" + msg.SessionKey
+		useWorkspaceSessions := true
+		if policy, ok := p.(WorkspaceSessionStorePolicy); ok {
+			useWorkspaceSessions = policy.UseWorkspaceSessionStore()
+		}
+		if useWorkspaceSessions {
+			sessions = wsSessions
+		}
 	}
 
 	if len(msg.Images) == 0 && strings.HasPrefix(content, "/") {

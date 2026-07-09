@@ -32,7 +32,7 @@ Implements `core.Platform`, `StreamingCardPlatform`, `HookContextProvider` — s
 |-----|------------|
 | `user`（创建者 / 发送者） | 列表归属 `chat-api:{user}`；`Message.UserID` |
 | `user_name`（可选 header） | `Message.UserName` + 历史 `HistoryEntry` |
-| `channel`（可选 header） | `Message.ChannelKey` / `ChannelID`；multi-workspace 工作区绑定 |
+| `channel`（可选 header） | `Message.ChannelKey` / `ChannelID`；multi-workspace 工作区绑定；未传则使用默认 `work_dir` |
 | `conversation_id` | `Session.ID`（`conv_` + 22 字符随机串）；Engine `session_key` 同 ID |
 | `message_id` | `{conversation_id}:{turn_index}` |
 | History | 相邻 `user` + `assistant` 配对 |
@@ -41,6 +41,7 @@ Implements `core.Platform`, `StreamingCardPlatform`, `HookContextProvider` — s
 - **Participate**: `FindByID(conversation_id)` — 任意知情 user 可发消息 / 读历史
 - **Create**: 隐式 `NewSession(chat-api:{creator})` on first message
 - **Persist**: Engine `sessions.json`
+- **Default workspace**: no `channel` header means no channel/workspace binding; use the project default `work_dir`
 
 ## Busy session policy
 

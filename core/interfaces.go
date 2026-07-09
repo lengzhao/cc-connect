@@ -80,9 +80,17 @@ type HookContextProvider interface {
 	HookContext(replyCtx any) HookContext
 }
 
-// ChatAPIBinder is implemented by chat-api for engine startup wiring.
-type ChatAPIBinder interface {
+// SessionManagerBinder is an optional platform capability for transports that
+// expose session CRUD over their own API and need access to the Engine store.
+type SessionManagerBinder interface {
 	BindSessions(sessions *SessionManager)
+}
+
+// WorkspaceSessionStorePolicy lets platforms opt out of per-workspace session
+// stores while still using per-workspace agents/work_dir. This is useful for
+// APIs whose public conversation IDs are already globally unique.
+type WorkspaceSessionStorePolicy interface {
+	UseWorkspaceSessionStore() bool
 }
 
 // UserTimezoneProvider is an optional platform capability that returns the

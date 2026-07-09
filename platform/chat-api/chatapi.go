@@ -22,19 +22,19 @@ const (
 
 // Platform exposes a Dify-like HTTP + SSE API for custom apps and BFFs.
 type Platform struct {
-	listenAddr     string
-	path           string
-	apiToken       string
-	userHeader     string
-	userNameHeader string
-	channelHeader  string
-	corsOrigins    []string
-	requestTimeout time.Duration
-	busyPolicy     string
+	listenAddr                string
+	path                      string
+	apiToken                  string
+	userHeader                string
+	userNameHeader            string
+	channelHeader             string
+	corsOrigins               []string
+	requestTimeout            time.Duration
+	busyPolicy                string
 	includeAnswerInMessageEnd bool
-	projectName      string
-	sessionStorePath string
-	resolvedAddr     string
+	projectName               string
+	sessionStorePath          string
+	resolvedAddr              string
 
 	server   *http.Server
 	handler  core.MessageHandler
@@ -93,18 +93,18 @@ func New(opts map[string]any) (core.Platform, error) {
 	}
 
 	p := &Platform{
-		listenAddr:   listenAddr,
-		path:         path,
-		apiToken:       strings.TrimSpace(stringOption(opts, "api_token", stringOption(opts, "token", ""))),
-		userHeader:     userHeader,
-		userNameHeader: userNameHeader,
-		channelHeader:  channelHeader,
-		corsOrigins:  stringSliceOption(opts, "cors_origins"),
-		requestTimeout: timeout,
+		listenAddr:                listenAddr,
+		path:                      path,
+		apiToken:                  strings.TrimSpace(stringOption(opts, "api_token", stringOption(opts, "token", ""))),
+		userHeader:                userHeader,
+		userNameHeader:            userNameHeader,
+		channelHeader:             channelHeader,
+		corsOrigins:               stringSliceOption(opts, "cors_origins"),
+		requestTimeout:            timeout,
 		busyPolicy:                busyPolicy,
 		includeAnswerInMessageEnd: boolOption(opts, "include_answer_in_message_end", false),
 		projectName:               stringOption(opts, "cc_project", ""),
-		pending:      newPendingStore(maxRuns, runTTL),
+		pending:                   newPendingStore(maxRuns, runTTL),
 	}
 	p.sessionStorePath = sessionStorePathFromOpts(opts)
 	return p, nil
@@ -112,6 +112,10 @@ func New(opts map[string]any) (core.Platform, error) {
 
 func (p *Platform) Name() string {
 	return "chat-api"
+}
+
+func (p *Platform) UseWorkspaceSessionStore() bool {
+	return false
 }
 
 func (p *Platform) Start(handler core.MessageHandler) error {
@@ -224,3 +228,5 @@ var _ core.Platform = (*Platform)(nil)
 var _ core.StreamingCardPlatform = (*Platform)(nil)
 var _ core.HookContextProvider = (*Platform)(nil)
 var _ core.ProcessingEndNotifier = (*Platform)(nil)
+var _ core.SessionManagerBinder = (*Platform)(nil)
+var _ core.WorkspaceSessionStorePolicy = (*Platform)(nil)

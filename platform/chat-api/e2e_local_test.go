@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,12 +17,18 @@ import (
 	"github.com/chenhg5/cc-connect/core"
 )
 
+func init() {
+	core.RegisterAgent("chat-api-e2e", func(map[string]any) (core.Agent, error) {
+		return &e2eAgent{session: newE2EAgentSession("我是 workspace 测试助手。")}, nil
+	})
+}
+
 // e2eAgent drives Engine with a single EventResult reply per turn.
 type e2eAgent struct {
 	session *e2eAgentSession
 }
 
-func (a *e2eAgent) Name() string { return "e2e-stub" }
+func (a *e2eAgent) Name() string { return "chat-api-e2e" }
 func (a *e2eAgent) StartSession(_ context.Context, _ string) (core.AgentSession, error) {
 	return a.session, nil
 }
@@ -85,6 +92,10 @@ func startLocalChatAPIServer(t *testing.T) (*Platform, *core.Engine, string) {
 }
 
 func e2eRequest(t *testing.T, method, url, token, user string, body io.Reader, accept string) (*http.Response, string) {
+	return e2eRequestWithHeaders(t, method, url, token, user, nil, body, accept)
+}
+
+func e2eRequestWithHeaders(t *testing.T, method, url, token, user string, headers map[string]string, body io.Reader, accept string) (*http.Response, string) {
 	t.Helper()
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
@@ -99,6 +110,9 @@ func e2eRequest(t *testing.T, method, url, token, user string, body io.Reader, a
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -112,6 +126,15 @@ func e2eRequest(t *testing.T, method, url, token, user string, body io.Reader, a
 		t.Fatalf("read body: %v", err)
 	}
 	return resp, string(raw)
+}
+
+func startLocalChatAPIMultiWorkspaceServer(t *testing.T) (*core.Engine, string, string) {
+	t.Helper()
+	p, engine, base := startLocalChatAPIServer(t)
+	baseDir := t.TempDir()
+	bindingPath := filepath.Join(t.TempDir(), "bindings.json")
+	engine.SetMultiWorkspace(baseDir, bindingPath)
+	return engine, base, p.Name()
 }
 
 func parseSSEEvents(body string) []sseEvent {
@@ -260,6 +283,54 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("deleted messages status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestE2ELocalChatAPIMultiWorkspaceChannelHistory(t *testing.T) {
+	engine, base, platformName := startLocalChatAPIMultiWorkspaceServer(t)
+	const user = "e2e_user"
+	const token = "e2e-token"
+	const channel = "team-alpha/backend"
+	headers := map[string]string{"X-Chat-API-Channel": channel}
+
+	workspaceDir := filepath.Join(t.TempDir(), "backend")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	engine.BindWorkspaceForChannel(platformName, channel, channel, workspaceDir)
+
+	body := `{"query":"进入 workspace 后回复一句","auto_generate_name":true}`
+	resp, raw := e2eRequestWithHeaders(t, http.MethodPost, base+"/chat-messages", token, user, headers, strings.NewReader(body), "text/event-stream")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("chat status = %d body=%s", resp.StatusCode, raw)
+	}
+	if !hasEvent(parseSSEEvents(raw), "message_end") {
+		t.Fatalf("chat SSE missing message_end: %s", raw)
+	}
+	convID := sseConversationID(parseSSEEvents(raw))
+	if convID == "" {
+		t.Fatalf("missing conversation_id in SSE: %s", raw)
+	}
+
+	waitForHistory(t, base, token, convID, 1)
+
+	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("messages status = %d body=%s", resp.StatusCode, raw)
+	}
+	var hist struct {
+		Data struct {
+			Messages []map[string]any `json:"messages"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &hist); err != nil {
+		t.Fatalf("decode messages: %v", err)
+	}
+	if len(hist.Data.Messages) != 1 {
+		t.Fatalf("messages = %+v, want workspace turn history readable by conversation id", hist.Data.Messages)
+	}
+	if hist.Data.Messages[0]["query"] != "进入 workspace 后回复一句" {
+		t.Fatalf("query = %v", hist.Data.Messages[0]["query"])
 	}
 }
 
