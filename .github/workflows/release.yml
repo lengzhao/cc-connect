@@ -34,21 +34,6 @@ jobs:
           fi
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
-      - name: Detect npm publish policy
-        run: |
-          set -euo pipefail
-          git fetch origin main master custom-features 2>/dev/null || true
-          PUBLISH_NPM=false
-          for branch in main master; do
-            if git rev-parse --verify "origin/${branch}" >/dev/null 2>&1 && \
-               git merge-base --is-ancestor HEAD "origin/${branch}"; then
-              PUBLISH_NPM=true
-              break
-            fi
-          done
-          echo "PUBLISH_NPM=${PUBLISH_NPM}" >> "$GITHUB_ENV"
-          echo "npm pack enabled: ${PUBLISH_NPM} (only main/master releases include .tgz)"
-
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -107,7 +92,6 @@ jobs:
           done
 
       - name: Pack npm package
-        if: env.PUBLISH_NPM == 'true'
         env:
           NPM_VERSION: ${{ env.VERSION }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -128,21 +112,8 @@ jobs:
           EOF
           cd npm
           npm pack --pack-destination ../dist
-
-      - name: Build checksums
-        run: |
-          set -euo pipefail
-          cd dist
-          shopt -s nullglob
-          files=( *.tar.gz *.zip )
-          if [ "${PUBLISH_NPM}" = "true" ]; then
-            files+=( *.tgz )
-          fi
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "no release artifacts to checksum" >&2
-            exit 1
-          fi
-          sha256sum "${files[@]}" > checksums.txt
+          cd ../dist
+          sha256sum *.tar.gz *.zip *.tgz > checksums.txt
 
       - name: Publish GitHub Release
         env:
@@ -165,16 +136,11 @@ jobs:
           else
             printf '%s\n' "$NOTES" > release-notes.md
           fi
-          shopt -s nullglob
-          UPLOAD=( dist/*.tar.gz dist/*.zip dist/checksums.txt )
-          if [ "${PUBLISH_NPM}" = "true" ]; then
-            UPLOAD+=( dist/*.tgz )
-          fi
           if gh release view "${VERSION}" >/dev/null 2>&1; then
             gh release edit "${VERSION}" --notes-file release-notes.md
-            gh release upload "${VERSION}" "${UPLOAD[@]}" --clobber
+            gh release upload "${VERSION}" dist/*.tar.gz dist/*.zip dist/*.tgz dist/checksums.txt --clobber
           else
-            gh release create "${VERSION}" "${UPLOAD[@]}" \
+            gh release create "${VERSION}" dist/*.tar.gz dist/*.zip dist/*.tgz dist/checksums.txt \
               --title "${VERSION}" \
               --notes-file release-notes.md
           fi
