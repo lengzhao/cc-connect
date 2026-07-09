@@ -35,7 +35,7 @@ func (p *Platform) handleCancelRun(w http.ResponseWriter, r *http.Request, runID
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
-	p.dispatchStop(run.sessionKey, user, run.replyContext())
+	p.dispatchStop(run.sessionKey, user, run.channelKey, run.replyContext())
 	if !p.pending.cancelUser(runID) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
@@ -43,7 +43,7 @@ func (p *Platform) handleCancelRun(w http.ResponseWriter, r *http.Request, runID
 	writeOK(w, http.StatusOK, map[string]string{"result": "success"})
 }
 
-func (p *Platform) dispatchStop(sessionKey, user string, replyCtx replyContext) {
+func (p *Platform) dispatchStop(sessionKey, user, channelKey string, replyCtx replyContext) {
 	handler := p.getHandler()
 	if handler == nil {
 		return
@@ -51,6 +51,8 @@ func (p *Platform) dispatchStop(sessionKey, user string, replyCtx replyContext) 
 	go handler(p, &core.Message{
 		SessionKey: sessionKey,
 		Platform:   p.Name(),
+		ChannelID:  channelKey,
+		ChannelKey: channelKey,
 		UserID:     user,
 		UserName:   user,
 		Content:    "/stop",

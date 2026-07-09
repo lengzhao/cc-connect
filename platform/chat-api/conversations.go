@@ -115,7 +115,7 @@ func (p *Platform) handleDeleteConversation(w http.ResponseWriter, r *http.Reque
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 		return
 	}
-	user, ok := p.resolveUser(w, r, false)
+	user, ok := p.resolveUser(w, r, true)
 	if !ok {
 		return
 	}

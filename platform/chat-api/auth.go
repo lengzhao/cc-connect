@@ -8,8 +8,10 @@ import (
 const (
 	defaultUserHeader     = "X-Chat-API-User"
 	defaultUserNameHeader = "X-Chat-API-User-Name"
+	defaultChannelHeader  = "X-Chat-API-Channel"
 	maxUserLen            = 128
 	maxUserNameLen        = 128
+	maxChannelLen         = 256
 )
 
 func (p *Platform) authHTTP(next http.HandlerFunc) http.HandlerFunc {
@@ -47,7 +49,7 @@ func (p *Platform) setCORS(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, "+p.userHeader+", "+p.userNameHeader)
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, "+p.userHeader+", "+p.userNameHeader+", "+p.channelHeader)
 			return
 		}
 	}
@@ -100,6 +102,20 @@ func displayUserName(userID, userName string) string {
 	return userID
 }
 
+// resolveChannel returns an optional workspace channel id from channel_header.
+// Empty header is allowed. Invalid values write 400 and return ok=false.
+func (p *Platform) resolveChannel(w http.ResponseWriter, r *http.Request) (string, bool) {
+	channel := strings.TrimSpace(r.Header.Get(p.channelHeader))
+	if channel == "" {
+		return "", true
+	}
+	if !validChannel(channel) {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return "", false
+	}
+	return channel, true
+}
+
 func validUser(user string) bool {
 	if user == "" || len(user) > maxUserLen {
 		return false
@@ -110,6 +126,23 @@ func validUser(user string) bool {
 		case r >= 'A' && r <= 'Z':
 		case r >= '0' && r <= '9':
 		case r == '_', r == '-', r == ':', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validChannel(channel string) bool {
+	if channel == "" || len(channel) > maxChannelLen {
+		return false
+	}
+	for _, r := range channel {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_', r == '-', r == ':', r == '.', r == '/':
 		default:
 			return false
 		}

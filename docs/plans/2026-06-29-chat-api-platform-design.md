@@ -1,7 +1,7 @@
 # chat-api Platform Design
 
 > Version: 2026-06-29 draft  
-> Status: API v1 defined — implemented in `platform/chat-api`  
+> Status: API v1.0.0 — implemented in `platform/chat-api`  
 > Public API: [chat-api.zh-CN.md](../chat-api.zh-CN.md)
 
 ## Goal
@@ -32,6 +32,7 @@ Implements `core.Platform`, `StreamingCardPlatform`, `HookContextProvider` — s
 |-----|------------|
 | `user`（创建者 / 发送者） | 列表归属 `chat-api:{user}`；`Message.UserID` |
 | `user_name`（可选 header） | `Message.UserName` + 历史 `HistoryEntry` |
+| `channel`（可选 header） | `Message.ChannelKey` / `ChannelID`；multi-workspace 工作区绑定 |
 | `conversation_id` | `Session.ID`；Engine `session_key = chat-api:conv:{id}` |
 | `message_id` | `{conversation_id}:{turn_index}` |
 | History | 相邻 `user` + `assistant` 配对 |
@@ -53,8 +54,8 @@ Do **not** duplicate TryLock logic in chat-api; let Engine own queue semantics.
 
 ## Streaming (v1)
 
-- Normative SSE: `message`, `text_delta`, `message_end`, `error`, `message_queued`
-- `StreamingCard.Update` → `text_delta`; `Finalize` → `message_end`
+- Normative SSE: `message`, `thinking_delta`, `text_delta`, `message_end`, `error`, `message_queued`
+- `StreamingCard.Update` → `thinking_delta` + `text_delta` (parsed from card markdown); `Finalize` → `message_end`
 - `pendingStore` per run (from `platform/a2a`)
 - Client disconnect → detach SSE only; agent turn continues; partial text still saved to history
 
@@ -62,10 +63,11 @@ Do **not** duplicate TryLock logic in chat-api; let Engine own queue semantics.
 
 ## Authentication
 
-- `Authorization: Bearer <api_token>` when configured
+- `Authorization: Bearer <api_token>` when configured (`token` alias supported). **If unset, auth is skipped — not for production.**
 - End-user `user` only via `user_header` on writes; reads allow query `user=` OR header
 - Optional display name via `user_name_header` (default `X-Chat-API-User-Name`); persisted per user history entry as `user_id` / `user_name`
 - Platform does not verify user ownership — BFF must authenticate first
+- `conversation_id` acts as a capability token for read/post
 
 ## HTTP surface (v1)
 
@@ -114,6 +116,9 @@ Pagination: unified `cursor` + `next_cursor` + `has_more`.
 | Historical attachments | Not replayed |
 | `auto_generate_name` | Truncate first `query` (32 runes), no LLM |
 | Blocking JSON | BFF aggregates SSE or wait for v1.1 |
+| `owner_id` | Not exposed; owner implied by list membership |
+| `max_runs` / `run_ttl` | In-memory pending run limits (default 1000 / 2h) |
+| Horizontal scale | Single-process pending store; no multi-replica run sharing in v1 |
 
 ## Package layout
 

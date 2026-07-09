@@ -56,6 +56,10 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userName := displayUserName(user, p.resolveUserName(r))
+	channelKey, ok := p.resolveChannel(w, r)
+	if !ok {
+		return
+	}
 	sessions := p.sessionsOrReload()
 	if sessions == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
@@ -125,7 +129,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run := newRunState(runID, user, engineSessionKey, session.ID, msgID, sse)
+	run := newRunState(runID, user, channelKey, engineSessionKey, session.ID, msgID, sse)
 	if !p.pending.create(run) {
 		_ = sse.Error("too many concurrent requests")
 		return
@@ -152,6 +156,8 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		SessionKey: engineSessionKey,
 		Platform:   p.Name(),
 		MessageID:  runID,
+		ChannelID:  channelKey,
+		ChannelKey: channelKey,
 		UserID:     user,
 		UserName:   userName,
 		Content:    query,
@@ -193,7 +199,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 			p.emitTerminalSSE(run, result)
 			return
 		case <-deadline.C:
-			p.dispatchStop(engineSessionKey, user, rc)
+			p.dispatchStop(engineSessionKey, user, channelKey, rc)
 			p.pending.cancelTimeout(runID)
 			_ = sse.Error("request timed out")
 			return

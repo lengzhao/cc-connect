@@ -27,6 +27,7 @@ type Platform struct {
 	apiToken       string
 	userHeader     string
 	userNameHeader string
+	channelHeader  string
 	corsOrigins    []string
 	requestTimeout time.Duration
 	busyPolicy     string
@@ -80,6 +81,10 @@ func New(opts map[string]any) (core.Platform, error) {
 	if err != nil {
 		return nil, err
 	}
+	channelHeader, err := channelHeaderOption(opts)
+	if err != nil {
+		return nil, err
+	}
 
 	busyPolicy := strings.ToLower(stringOption(opts, "busy_policy", busyPolicyQueue))
 	if busyPolicy != busyPolicyQueue && busyPolicy != busyPolicyReject {
@@ -92,6 +97,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		apiToken:       strings.TrimSpace(stringOption(opts, "api_token", stringOption(opts, "token", ""))),
 		userHeader:     userHeader,
 		userNameHeader: userNameHeader,
+		channelHeader:  channelHeader,
 		corsOrigins:  stringSliceOption(opts, "cors_origins"),
 		requestTimeout: timeout,
 		busyPolicy:                busyPolicy,

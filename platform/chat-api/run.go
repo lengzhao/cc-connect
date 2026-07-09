@@ -23,6 +23,7 @@ type pendingResult struct {
 type runState struct {
 	id             string
 	user           string
+	channelKey     string
 	sessionKey     string
 	conversationID string
 	messageID      string
@@ -95,10 +96,11 @@ func (s *pendingStore) cleanupLocked(now time.Time) {
 	}
 }
 
-func newRunState(id, user, sessionKey, conversationID, messageID string, sse *sseWriter) *runState {
+func newRunState(id, user, channelKey, sessionKey, conversationID, messageID string, sse *sseWriter) *runState {
 	return &runState{
 		id:             id,
 		user:           user,
+		channelKey:     channelKey,
 		sessionKey:     sessionKey,
 		conversationID: conversationID,
 		messageID:      messageID,

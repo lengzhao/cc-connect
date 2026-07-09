@@ -1319,13 +1319,16 @@ app_secret = "your-feishu-app-secret"
 # [projects.platforms.options]
 # listen_addr = ":8030"
 # path = "/v1/"
-# public_url = "https://api.example.com"
-# api_token = "your-service-token"
+# api_token = "your-service-token"   # Required in production; alias: token
 # user_header = "X-Chat-API-User"
 # user_name_header = "X-Chat-API-User-Name"
+# channel_header = "X-Chat-API-Channel"   # Optional workspace key for multi-workspace mode
+# cors_origins = ["https://app.example.com"]
+# request_timeout = "30m"            # alias: timeout
+# busy_policy = "queue"                # queue | reject
 # include_answer_in_message_end = false
-# busy_policy = "queue"    # queue | reject
-# request_timeout = "30m"
+# max_runs = 1000                      # Max concurrent SSE runs in memory
+# run_ttl = "2h"                       # TTL for pending run records
 #
 # A2A SendMessage metadata example / A2A SendMessage metadata 示例:
 # {

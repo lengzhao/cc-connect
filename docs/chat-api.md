@@ -1,41 +1,39 @@
 # chat-api Platform — API v1
 
-> Version: **v1.0.0-draft** (2026-06-29)  
+> Version: **v1.0.0** (2026-07-09)  
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)
 
 ## Overview
 
-`chat-api` is a cc-connect **Platform** — HTTP API for custom apps / BFFs, without Management API.
+`chat-api` is a cc-connect **Platform** — HTTP + SSE API for custom apps / BFFs.
 
-**v1**: 6 endpoints, SSE-only chat, implicit conversation create, default busy **queue**, slim JSON models.
+**v1**: 6 endpoints, SSE-only chat, implicit conversation create, default `busy_policy=queue`.
 
 ## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/conversations` | List (cursor pagination) |
+| `GET` | `/conversations` | List |
 | `PATCH` | `/conversations/{id}` | Rename |
 | `DELETE` | `/conversations/{id}` | Delete |
 | `GET` | `/conversations/{id}/messages` | History |
 | `POST` | `/chat-messages` | Send (SSE) |
-| `POST` | `/runs/{run_id}/cancel` | Cancel in-flight turn |
+| `POST` | `/runs/{run_id}/cancel` | Cancel turn |
 
 ## Conventions
 
-- Envelope: `{"ok": true, "data": ...}` / `{"ok": false, "error": "..."}`
-- User: `X-Chat-API-User` on writes; optional `X-Chat-API-User-Name` for display name; query or header on reads
-- History messages include `user_id` / `user_name` when stored
+- REST: `{"ok": true, "data": ...}` / `{"ok": false, "error": "..."}`
+- Chat: successful `POST /chat-messages` returns SSE (not JSON envelope)
+- Auth: `Authorization: Bearer <api_token>` (required in production)
+- User: `X-Chat-API-User` on writes; query or header on list/delete
+- Optional `X-Chat-API-Channel` on send/cancel for multi-workspace `work_dir` binding
 - `message_id`: `{conversation_id}:{turn_index}`
-- Client disconnect does **not** stop the agent turn; use `POST /runs/{run_id}/cancel` to abort
+- Client disconnect does not stop the agent; use cancel endpoint to abort
 
-## SSE events (v1)
+## SSE events
 
-`message`, `text_delta`, `message_end`, `error`, `message_queued`
-
-## Not in v1
-
-Blocking JSON mode, `POST /conversations`, empty placeholder fields (`metadata`, `retriever_resources`, etc.)
+`message`, `thinking_delta`, `text_delta`, `message_end`, `error`, `message_queued`
 
 ## Configuration
 
@@ -47,7 +45,7 @@ type = "chat-api"
 listen_addr = ":8030"
 path = "/v1/"
 api_token = "your-service-token"
-user_header = "X-Chat-API-User"
-user_name_header = "X-Chat-API-User-Name"
 busy_policy = "queue"
 ```
+
+See [chat-api.zh-CN.md](./chat-api.zh-CN.md) for full field reference and examples.

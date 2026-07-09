@@ -1,35 +1,35 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.0.0-draft**（2026-06-29）  
-> 状态：规范草案 — `platform/chat-api` 已实现 v1  
+> 版本：**v1.0.0**（2026-07-09）  
+> 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 实现说明见 [chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md)
 
 ## 1. 概述
 
-`chat-api` 是 cc-connect 的一种 **Platform**，对外提供 HTTP API，供自定义 App / BFF 直连，无需开放 Management API。
+`chat-api` 是 cc-connect 的一种 **Platform**，对外提供 HTTP + SSE API，供自定义 App / BFF 直连，无需开放 Management API。
 
 **v1 能力**
 
 - 会话列表、重命名、删除
 - 会话历史（游标分页）
-- 发送消息：**SSE 流式**（`message` → `text_delta` → `message_end`）
+- 发送消息：**SSE 流式**（`message` → `thinking_delta?` → `text_delta` → `message_end`）
 - 隐式创建会话（首条 `chat-messages` 不带 `conversation_id`）
-- 多客户端并发；会话忙时 **排队**（复用 Engine，默认 `busy_policy=queue`）
+- 会话忙时排队（默认 `busy_policy=queue`，复用 Engine 队列）
 
 ```mermaid
 flowchart LR
-  App[App / BFF]
-  API["chat-api\n/v1/*"]
-  Eng[cc-connect Engine]
-  Agent[Coding Agent]
+  Client[App / BFF]
+  API["chat-api /v1/*"]
+  Eng[Engine]
+  Agent[Agent]
 
-  App --> API
+  Client --> API
   API --> Eng
   Eng --> Agent
   Agent --> Eng
   Eng --> API
-  API -->|SSE| App
+  API -->|SSE| Client
 ```
 
 ---
@@ -50,97 +50,106 @@ https://api.example.com/v1/conversations
 
 | 项 | 约定 |
 |----|------|
-| 请求/响应体 | `application/json; charset=utf-8` |
-| 流式响应 | `text/event-stream; charset=utf-8` |
+| 非流式 REST | `application/json; charset=utf-8` |
+| 流式聊天 | HTTP `200` + `text/event-stream`（**不是** JSON 信封） |
 | 时间戳 | Unix **秒**（整数） |
-| 字符集 | UTF-8 |
+
+REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 SSE。流内错误为 `event: error`（HTTP 仍为 200）。
 
 ### 2.3 响应信封
 
-与 Bridge 一致：
-
 ```json
 {"ok": true, "data": { ... }}
-{"ok": false, "error": "conversation not found"}
+{"ok": false, "error": "not found"}
 ```
 
-HTTP 状态码表示成功/失败类别；`error` 为可读说明。常见错误码见 §2.6。
-
-### 2.4 认证与用户模型（Channel）
+### 2.4 认证与用户
 
 两层身份：
 
 | 层 | 方式 | 作用 |
 |----|------|------|
-| 服务 | `Authorization: Bearer <api_token>` | 谁可以调用 API（BFF / 后端） |
-| 终端用户 | `user` | 谁在操作；创建者 / 发送者身份 |
+| 服务 | `Authorization: Bearer <api_token>` | 调用方鉴权（BFF / 后端） |
+| 终端用户 | `user` | 创建者 / 发送者 |
+| 工作区频道 | `channel`（可选） | multi-workspace 绑定键；共享/隔离 `work_dir` |
 
-**Conversation = Slack Channel**
+> **生产环境必须配置 `api_token`（别名 `token`）。** 未配置时跳过 Bearer 校验。
+
+平台不校验 `user` 归属；`api_token` 勿下发终端，由 BFF 鉴权后注入 `user`。
+
+**会话模型**
 
 | 概念 | 行为 |
 |------|------|
-| 创建 | 首条 `POST /chat-messages` 不带 `conversation_id`；创建者记入其会话列表 |
-| 列表 | `GET /conversations?user=` 仅返回**该 user 创建**的 conversation |
-| 参与 | 持有 `conversation_id` 的 user 可 `POST /chat-messages`、读历史；**不必**出现在其列表中 |
-| Engine 路由 | `session_key = chat-api:conv:{conversation_id}`（频道级 agent 上下文，对齐 Slack `session_scope=channel`） |
+| 创建 | 首条 `POST /chat-messages` 不带 `conversation_id` |
+| 列表 | `GET /conversations` 仅返回该 user **创建**的会话 |
+| 参与 | 持有 `conversation_id` 即可发消息、读历史（不必在列表中） |
+| Engine | `session_key = chat-api:conv:{conversation_id}` |
+| 工作区 | 可选 `channel` → `Message.ChannelKey`，供 Engine multi-workspace 解析 `work_dir` |
 | 管理 | 重命名 / 删除仅**创建者**（owner）可操作 |
 
-**`user` 怎么传**
+`conversation_id` 与 `channel` **正交**：前者决定 agent 对话上下文，后者决定工作目录绑定（同 channel 下多个 conversation 可共享目录）。
+
+**`user` 传递**
 
 | 场景 | 需要 `user`？ | 方式 |
 |------|---------------|------|
-| `GET /conversations` | 是 | `?user=` 或 `user_header` |
-| `GET …/messages` | 否 | 仅需 `api_token` + path 中 `conversation_id` |
-| `POST /chat-messages` | 是 | `user_header`（标识发送者） |
-| `PATCH` / `DELETE` | 是（须为 owner） | `user_header` |
-| `POST …/cancel` | 是（须为发起者） | `user_header` |
+| `GET /conversations` | 是 | `user_header` 或 `?user=` |
+| `GET …/messages` | 否 | `api_token` + `conversation_id` |
+| `POST /chat-messages` | 是 | `user_header` |
+| `PATCH` / `DELETE` | 是（须 owner） | `user_header` |
+| `POST …/cancel` | 是（须发起者） | `user_header` |
 
-`user` 为 1–128 字符，建议 `[a-zA-Z0-9_\-:.]+`。
+默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（可选，仅 `POST /chat-messages` 与 `POST …/cancel` 透传）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`。
 
-**可选显示名**（仅 `POST /chat-messages`）：`user_name_header`（默认 `X-Chat-API-User-Name`）。历史响应按轮次返回 `user_id` / `user_name`，用于区分频道内不同发送者。
-
-平台不校验 `user` 归属；`api_token` 勿下发终端，由 BFF 鉴权后注入。
+历史按轮次返回 `user_id` / `user_name`（有记录时）。v1 不返回 `owner_id`。
 
 ### 2.5 分页
-
-统一 **游标分页**：
 
 | 参数 | 默认 | 说明 |
 |------|------|------|
 | `limit` | 20 | 1–100 |
-| `cursor` | — | 上一页返回的 `next_cursor`；首页省略 |
-| `has_more` | — | 响应字段 |
-| `next_cursor` | — | 有下一页时返回；否则省略 |
+| `cursor` | — | 上一页 `next_cursor` |
+| `has_more` | — | 是否有下一页 |
 
-会话列表默认按 `updated_at` 降序。消息历史首页为**最新** N 条，`cursor` 向更早翻页。
+会话列表按 `updated_at` 降序。消息历史首页为最新 N 条，向更早翻页。
 
 ### 2.6 常见错误
 
-| HTTP | 典型 `error` 片段 | 说明 |
-|------|-------------------|------|
+**REST**
+
+| HTTP | `error` | 说明 |
+|------|---------|------|
 | 401 | `unauthorized` | Token 无效 |
 | 400 | `user required` | 缺少 user |
-| 400 | `invalid request` | JSON / 参数错误 |
-| 404 | `not found` | 会话或游标不存在 |
-| 409 | `conversation busy` | 仅 `busy_policy=reject` |
-| 413 | `payload too large` | 请求体过大 |
+| 400 | `invalid request` | 参数错误 |
+| 404 | `not found` | 资源不存在或无权 |
+| 409 | `conversation busy` | `busy_policy=reject` 时会话忙 |
+| 413 | `payload too large` | 请求体 > 10 MiB |
 | 500 | `internal error` | 服务器错误 |
 
-### 2.7 message_id（v1）
+**SSE**（`event: error`）
 
-`message_id` 由 API 层确定性派生，历史与 SSE 一致：
+| `data.error` | 说明 |
+|--------------|------|
+| `canceled by user` | 用户取消 |
+| `request timed out` | 超过 `request_timeout` |
+| `too many concurrent requests` | 超过 `max_runs` |
+| （队列满文案） | Engine 队列已满 |
+
+### 2.7 message_id
 
 ```text
 message_id = "{conversation_id}:{turn_index}"
 ```
 
-`turn_index` 从 `0` 起，按会话内完整 user→assistant 对递增。未完成轮次不出现在历史 API 中。
+`turn_index` 从 0 起，按完整 user→assistant 对递增。`event: message` 时即分配。未完成轮次不出现在历史中。
 
 ---
 
-## 3. 数据模型（v1）
+## 3. 数据模型
 
-仅包含**有实际值**的字段；未列出的字段 v1 不返回。
+仅返回有值的字段。
 
 ### 3.1 Conversation
 
@@ -156,35 +165,36 @@ message_id = "{conversation_id}:{turn_index}"
 
 | 字段 | 说明 |
 |------|------|
-| `id` | 会话 ID（`conversation_id`） |
+| `id` | `conversation_id` |
 | `name` | 展示名称 |
-| `last_message_preview` | 最后一条内容摘要（≤200 字符）；无历史时省略 |
+| `last_message_preview` | 最后一条 history 摘要（≤200 rune）；无历史时省略 |
 | `created_at` / `updated_at` | Unix 秒 |
 
 ### 3.2 Message
-
-一轮用户提问 + 助手回复。
 
 ```json
 {
   "id": "s1a2b3c:0",
   "query": "帮我解释这段代码",
   "answer": "这段代码实现了……",
-  "created_at": 1780003500
+  "created_at": 1780003500,
+  "user_id": "user_001",
+  "user_name": "Alice"
 }
 ```
 
 | 字段 | 说明 |
 |------|------|
 | `id` | 见 §2.7 |
-| `query` / `answer` | 用户输入与完整助手回复 |
-| `created_at` | 用户消息时间（Unix 秒） |
+| `query` / `answer` | 用户输入与助手完整回复 |
+| `created_at` | 用户消息时间 |
+| `user_id` / `user_name` | 该轮发送者（有记录时返回） |
 
-可选字段 `user_id` / `user_name`：频道内多发送者时按轮次返回。
+`thinking_delta` 不写入历史。
 
-SSE 流中的 `thinking_delta` **不会**写入历史；历史 API 仅返回最终 `answer`。
+### 3.3 发送消息
 
-### 3.3 发送消息请求体
+**请求体**
 
 ```json
 {
@@ -198,24 +208,15 @@ SSE 流中的 `thinking_delta` **不会**写入历史；历史 API 仅返回最�
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `conversation_id` | 否 | 省略 → **隐式创建**新会话 |
+| `conversation_id` | 否 | 省略则隐式创建 |
 | `query` | 是 | 用户文本 |
-| `inputs` | 否 | 多模态附件（见 §3.4） |
-| `auto_generate_name` | 否 | 新会话首条消息后：取 `query` 截断 32 字符为标题 |
-| `metadata` | 否 | 传入 hooks（`HookContext`），不进 agent prompt |
+| `inputs` | 否 | 多模态附件（§3.4）；历史不 replay |
+| `auto_generate_name` | 否 | 默认 `true`；新会话首条后取 query 前 32 rune 为标题 |
+| `metadata` | 否 | 传入 hooks，不进 prompt，不在响应中返回 |
 
-`user` 由 `user_header` 提供，不在 body 中重复。
+`user` 由 header 提供，不在 body 中。
 
-**响应**（`Accept: text/event-stream`）：HTTP `200`，`Content-Type: text/event-stream`；**不是** JSON 信封，而是 SSE 事件流。
-
-对应上文请求（已有 `conversation_id`、正常流式）：
-
-```http
-HTTP/1.1 200 OK
-Content-Type: text/event-stream; charset=utf-8
-Cache-Control: no-cache
-Connection: keep-alive
-```
+**SSE 响应**（`Accept: text/event-stream`、`*/*` 或省略）
 
 ```text
 event: message
@@ -225,36 +226,30 @@ event: thinking_delta
 data: {"message_id":"s1a2b3c:1","text":"分析代码结构…"}
 
 event: text_delta
-data: {"message_id":"s1a2b3c:1","text":"这段代码"}
-
-event: text_delta
-data: {"message_id":"s1a2b3c:1","text":"实现了……"}
+data: {"message_id":"s1a2b3c:1","text":"这段代码实现了……"}
 
 event: message_end
 data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 ```
 
-| SSE `event` | `data` 字段 | 说明 |
-|-------------|-------------|------|
-| `message` | `conversation_id`, `message_id`, `run_id` | 轮次开始；`run_id` 用于 `POST /runs/{run_id}/cancel` |
-| `thinking_delta` | `message_id`, `text` | 推理过程增量（Agent 开启 thinking 时）；客户端拼接 |
-| `text_delta` | `message_id`, `text` | 助手**正文**增量；客户端拼接即为完整回复 |
-| `message_end` | `message_id`, `conversation_id`, `answer?` | 轮次结束信号 |
+| event | `data` | 说明 |
+|-------|--------|------|
+| `message` | `conversation_id`, `message_id`, `run_id` | 轮次开始 |
+| `thinking_delta` | `message_id`, `text` | 推理增量（可选） |
+| `text_delta` | `message_id`, `text` | 正文增量 |
+| `message_end` | `message_id`, `conversation_id`, `answer?` | 轮次结束 |
+| `message_queued` | `message_id`, `queue_depth` | 会话忙且 `busy_policy=queue` |
+| `error` | `error` | 错误（§2.6） |
 
-**`message_end.answer`**：默认**省略**（配置 `include_answer_in_message_end = true` 时附带）。已拼接 `text_delta` 的客户端无需读取。
+`message_end.answer` 默认省略（`include_answer_in_message_end = true` 时附带）。
 
-**Thinking**：由平台层从 Engine 流式卡片中拆分；无 thinking 时不会出现 `thinking_delta` 事件。
+隐式创建时 `conversation_id` 在 `message` 事件中返回。`busy_policy=reject` 且会话忙时返回 `409` JSON。
 
-**省略 `conversation_id`（隐式创建）** 时，`message` / `message_end` 的 `conversation_id` 为新分配的 id（如 `s2`）。
+**客户端注意**
 
-**会话忙**（`busy_policy=queue`）时，连接在 `message` 之后很快结束，并返回：
-
-```text
-event: message_queued
-data: {"message_id":"s1a2b3c:2","queue_depth":1}
-```
-
-**错误**（非 SSE 流）：返回 JSON 信封，例如 `409` + `{"ok":false,"error":"conversation busy"}`（`busy_policy=reject`）。详见 §4.5。
+- 拼接 `text_delta` 得完整回复；断开 SSE **不**停止 agent，内容仍写入 history
+- `message_queued` 后勿立即重开 SSE；等上轮结束或轮询 history
+- 取消：`POST /runs/{run_id}/cancel`（`run_id` 来自 `message` 事件）
 
 ### 3.4 Input（多模态）
 
@@ -268,22 +263,22 @@ data: {"message_id":"s1a2b3c:2","queue_depth":1}
 }
 ```
 
-v1 至少支持 `base64`。`type`：`image` | `file` | `audio`。
+`transfer_method` 仅支持 `base64`。`type`：`image` | `file` | `audio`（audio 每请求最多一条）。
 
 ---
 
 ## 4. API 端点
 
-以下示例均省略 `Authorization: Bearer <api_token>`。
+示例省略 `Authorization: Bearer <api_token>`。
 
 ### 4.1 会话列表
 
 ```http
-GET /conversations?user=user_001&limit=20
-GET /conversations?user=user_001&cursor=s0old&limit=20
+GET /conversations?limit=20
+X-Chat-API-User: user_001
 ```
 
-响应：
+也支持 `?user=user_001`。
 
 ```json
 {
@@ -305,39 +300,26 @@ GET /conversations?user=user_001&cursor=s0old&limit=20
 }
 ```
 
-**切换会话**（无专用 API）：选中 `conversation_id` → `GET …/messages` → 后续 `chat-messages` 携带该 id。
-
----
-
-### 4.2 更新会话（重命名）
+### 4.2 重命名
 
 ```http
 PATCH /conversations/{conversation_id}
 X-Chat-API-User: user_001
 Content-Type: application/json
+
+{"name": "代码解释"}
 ```
 
-```json
-{
-  "name": "代码解释"
-}
-```
+须 owner。响应 `data`：`id`、`name`、`updated_at`。
 
-仅支持改 `name`。响应 `data` 含 `id`、`name`、`updated_at`。
-
----
-
-### 4.3 删除会话
+### 4.3 删除
 
 ```http
-DELETE /conversations/{conversation_id}?user=user_001
+DELETE /conversations/{conversation_id}
+X-Chat-API-User: user_001
 ```
 
-```json
-{"ok": true, "data": {"result": "success"}}
-```
-
----
+须 owner。`{"ok": true, "data": {"result": "success"}}`
 
 ### 4.4 历史消息
 
@@ -346,9 +328,7 @@ GET /conversations/{conversation_id}/messages?limit=20
 GET /conversations/{conversation_id}/messages?cursor=s1a2b3c:5&limit=20
 ```
 
-持有 `conversation_id` 即可读取，**不需要** `user`（见 §2.4）。
-
-响应：
+持有 `conversation_id` 即可，不需要 `user`。
 
 ```json
 {
@@ -361,86 +341,53 @@ GET /conversations/{conversation_id}/messages?cursor=s1a2b3c:5&limit=20
         "id": "s1a2b3c:1",
         "query": "帮我解释这段代码",
         "answer": "这段代码实现了……",
-        "created_at": 1780003500
+        "created_at": 1780003500,
+        "user_id": "user_001",
+        "user_name": "Alice"
       }
     ]
   }
 }
 ```
 
----
-
-### 4.5 发送消息（SSE）
+### 4.5 发送消息
 
 ```http
 POST /chat-messages
 X-Chat-API-User: user_001
 X-Chat-API-User-Name: Alice
+X-Chat-API-Channel: team-alpha/backend
 Content-Type: application/json
 Accept: text/event-stream
 ```
 
-请求体与响应格式见 §3.3。带 `conversation_id` 时按频道 id 定位会话并派发。
+`X-Chat-API-Channel` 可选。省略时使用项目默认 `work_dir`；填写时写入 Engine `ChannelKey`，在 `mode = "multi-workspace"` 下参与工作区绑定。取消进行中的轮次时，若当时请求携带了 channel，cancel 会一并透传。
 
-#### 会话忙（`busy_policy`，默认 `queue`）
+请求体与 SSE 见 §3.3。
 
-| 策略 | 行为 |
-|------|------|
-| `queue`（默认） | 消息进入 Engine 队列，同一 Claude Code session 在上轮结束后继续处理；SSE 立即返回 `message_queued` 后结束连接 |
-| `reject` | 返回 `409`，`error`: `conversation busy` |
+| `busy_policy` | 行为 |
+|---------------|------|
+| `queue`（默认） | 入队；SSE 返回 `message_queued` 后关闭 |
+| `reject` | `409`，`error`: `conversation busy` |
 
-`message_queued` 示例：
-
-```text
-event: message_queued
-data: {"message_id":"s1a2b3c:2","queue_depth":1}
-```
-
-客户端可在上轮 `message_end` 后重试，或轮询 `GET …/messages` 等待新轮次出现。
-
-队列满时 SSE 返回 `event: error`，`data.error` 说明队列已满（对齐 Engine `MsgQueueFull`）。
-
-#### SSE 规范事件（v1）
-
-| event | 说明 |
-|-------|------|
-| `message` | 轮次开始：`conversation_id`、`message_id`、`run_id` |
-| `thinking_delta` | 推理增量：`text` |
-| `text_delta` | 正文增量：`text` |
-| `message_end` | 轮次结束；`answer` 默认省略（见 §3.3） |
-| `error` | 不可恢复错误 |
-| `message_queued` | 仅 `busy_policy=queue` 且会话忙时 |
-
-完整请求/响应示例见 §3.3。
-
-**客户端断开**：HTTP/SSE 连接关闭后，**后台 agent 轮次继续执行**；已生成内容仍会写入历史。如需中止，调用 `POST /runs/{run_id}/cancel`（见 §4.6）。
-
-> **v1 不包含**：`tool_call_*` 等工具过程事件。Thinking 仅通过 `thinking_delta` 暴露正文推理，不含 tool 明细。
-
----
-
-### 4.6 取消进行中的轮次
-
-`run_id` 由 `POST /chat-messages` 的 SSE `message` 事件返回。
+### 4.6 取消轮次
 
 ```http
 POST /runs/{run_id}/cancel
 X-Chat-API-User: user_001
 ```
 
-响应：
+`run_id` 来自 SSE `message` 事件。校验归属 user，否则 `404`。等同 Engine `/stop`，会话可继续发消息。
 
 ```json
 {"ok": true, "data": {"result": "success"}}
 ```
 
-- 校验 `run_id` 属于该 `user`；否则 `404`
-- 停止 Engine 当前交互轮次（等同内部 `/stop` 语义，保留会话可继续发消息）
-- 若 SSE 仍连接，发送 `event: error`，`data.error` 为 `canceled by user`
+SSE 仍连接时发送 `event: error`，`data.error` 为 `canceled by user`。
 
 ---
 
-## 5. 接口清单（v1）
+## 5. 接口清单
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -449,18 +396,13 @@ X-Chat-API-User: user_001
 | `DELETE` | `/conversations/{id}` | 删除 |
 | `GET` | `/conversations/{id}/messages` | 历史 |
 | `POST` | `/chat-messages` | 发消息（SSE） |
-| `POST` | `/runs/{run_id}/cancel` | 取消进行中的轮次 |
+| `POST` | `/runs/{run_id}/cancel` | 取消轮次 |
 
-**v1 不提供**
-
-- `POST /conversations`（用 `chat-messages` 隐式创建）
-- `response_mode=blocking`（由 BFF 消费 SSE 聚合，或 v1.1 再加）
-- 独立 `POST …/name`（合并为 `PATCH`）
-- 顶层 `GET /messages`（嵌套在会话下）
+**v1 不提供**：`POST /conversations`、`response_mode=blocking`、历史附件 replay、`tool_call_*` SSE、`/health`。
 
 ---
 
-## 6. 配置示例
+## 6. 配置
 
 ```toml
 [[projects.platforms]]
@@ -469,15 +411,34 @@ type = "chat-api"
 [projects.platforms.options]
 listen_addr = ":8030"
 path = "/v1/"
-public_url = "https://api.example.com"
 api_token = "your-service-token"
 user_header = "X-Chat-API-User"
 user_name_header = "X-Chat-API-User-Name"
+channel_header = "X-Chat-API-Channel"
 cors_origins = ["https://app.example.com"]
 request_timeout = "30m"
-busy_policy = "queue"    # queue | reject
+busy_policy = "queue"
 include_answer_in_message_end = false
+max_runs = 1000
+run_ttl = "2h"
 ```
+
+| 选项 | 默认 | 说明 |
+|------|------|------|
+| `listen_addr` / `listen` | `:8030` | 监听地址 |
+| `path` | `/v1/` | API 前缀 |
+| `api_token` / `token` | 空 | Bearer token；空则跳过认证 |
+| `user_header` | `X-Chat-API-User` | 终端 user header |
+| `user_name_header` | `X-Chat-API-User-Name` | 可选显示名 header |
+| `channel_header` | `X-Chat-API-Channel` | 可选工作区 channel header |
+| `cors_origins` | 空 | CORS 允许来源 |
+| `request_timeout` / `timeout` | `30m` | SSE 等待上限 |
+| `busy_policy` | `queue` | `queue` 或 `reject` |
+| `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
+| `max_runs` | `1000` | 内存 pending run 上限 |
+| `run_ttl` | `2h` | run 记录 TTL |
+
+会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态。
 
 ---
 
@@ -485,4 +446,5 @@ include_answer_in_message_end = false
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
-| v1.0.0-draft | 2026-06-29 | 瘦身后 v1：5 端点、SSE-only、queue 默认、嵌套 messages |
+| v1.0.0 | 2026-07-09 | 精简规范；新增可选 `X-Chat-API-Channel` |
+| v1.0.0-draft | 2026-06-29 | 初版：6 端点、SSE-only、queue 默认 |

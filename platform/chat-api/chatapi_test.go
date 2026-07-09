@@ -46,6 +46,9 @@ func TestNewDefaults(t *testing.T) {
 	if !strings.EqualFold(p.userNameHeader, "X-Chat-API-User-Name") {
 		t.Fatalf("userNameHeader = %q", p.userNameHeader)
 	}
+	if !strings.EqualFold(p.channelHeader, "X-Chat-API-Channel") {
+		t.Fatalf("channelHeader = %q", p.channelHeader)
+	}
 	if p.busyPolicy != busyPolicyQueue {
 		t.Fatalf("busyPolicy = %q, want queue", p.busyPolicy)
 	}
@@ -124,6 +127,57 @@ func TestMessagesHTTPReturnsUserIdentity(t *testing.T) {
 	older := resp.Data.Messages[1]
 	if older["user_id"] != "uid_a" || older["user_name"] != "Alice" {
 		t.Fatalf("older message user fields = %+v", older)
+	}
+}
+
+func TestChatMessagesPassesChannelKeyToHandler(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+	_ = sm.NewSession("chat-api:user_001", "default")
+
+	var gotChannel string
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		gotChannel = msg.ChannelKey
+		if scp, ok := platform.(core.StreamingCardPlatform); ok {
+			card, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+			_ = card.Finalize(context.Background(), "ok")
+		}
+	})
+
+	body := `{"query":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", "team-alpha/backend")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotChannel != "team-alpha/backend" {
+		t.Fatalf("ChannelKey = %q, want team-alpha/backend", gotChannel)
+	}
+}
+
+func TestChatMessagesRejectsInvalidChannel(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	bindTestSessions(t, p)
+
+	body := `{"query":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", "bad channel")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
 
@@ -419,6 +473,23 @@ func TestChatMessagesRejectBusy(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+}
+
+func TestDeleteConversationRejectsQueryUser(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+	s := sm.NewSession("chat-api:user_001", "old")
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/conversations/"+s.ID+"?user=user_001", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 when user only in query", rec.Code)
+	}
+	if sm.FindByID(s.ID) == nil {
+		t.Fatal("session deleted unexpectedly")
 	}
 }
 

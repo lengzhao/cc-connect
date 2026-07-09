@@ -129,6 +129,14 @@ func userNameHeaderOption(opts map[string]any) (string, error) {
 	return http.CanonicalHeaderKey(header), nil
 }
 
+func channelHeaderOption(opts map[string]any) (string, error) {
+	header := stringOption(opts, "channel_header", defaultChannelHeader)
+	if header == "" {
+		return "", errors.New("chat-api: channel_header must not be empty")
+	}
+	return http.CanonicalHeaderKey(header), nil
+}
+
 func boolOption(opts map[string]any, key string, fallback bool) bool {
 	if opts == nil {
 		return fallback
