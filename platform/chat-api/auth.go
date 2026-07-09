@@ -154,7 +154,8 @@ func sessionKeyForUser(user string) string {
 	return "chat-api:" + user
 }
 
-// sessionKeyForConversation routes Engine state per shared conversation (Slack channel scope).
+// sessionKeyForConversation uses conversation_id as the Engine session key so
+// metadata and history share one Session record.
 func sessionKeyForConversation(conversationID string) string {
-	return "chat-api:conv:" + conversationID
+	return conversationID
 }

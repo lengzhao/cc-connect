@@ -209,6 +209,23 @@ func TestSession_Busy(t *testing.T) {
 	}
 }
 
+func TestSession_BindActiveSession(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(filepath.Join(dir, "sessions.json"))
+	ownerKey := "chat-api:user_001"
+	s, err := sm.NewSessionWithID(ownerKey, "conv_testopaqueid0000001", "chat")
+	if err != nil {
+		t.Fatalf("NewSessionWithID: %v", err)
+	}
+	if !sm.BindActiveSession(s.ID, s.ID) {
+		t.Fatal("BindActiveSession failed")
+	}
+	got := sm.GetOrCreateActive(s.ID)
+	if got.ID != s.ID {
+		t.Fatalf("GetOrCreateActive(%q).ID = %q, want %q", s.ID, got.ID, s.ID)
+	}
+}
+
 func TestSession_History(t *testing.T) {
 	s := &Session{}
 	s.AddHistory("user", "hello")

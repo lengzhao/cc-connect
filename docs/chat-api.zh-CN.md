@@ -84,7 +84,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | 创建 | 首条 `POST /chat-messages` 不带 `conversation_id` |
 | 列表 | `GET /conversations` 仅返回该 user **创建**的会话 |
 | 参与 | 持有 `conversation_id` 即可发消息、读历史（不必在列表中） |
-| Engine | `session_key = chat-api:conv:{conversation_id}` |
+| Engine | `session_key = {conversation_id}`（`conv_` 前缀随机 ID，不可猜测） |
 | 工作区 | 可选 `channel` → `Message.ChannelKey`，供 Engine multi-workspace 解析 `work_dir` |
 | 管理 | 重命名 / 删除仅**创建者**（owner）可操作 |
 

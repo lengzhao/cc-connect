@@ -423,8 +423,69 @@ func TestChatMessagesImplicitCreate(t *testing.T) {
 	if gotKey != sessionKeyForConversation(sessions[0].ID) {
 		t.Fatalf("session key = %q, want %q", gotKey, sessionKeyForConversation(sessions[0].ID))
 	}
+	if sm.ActiveSessionID(sessions[0].ID) != sessions[0].ID {
+		t.Fatalf("active session for %q = %q, want bound to conversation id", sessions[0].ID, sm.ActiveSessionID(sessions[0].ID))
+	}
+	if !isOpaqueConversationID(sessions[0].ID) {
+		t.Fatalf("conversation id = %q, want opaque conv_*", sessions[0].ID)
+	}
 	if sessions[0].GetName() != "first message" {
 		t.Fatalf("name = %q, want truncated query", sessions[0].GetName())
+	}
+}
+
+func TestChatMessagesHistoryReadableByConversationID(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+
+	var conversationID string
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		conversationID = msg.SessionKey
+		s := sm.GetOrCreateActive(msg.SessionKey)
+		s.AddUserHistory(msg.Content, msg.UserID, msg.UserName)
+		s.AddHistory("assistant", "hello back")
+		sm.Save()
+		if scp, ok := platform.(core.StreamingCardPlatform); ok {
+			card, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+			_ = card.Finalize(context.Background(), "hello back")
+		}
+	})
+
+	body := `{"query":"ping","auto_generate_name":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("post status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if conversationID == "" {
+		t.Fatal("handler never received session key")
+	}
+
+	msgReq := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+conversationID+"/messages?limit=10", nil)
+	msgReq.Header.Set("Authorization", "Bearer secret")
+	msgRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(msgRec, msgReq)
+	if msgRec.Code != http.StatusOK {
+		t.Fatalf("messages status = %d body=%s", msgRec.Code, msgRec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Messages []map[string]any `json:"messages"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(msgRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Data.Messages) != 1 {
+		t.Fatalf("messages = %+v, want 1 paired turn", resp.Data.Messages)
+	}
+	if resp.Data.Messages[0]["query"] != "ping" || resp.Data.Messages[0]["answer"] != "hello back" {
+		t.Fatalf("message pair = %+v", resp.Data.Messages[0])
 	}
 }
 

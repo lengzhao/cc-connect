@@ -80,6 +80,11 @@ type HookContextProvider interface {
 	HookContext(replyCtx any) HookContext
 }
 
+// ChatAPIBinder is implemented by chat-api for engine startup wiring.
+type ChatAPIBinder interface {
+	BindSessions(sessions *SessionManager)
+}
+
 // UserTimezoneProvider is an optional platform capability that returns the
 // sender's IANA timezone (e.g. "Asia/Shanghai") when known.
 type UserTimezoneProvider interface {

@@ -364,6 +364,41 @@ func (sm *SessionManager) NewSession(userKey, name string) *Session {
 	return s
 }
 
+// NewSessionWithID registers a new session under userKey with a caller-chosen ID.
+func (sm *SessionManager) NewSessionWithID(userKey, id, name string) (*Session, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, fmt.Errorf("empty session id")
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if _, ok := sm.sessions[id]; ok {
+		return nil, fmt.Errorf("session id %q already exists", id)
+	}
+	s := sm.createLockedWithID(userKey, id, name)
+	sm.saveLocked()
+	return s, nil
+}
+
+// BindActiveSession maps userKey to an existing session ID so Engine uses the same
+// Session record as API metadata (e.g. conversation_id as session key).
+func (sm *SessionManager) BindActiveSession(userKey, sessionID string) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if _, ok := sm.sessions[sessionID]; !ok {
+		return false
+	}
+	sm.activeSession[userKey] = sessionID
+	for _, sid := range sm.userSessions[userKey] {
+		if sid == sessionID {
+			sm.saveLocked()
+			return true
+		}
+	}
+	sm.userSessions[userKey] = append(sm.userSessions[userKey], sessionID)
+	sm.saveLocked()
+	return true
+}
+
 // NewSideSession registers a new session for userKey without changing the active
 // session. Used for isolated one-off runs (e.g. cron with session_mode=new_per_run)
 // so the user's current chat remains the default target for normal messages.
@@ -385,7 +420,10 @@ func (sm *SessionManager) NewSideSession(userKey, name string) *Session {
 }
 
 func (sm *SessionManager) createLocked(userKey, name string) *Session {
-	id := sm.nextID()
+	return sm.createLockedWithID(userKey, sm.nextID(), name)
+}
+
+func (sm *SessionManager) createLockedWithID(userKey, id, name string) *Session {
 	now := time.Now()
 	s := &Session{
 		ID:        id,

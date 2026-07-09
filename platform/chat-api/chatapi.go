@@ -34,6 +34,7 @@ type Platform struct {
 	includeAnswerInMessageEnd bool
 	projectName      string
 	sessionStorePath string
+	resolvedAddr     string
 
 	server   *http.Server
 	handler  core.MessageHandler
@@ -134,6 +135,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 		cancel()
 		return fmt.Errorf("chat-api: listen %s: %w", p.listenAddr, err)
 	}
+	p.resolvedAddr = ln.Addr().String()
 
 	p.running = true
 	go func() {
@@ -150,8 +152,23 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 		}
 	}()
 
-	slog.Info("chat-api: server started", "listen_addr", p.listenAddr, "path", p.path)
+	slog.Info("chat-api: server started", "listen_addr", p.resolvedAddr, "path", p.path)
 	return nil
+}
+
+// ResolvedBaseURL returns the HTTP base URL including API path prefix (e.g. http://127.0.0.1:54321/v1).
+func (p *Platform) ResolvedBaseURL() string {
+	p.mu.Lock()
+	addr := p.resolvedAddr
+	path := p.path
+	p.mu.Unlock()
+	if addr == "" {
+		addr = strings.TrimPrefix(p.listenAddr, ":")
+		if addr == "" {
+			addr = "127.0.0.1" + p.listenAddr
+		}
+	}
+	return "http://" + addr + strings.TrimSuffix(path, "/")
 }
 
 func (p *Platform) Stop() error {

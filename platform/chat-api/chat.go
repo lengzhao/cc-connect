@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -95,7 +96,18 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	var session *core.Session
 	implicitCreate := strings.TrimSpace(body.ConversationID) == ""
 	if implicitCreate {
-		session = sessions.NewSession(sessionKey, "default")
+		id, err := newConversationID()
+		if err != nil {
+			slog.Error("chat-api: conversation id", "error", err)
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		session, err = sessions.NewSessionWithID(sessionKey, id, "default")
+		if err != nil {
+			slog.Error("chat-api: create session", "error", err)
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
 	} else {
 		session = sessions.FindByID(body.ConversationID)
 		if session == nil {
@@ -107,6 +119,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	engineSessionKey := sessionKeyForConversation(session.ID)
+	sessions.BindActiveSession(engineSessionKey, session.ID)
 
 	if p.busyPolicy == busyPolicyReject && session.Busy() {
 		writeErr(w, http.StatusConflict, "conversation busy")

@@ -2243,6 +2243,9 @@ func (e *Engine) Start() error {
 	readyCount := 0
 	pendingCount := 0
 	for _, p := range e.platforms {
+		if binder, ok := p.(ChatAPIBinder); ok {
+			binder.BindSessions(e.sessions)
+		}
 		_, isAsync := p.(AsyncRecoverablePlatform)
 		if async, ok := p.(AsyncRecoverablePlatform); ok {
 			async.SetLifecycleHandler(e)
