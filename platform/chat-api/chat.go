@@ -61,6 +61,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	channelKey = p.channelKeyForMessage(channelKey)
 	sessions := p.sessionsOrReload()
 	if sessions == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")

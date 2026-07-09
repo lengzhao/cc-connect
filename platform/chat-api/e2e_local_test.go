@@ -130,11 +130,43 @@ func e2eRequestWithHeaders(t *testing.T, method, url, token, user string, header
 
 func startLocalChatAPIMultiWorkspaceServer(t *testing.T) (*core.Engine, string, string) {
 	t.Helper()
-	p, engine, base := startLocalChatAPIServer(t)
+
+	dataDir := t.TempDir()
 	baseDir := t.TempDir()
-	bindingPath := filepath.Join(t.TempDir(), "bindings.json")
+	bindingPath := filepath.Join(dataDir, "workspace_bindings.json")
+	sessionPath := filepath.Join(dataDir, "sessions.json")
+
+	plat, err := New(map[string]any{
+		"listen_addr": "127.0.0.1:0",
+		"token":       "e2e-token",
+		"path":        "/v1/",
+		"cc_data_dir": dataDir,
+		"cc_project":  "e2e",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+
+	agentSess := newE2EAgentSession("我是 workspace 测试助手。")
+	engine := core.NewEngine("e2e", &e2eAgent{session: agentSess}, []core.Platform{p}, sessionPath, core.LangChinese)
 	engine.SetMultiWorkspace(baseDir, bindingPath)
-	return engine, base, p.Name()
+	if err := engine.Start(); err != nil {
+		t.Fatalf("engine.Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = engine.Stop()
+		_ = p.Stop()
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for p.ResolvedBaseURL() == "" || !strings.Contains(p.ResolvedBaseURL(), "127.0.0.1:") {
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not start, base url = %q", p.ResolvedBaseURL())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return engine, p.ResolvedBaseURL(), p.Name()
 }
 
 func parseSSEEvents(body string) []sseEvent {
@@ -331,6 +363,24 @@ func TestE2ELocalChatAPIMultiWorkspaceChannelHistory(t *testing.T) {
 	}
 	if hist.Data.Messages[0]["query"] != "进入 workspace 后回复一句" {
 		t.Fatalf("query = %v", hist.Data.Messages[0]["query"])
+	}
+}
+
+func TestE2ELocalChatAPIMultiWorkspaceDefaultWorkDirWithoutChannel(t *testing.T) {
+	_, base, _ := startLocalChatAPIMultiWorkspaceServer(t)
+	const user = "e2e_user"
+	const token = "e2e-token"
+
+	body := `{"query":"hi","auto_generate_name":true}`
+	resp, raw := e2eRequest(t, http.MethodPost, base+"/chat-messages", token, user, strings.NewReader(body), "text/event-stream")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("chat status = %d body=%s", resp.StatusCode, raw)
+	}
+	if strings.Contains(raw, "Directory not found") {
+		t.Fatalf("unexpected workspace init error: %s", raw)
+	}
+	if !hasEvent(parseSSEEvents(raw), "message_end") {
+		t.Fatalf("chat SSE missing message_end: %s", raw)
 	}
 }
 

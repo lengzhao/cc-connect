@@ -41,7 +41,7 @@ Implements `core.Platform`, `StreamingCardPlatform`, `HookContextProvider` — s
 - **Participate**: `FindByID(conversation_id)` — 任意知情 user 可发消息 / 读历史
 - **Create**: 隐式 `NewSession(chat-api:{creator})` on first message
 - **Persist**: Engine `sessions.json`
-- **Default workspace**: no `channel` header means no channel/workspace binding; use the project default `work_dir`
+- **Default workspace**: no `channel` header uses the project default `work_dir` via an internal workspace binding (no extra config)
 
 ## Busy session policy
 
@@ -129,9 +129,12 @@ platform/chat-api/
   conversations.go
   messages.go
   chat.go
+  workspace.go
   auth.go
   sse.go
   chatapi_test.go
+  workspace_test.go
+  e2e_local_test.go
 cmd/cc-connect/plugin_platform_chatapi.go
 ```
 
