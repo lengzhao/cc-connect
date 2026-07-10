@@ -119,7 +119,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 			_, _ = sessions.SwitchSession(sessionKey, body.ConversationID)
 		}
 	}
-	engineSessionKey := sessionKeyForConversation(session.ID)
+	engineSessionKey := engineSessionKey(channelKey, session.ID)
 	sessions.BindActiveSession(engineSessionKey, session.ID)
 
 	if p.busyPolicy == busyPolicyReject && session.Busy() {

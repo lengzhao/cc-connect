@@ -250,7 +250,7 @@ func TestSharedChannelGuestCanPostAndRead(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("guest post status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	wantKey := sessionKeyForConversation(ownerSession.ID)
+	wantKey := engineSessionKey(defaultWorkspaceChannelID, ownerSession.ID)
 	if guestSessionKey != wantKey {
 		t.Fatalf("guest session key = %q, want %q", guestSessionKey, wantKey)
 	}
@@ -430,11 +430,12 @@ func TestChatMessagesImplicitCreate(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %d, want 1", len(sessions))
 	}
-	if gotKey != sessionKeyForConversation(sessions[0].ID) {
-		t.Fatalf("session key = %q, want %q", gotKey, sessionKeyForConversation(sessions[0].ID))
+	wantKey := engineSessionKey(defaultWorkspaceChannelID, sessions[0].ID)
+	if gotKey != wantKey {
+		t.Fatalf("session key = %q, want %q", gotKey, wantKey)
 	}
-	if sm.ActiveSessionID(sessions[0].ID) != sessions[0].ID {
-		t.Fatalf("active session for %q = %q, want bound to conversation id", sessions[0].ID, sm.ActiveSessionID(sessions[0].ID))
+	if sm.ActiveSessionID(wantKey) != sessions[0].ID {
+		t.Fatalf("active session for %q = %q, want bound to conversation id", wantKey, sm.ActiveSessionID(wantKey))
 	}
 	if !isOpaqueConversationID(sessions[0].ID) {
 		t.Fatalf("conversation id = %q, want opaque conv_*", sessions[0].ID)
@@ -448,9 +449,9 @@ func TestChatMessagesHistoryReadableByConversationID(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	sm := bindTestSessions(t, p)
 
-	var conversationID string
+	var engineKey string
 	p.setHandler(func(platform core.Platform, msg *core.Message) {
-		conversationID = msg.SessionKey
+		engineKey = msg.SessionKey
 		s := sm.GetOrCreateActive(msg.SessionKey)
 		s.AddUserHistory(msg.Content, msg.UserID, msg.UserName)
 		s.AddHistory("assistant", "hello back")
@@ -472,8 +473,12 @@ func TestChatMessagesHistoryReadableByConversationID(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("post status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if conversationID == "" {
+	if engineKey == "" {
 		t.Fatal("handler never received session key")
+	}
+	conversationID := conversationIDFromEngineSessionKey(engineKey)
+	if conversationID == "" {
+		t.Fatalf("engine session key %q did not contain conversation id", engineKey)
 	}
 
 	msgReq := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+conversationID+"/messages?limit=10", nil)

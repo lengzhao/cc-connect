@@ -153,9 +153,3 @@ func validChannel(channel string) bool {
 func sessionKeyForUser(user string) string {
 	return "chat-api:" + user
 }
-
-// sessionKeyForConversation uses conversation_id as the Engine session key so
-// metadata and history share one Session record.
-func sessionKeyForConversation(conversationID string) string {
-	return conversationID
-}

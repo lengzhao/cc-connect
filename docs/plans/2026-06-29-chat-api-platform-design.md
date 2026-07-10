@@ -33,7 +33,7 @@ Implements `core.Platform`, `StreamingCardPlatform`, `HookContextProvider` — s
 | `user`（创建者 / 发送者） | 列表归属 `chat-api:{user}`；`Message.UserID` |
 | `user_name`（可选 header） | `Message.UserName` + 历史 `HistoryEntry` |
 | `channel`（可选 header） | `Message.ChannelKey` / `ChannelID`；multi-workspace 下按 `<base_dir>/<channel>` 约定匹配；未传则使用默认 `work_dir` |
-| `conversation_id` | `Session.ID`（`conv_` + 22 字符随机串）；Engine `session_key` 同 ID |
+| `conversation_id` | `Session.ID`（`conv_` + 22 字符随机串）；Engine `session_key = chat-api:{channel}:{conversation_id}` |
 | `message_id` | `{conversation_id}:{turn_index}` |
 | History | 相邻 `user` + `assistant` 配对 |
 

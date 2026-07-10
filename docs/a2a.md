@@ -89,6 +89,8 @@ Every hook invocation also receives:
 - `message_id` / `CC_HOOK_MESSAGE_ID`
 - `channel_name` / `CC_HOOK_CHANNEL_NAME` when the platform provides a chat or channel name
 
+For multi-workspace bootstrap, parse the channel identifier from `CC_HOOK_SESSION_KEY` (for example `slack:C123:U456` or `chat-api:chat-123:conv_...`) and compose the binding store key as `{CC_HOOK_PLATFORM}:{channel}`. Use `{base_dir}/{CC_HOOK_CHANNEL_NAME}` as the convention directory when the platform resolves a human-readable name.
+
 `Authorization`, `Cookie`, and other sensitive headers are never forwarded, even if listed in config.
 
 ## Skills
