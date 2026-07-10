@@ -90,6 +90,8 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 
 `conversation_id` 与 `channel` **正交**：前者决定 agent 对话上下文，后者决定工作目录绑定（同 channel 下多个 conversation 可共享目录）。未传 `X-Chat-API-Channel` 时，chat-api 自动将项目默认 `work_dir` 绑定到内部默认 channel，无需额外配置。
 
+在 `mode = "multi-workspace"` 下，显式 `X-Chat-API-Channel` 会作为 channel 名称参与 Engine 约定匹配。chat-api 在消息进入 Engine 前会尝试自动初始化：若 platform options 配置了 `base_dir`（或与项目一致的 `cc_base_dir` / 环境变量 `AGENT_WORK_DIR`），且 `cc_data_dir`、`cc_project` 已设置，则会创建 `<base_dir>/<channel>` 并写入 `workspace_bindings.json`，普通消息（如 `hi`）可直接进入 agent，而不会被误判为本地目录路径。未配置 platform `base_dir` 时，行为与 IM 平台一致：目录不存在则进入 workspace 初始化/绑定引导，SSE 会在提示结束后正常返回 `message_end`。
+
 **`user` 传递**
 
 | 场景 | 需要 `user`？ | 方式 |
@@ -100,7 +102,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | `PATCH` / `DELETE` | 是（须 owner） | `user_header` |
 | `POST …/cancel` | 是（须发起者） | `user_header` |
 
-默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（可选，仅 `POST /chat-messages` 与 `POST …/cancel` 透传）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`。
+默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（可选，仅 `POST /chat-messages` 与 `POST …/cancel` 透传）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`，且不得包含 `.`、`..`、空路径段或以 `/` 开头/结尾。
 
 历史按轮次返回 `user_id` / `user_name`（有记录时）。v1 不返回 `owner_id`。
 
@@ -361,7 +363,7 @@ Content-Type: application/json
 Accept: text/event-stream
 ```
 
-`X-Chat-API-Channel` 可选。省略时使用项目默认 `work_dir`；填写时写入 Engine `ChannelKey`，在 `mode = "multi-workspace"` 下参与工作区绑定。取消进行中的轮次时，若当时请求携带了 channel，cancel 会一并透传。
+`X-Chat-API-Channel` 可选。省略时使用项目默认 `work_dir`；填写时写入 Engine `ChannelKey`。在 `mode = "multi-workspace"` 下，若 platform 配置了 `base_dir`（及 `cc_data_dir`、`cc_project`），chat-api 会自动创建 `<base_dir>/<channel>` 并持久化绑定；否则按约定匹配已有目录，未匹配则进入 workspace 初始化/绑定流程。取消进行中的轮次时，若当时请求携带了 channel，cancel 会一并透传。
 
 请求体与 SSE 见 §3.3。
 

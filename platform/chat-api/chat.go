@@ -166,12 +166,20 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	autoName := body.AutoGenerateName == nil || *body.AutoGenerateName
+	chatName, _ := p.ResolveChannelName(channelKey)
+	if err := p.ensureChannelWorkspace(channelKey); err != nil {
+		slog.Error("chat-api: ensure channel workspace", "channel", channelKey, "error", err)
+		_ = sse.Error("internal error")
+		p.pending.finish(runID, pendingResult{err: err})
+		return
+	}
 	msg := core.Message{
 		SessionKey: engineSessionKey,
 		Platform:   p.Name(),
 		MessageID:  runID,
 		ChannelID:  channelKey,
 		ChannelKey: channelKey,
+		ChatName:   chatName,
 		UserID:     user,
 		UserName:   userName,
 		Content:    query,
@@ -189,7 +197,10 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reqCtx := r.Context()
-	go handler(p, &msg)
+	go func() {
+		handler(p, &msg)
+		p.finishPlainReplyIfNeeded(runID)
+	}()
 
 	if implicitCreate && autoName {
 		defer func() {
@@ -335,6 +346,7 @@ func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
 	if !p.pending.setStreamContent(rc.runID, content) {
 		return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
 	}
+	p.finishPlainReplyIfNeeded(rc.runID)
 	return nil
 }
 
@@ -346,6 +358,9 @@ func (p *Platform) CreateStreamingCard(_ context.Context, replyTo any) (core.Str
 	rc, ok := replyTo.(replyContext)
 	if !ok || rc.runID == "" {
 		return nil, errors.New("chat-api: invalid streaming card reply context")
+	}
+	if run := p.pending.get(rc.runID); run != nil {
+		run.markStreamingCardCreated()
 	}
 	return &streamingCard{platform: p, runID: rc.runID}, nil
 }

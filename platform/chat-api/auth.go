@@ -109,7 +109,7 @@ func (p *Platform) resolveChannel(w http.ResponseWriter, r *http.Request) (strin
 	if channel == "" {
 		return "", true
 	}
-	if !validChannel(channel) {
+	if !validChannel(channel) || !isSafeWorkspaceChannelPath(channel) {
 		writeErr(w, http.StatusBadRequest, "invalid request")
 		return "", false
 	}

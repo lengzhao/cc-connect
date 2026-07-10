@@ -166,18 +166,28 @@ func TestChatMessagesRejectsInvalidChannel(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	bindTestSessions(t, p)
 
-	body := `{"query":"hi"}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer secret")
-	req.Header.Set("X-Chat-API-User", "user_001")
-	req.Header.Set("X-Chat-API-Channel", "bad channel")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
-	p.routes().ServeHTTP(rec, req)
+	cases := []string{
+		"bad channel",
+		"../escape",
+		"a//b",
+		".",
+		"/leading",
+		"trailing/",
+	}
+	for _, channel := range cases {
+		body := `{"query":"hi"}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("X-Chat-API-User", "user_001")
+		req.Header.Set("X-Chat-API-Channel", channel)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		rec := httptest.NewRecorder()
+		p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", rec.Code)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("channel %q status = %d, want 400", channel, rec.Code)
+		}
 	}
 }
 

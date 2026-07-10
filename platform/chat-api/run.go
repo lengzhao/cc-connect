@@ -3,6 +3,7 @@ package chatapi
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -34,9 +35,10 @@ type runState struct {
 	sentThinking   string
 	answerText     string
 	sentAnswer     string
-	finalized       bool
-	sse        *sseWriter
-	detached   bool
+	finalized            bool
+	streamingCardCreated bool
+	sse                  *sseWriter
+	detached             bool
 
 	notify chan struct{}
 	done   chan pendingResult
@@ -211,6 +213,24 @@ func (r *runState) replyContext() replyContext {
 	}
 }
 
+func (r *runState) markStreamingCardCreated() {
+	r.mu.Lock()
+	r.streamingCardCreated = true
+	r.mu.Unlock()
+}
+
+func (r *runState) shouldFinishPlainReply() (answer string, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.finalized || r.streamingCardCreated {
+		return "", false
+	}
+	if strings.TrimSpace(r.answerText) == "" {
+		return "", false
+	}
+	return r.answerText, true
+}
+
 func (r *runState) finalAnswer(fallback string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -270,6 +290,18 @@ func (s *pendingStore) finish(id string, result pendingResult) bool {
 	}
 	s.delete(id)
 	return true
+}
+
+func (p *Platform) finishPlainReplyIfNeeded(runID string) {
+	run := p.pending.get(runID)
+	if run == nil {
+		return
+	}
+	answer, ok := run.shouldFinishPlainReply()
+	if !ok {
+		return
+	}
+	p.pending.finish(runID, pendingResult{answer: answer})
 }
 
 func (s *pendingStore) cancelUser(id string) bool {

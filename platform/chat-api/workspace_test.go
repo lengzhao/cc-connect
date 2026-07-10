@@ -25,8 +25,29 @@ func TestResolveChannelName(t *testing.T) {
 	if got, err := p.ResolveChannelName(defaultWorkspaceChannelID); err != nil || got != "." {
 		t.Fatalf("default channel name = %q, %v; want .", got, err)
 	}
-	if got, err := p.ResolveChannelName("team/backend"); err != nil || got != "" {
-		t.Fatalf("explicit channel name = %q, %v; want empty", got, err)
+	if got, err := p.ResolveChannelName("chat-123"); err != nil || got != "chat-123" {
+		t.Fatalf("explicit channel name = %q, %v; want chat-123", got, err)
+	}
+	if got, err := p.ResolveChannelName("team/backend"); err != nil || got != "team/backend" {
+		t.Fatalf("nested channel name = %q, %v; want team/backend", got, err)
+	}
+	if got, err := p.ResolveChannelName("../escape"); err != nil || got != "" {
+		t.Fatalf("unsafe channel name = %q, %v; want empty", got, err)
+	}
+}
+
+func TestIsSafeWorkspaceChannelPath(t *testing.T) {
+	valid := []string{"chat-123", "team-alpha/backend", "a.b", "repo_v2"}
+	for _, ch := range valid {
+		if !isSafeWorkspaceChannelPath(ch) {
+			t.Fatalf("%q should be valid", ch)
+		}
+	}
+	invalid := []string{"", ".", "..", "/abs", "rel/", "a//b", "a/../b", "seg/.."}
+	for _, ch := range invalid {
+		if isSafeWorkspaceChannelPath(ch) {
+			t.Fatalf("%q should be invalid", ch)
+		}
 	}
 }
 

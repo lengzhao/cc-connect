@@ -107,6 +107,35 @@ func TestFinalizeSyncsStreamBeforeFinish(t *testing.T) {
 	}
 }
 
+func TestReplyFinishesPlainReplyWithoutStreamingCard(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	bindTestSessions(t, p)
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		_ = platform.Reply(context.Background(), msg.ReplyCtx, "workspace init hint")
+	})
+
+	body := `{"query":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", "chat-123")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	out := rec.Body.String()
+	if !strings.Contains(out, "event: text_delta") || !strings.Contains(out, "workspace init hint") {
+		t.Fatalf("missing plain reply delta: %s", out)
+	}
+	if !strings.Contains(out, "event: message_end") {
+		t.Fatalf("missing message_end: %s", out)
+	}
+	if strings.Contains(out, "request timed out") {
+		t.Fatalf("plain reply should not time out: %s", out)
+	}
+}
+
 func TestMessageEndOmitsAnswerByDefault(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{})
 	rec := httptest.NewRecorder()

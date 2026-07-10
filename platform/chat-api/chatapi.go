@@ -34,6 +34,8 @@ type Platform struct {
 	includeAnswerInMessageEnd bool
 	projectName               string
 	sessionStorePath          string
+	dataDir                   string
+	multiWorkspaceBaseDir     string
 	resolvedAddr              string
 
 	server   *http.Server
@@ -105,6 +107,8 @@ func New(opts map[string]any) (core.Platform, error) {
 		includeAnswerInMessageEnd: boolOption(opts, "include_answer_in_message_end", false),
 		projectName:               stringOption(opts, "cc_project", ""),
 		pending:                   newPendingStore(maxRuns, runTTL),
+		dataDir:                   stringOption(opts, "cc_data_dir", ""),
+		multiWorkspaceBaseDir:     multiWorkspaceBaseDirFromOpts(opts),
 	}
 	p.sessionStorePath = sessionStorePathFromOpts(opts)
 	return p, nil
