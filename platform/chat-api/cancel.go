@@ -14,15 +14,18 @@ func (p *Platform) handleRunRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(sub, "/")
-	if len(parts) != 2 || parts[1] != "cancel" {
-		writeErr(w, http.StatusNotFound, "not found")
-		return
-	}
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 		return
 	}
-	p.handleCancelRun(w, r, parts[0])
+	switch {
+	case len(parts) == 2 && parts[1] == "cancel":
+		p.handleCancelRun(w, r, parts[0])
+	case len(parts) == 4 && parts[1] == "interactions" && parts[3] == "respond":
+		p.handleRespondInteraction(w, r, parts[0], parts[2])
+	default:
+		writeErr(w, http.StatusNotFound, "not found")
+	}
 }
 
 func (p *Platform) handleCancelRun(w http.ResponseWriter, r *http.Request, runID string) {
@@ -43,7 +46,7 @@ func (p *Platform) handleCancelRun(w http.ResponseWriter, r *http.Request, runID
 	writeOK(w, http.StatusOK, map[string]string{"result": "success"})
 }
 
-func (p *Platform) dispatchStop(sessionKey, user, channelKey string, replyCtx replyContext) {
+func (p *Platform) dispatchStop(sessionKey, user, channelKey string, replyCtx *replyContext) {
 	handler := p.getHandler()
 	if handler == nil {
 		return

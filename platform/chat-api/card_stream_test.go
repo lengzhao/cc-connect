@@ -29,8 +29,8 @@ func TestParseStreamingCardContent(t *testing.T) {
 			answer:   "final answer",
 		},
 		{
-			name: "tool then answer",
-			content: "🔧 **Tool #1**: `bash`\nls\n\n" + streamSectionBreak + "done",
+			name:     "tool then answer",
+			content:  "🔧 **Tool #1**: `bash`\nls\n\n" + streamSectionBreak + "done",
 			thinking: "",
 			answer:   "done",
 		},

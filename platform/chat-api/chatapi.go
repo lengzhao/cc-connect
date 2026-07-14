@@ -30,6 +30,8 @@ type Platform struct {
 	channelHeader             string
 	corsOrigins               []string
 	requestTimeout            time.Duration
+	interactionTimeout        time.Duration
+	ssePingInterval           time.Duration
 	busyPolicy                string
 	includeAnswerInMessageEnd bool
 	projectName               string
@@ -65,6 +67,15 @@ func New(opts map[string]any) (core.Platform, error) {
 		if err != nil {
 			return nil, fmt.Errorf("chat-api: timeout: %w", err)
 		}
+	}
+
+	interactionTimeout, err := durationOption(opts, "interaction_timeout", defaultInteractionTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("chat-api: interaction_timeout: %w", err)
+	}
+	ssePingInterval, err := durationOptionAllowZero(opts, "sse_ping_interval", defaultSSEPingInterval)
+	if err != nil {
+		return nil, fmt.Errorf("chat-api: sse_ping_interval: %w", err)
 	}
 
 	maxRuns, err := intOption(opts, "max_runs", defaultMaxRuns)
@@ -103,6 +114,8 @@ func New(opts map[string]any) (core.Platform, error) {
 		channelHeader:             channelHeader,
 		corsOrigins:               stringSliceOption(opts, "cors_origins"),
 		requestTimeout:            timeout,
+		interactionTimeout:        interactionTimeout,
+		ssePingInterval:           ssePingInterval,
 		busyPolicy:                busyPolicy,
 		includeAnswerInMessageEnd: boolOption(opts, "include_answer_in_message_end", false),
 		projectName:               stringOption(opts, "cc_project", ""),
@@ -230,6 +243,8 @@ func init() {
 
 var _ core.Platform = (*Platform)(nil)
 var _ core.StreamingCardPlatform = (*Platform)(nil)
+var _ core.InlineButtonSender = (*Platform)(nil)
+var _ core.CardSender = (*Platform)(nil)
 var _ core.HookContextProvider = (*Platform)(nil)
 var _ core.ProcessingEndNotifier = (*Platform)(nil)
 var _ core.SessionManagerBinder = (*Platform)(nil)

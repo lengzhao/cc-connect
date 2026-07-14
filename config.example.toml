@@ -1332,6 +1332,8 @@ app_secret = "your-feishu-app-secret"
 # include_answer_in_message_end = false
 # max_runs = 1000                      # Max concurrent SSE runs in memory
 # run_ttl = "2h"                       # TTL for pending run records
+# interaction_timeout = "10m"          # Confirm window timeout (permission auto-deny; ask-question cancels turn)
+# sse_ping_interval = "15s"            # SSE keepalive while waiting (0s disables)
 #
 # A2A SendMessage metadata example / A2A SendMessage metadata 示例:
 # {

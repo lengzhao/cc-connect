@@ -55,12 +55,18 @@ Do **not** duplicate TryLock logic in chat-api; let Engine own queue semantics.
 
 ## Streaming (v1)
 
-- Normative SSE: `message`, `thinking_delta`, `text_delta`, `message_end`, `error`, `message_queued`
+- Normative SSE: `message`, `thinking_delta`, `text_delta`, `permission_request`, `question_request`, `interaction_superseded`, `interaction_ack`, `ping`, `message_end`, `error`, `message_queued`
 - `StreamingCard.Update` → `thinking_delta` + `text_delta` (parsed from card markdown); `Finalize` → `message_end`
-- `pendingStore` per run (from `platform/a2a`)
+- Permission / AskUserQuestion → `InlineButtonSender` / interactive `CardSender` → SSE interaction events
+- Client responds via `POST /runs/{run_id}/interactions/{id}/respond` with public `decision` / `option_id(s)` / `answer`; same SSE continues
+- SSE `actions[].id` uses the same public IDs (`allow` / `0:1`); Engine `perm:` / `askq:` IDs stay internal for respond validation
+- One unresolved interaction per run; a newer prompt emits `interaction_superseded` then the new request event
+- `interaction_timeout` (default `10m`): permission timeout auto-`deny`; AskUserQuestion timeout cancels the blocked turn (`error.kind=question`)
+- `sse_ping_interval` (default `15s`): keepalive while SSE is open
+- `pendingStore` per run (from `platform/a2a`); single-process only
 - Client disconnect → detach SSE only; agent turn continues; partial text still saved to history
 
-**Deferred to v1.1**: `response_mode=blocking`, optional SSE extensions (`tool_call_*`, `agent_thought`, business `metadata` events).
+**Deferred**: `response_mode=blocking`, optional SSE extensions (`tool_call_*`, `agent_thought`, business `metadata` events).
 
 ## Authentication
 
@@ -80,12 +86,15 @@ Do **not** duplicate TryLock logic in chat-api; let Engine own queue semantics.
 | `GET` | `/v1/conversations/{id}/messages` |
 | `POST` | `/v1/chat-messages` |
 | `POST` | `/v1/runs/{run_id}/cancel` |
+| `POST` | `/v1/runs/{run_id}/interactions/{interaction_id}/respond` |
 
 Response envelope: `{ok, data}` / `{ok, error}` (Bridge style).
 
 Pagination: unified `cursor` + `next_cursor` + `has_more`.
 
 **Disconnect vs cancel**: SSE disconnect detaches the stream only; the agent turn keeps running. Use `POST /v1/runs/{run_id}/cancel` for user-initiated abort (`Engine.StopInteractiveTurn`).
+
+**Interaction confirmations**: Engine `SendWithButtons` / interactive cards emit `permission_request` / `question_request`. Client POSTs the choice to the respond endpoint; chat-api injects a synthetic `core.Message` (permission paths set `IsPermissionResponse`). Interaction replies must not finish the SSE turn as a plain reply.
 
 ## Building blocks
 
@@ -129,10 +138,12 @@ platform/chat-api/
   conversations.go
   messages.go
   chat.go
+  interaction.go
   workspace.go
   auth.go
   sse.go
   chatapi_test.go
+  interaction_test.go
   workspace_test.go
   e2e_local_test.go
 cmd/cc-connect/plugin_platform_chatapi.go

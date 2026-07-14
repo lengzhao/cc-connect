@@ -23,10 +23,6 @@ func encodeSessionChannelSegment(channelKey string) string {
 	return strings.ReplaceAll(channelKey, ":", "%3A")
 }
 
-func decodeSessionChannelSegment(segment string) string {
-	return strings.ReplaceAll(segment, "%3A", ":")
-}
-
 // conversationIDFromEngineSessionKey recovers the opaque conversation id from
 // an Engine session key. Returns empty when the key is not chat-api shaped.
 func conversationIDFromEngineSessionKey(sessionKey string) string {

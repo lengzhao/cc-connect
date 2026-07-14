@@ -1,6 +1,6 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.0.0**（2026-07-09）  
+> 版本：**v1.1.1**（2026-07-14）  
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
 > 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md)
@@ -14,6 +14,7 @@
 - 会话列表、重命名、删除
 - 会话历史（游标分页）
 - 发送消息：**SSE 流式**（`message` → `thinking_delta?` → `text_delta` → `message_end`）
+- 用户确认窗口：权限 / AskUserQuestion；公共 respond 字段、`ping` 保活、单槽 supersede
 - 隐式创建会话（首条 `chat-messages` 不带 `conversation_id`）
 - 会话忙时排队（默认 `busy_policy=queue`，复用 Engine 队列）
 
@@ -101,8 +102,9 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | `POST /chat-messages` | 是 | `user_header` |
 | `PATCH` / `DELETE` | 是（须 owner） | `user_header` |
 | `POST …/cancel` | 是（须发起者） | `user_header` |
+| `POST …/interactions/…/respond` | 是（须发起者） | `user_header` |
 
-默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（可选，仅 `POST /chat-messages` 与 `POST …/cancel` 透传）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`，且不得包含 `.`、`..`、空路径段或以 `/` 开头/结尾。
+默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（可选，仅 `POST /chat-messages`、`POST …/cancel` 与交互响应透传）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`，且不得包含 `.`、`..`、空路径段或以 `/` 开头/结尾。
 
 历史按轮次返回 `user_id` / `user_name`（有记录时）。v1 不返回 `owner_id`。
 
@@ -125,18 +127,23 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | 401 | `unauthorized` | Token 无效 |
 | 400 | `user required` | 缺少 user |
 | 400 | `invalid request` | 参数错误 |
-| 404 | `not found` | 资源不存在或无权 |
+| 400 | `exactly one of decision, option_id, option_ids, answer required` | 确认回传字段互斥/缺省 |
+| 400 | `invalid decision` / `unknown option` | 确认回传内容无效 |
+| 404 | `not found` | 资源不存在、无权，或 interaction 已被 supersede |
 | 409 | `conversation busy` | `busy_policy=reject` 时会话忙 |
+| 409 | `interaction already responded` | 交互已响应 |
+| 409 | `interaction expired` | 交互已过期 |
 | 413 | `payload too large` | 请求体 > 10 MiB |
 | 500 | `internal error` | 服务器错误 |
 
 **SSE**（`event: error`）
 
-| `data.error` | 说明 |
-|--------------|------|
-| `canceled by user` | 用户取消 |
-| `request timed out` | 超过 `request_timeout` |
-| `too many concurrent requests` | 超过 `max_runs` |
+| `data` | 说明 |
+|--------|------|
+| `{"error":"canceled by user"}` | 用户取消 |
+| `{"error":"request timed out"}` | 超过 `request_timeout` |
+| `{"error":"interaction timed out","kind":"question"}` | AskUserQuestion 超过 `interaction_timeout`（当前 turn 已取消） |
+| `{"error":"too many concurrent requests"}` | 超过 `max_runs` |
 | （队列满文案） | Engine 队列已满 |
 
 ### 2.7 message_id
@@ -239,9 +246,14 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 | `message` | `conversation_id`, `message_id`, `run_id` | 轮次开始 |
 | `thinking_delta` | `message_id`, `text` | 推理增量（可选） |
 | `text_delta` | `message_id`, `text` | 正文增量 |
+| `permission_request` | 见 §3.5 | 工具权限确认窗口 |
+| `question_request` | 见 §3.5 | AskUserQuestion 确认窗口 |
+| `interaction_superseded` | `interaction_id`, `replacement_id`, `run_id`, `message_id` | 同一 run 上新确认替换旧确认 |
+| `interaction_ack` | `interaction_id`, `message_id`, `text?` | 用户已响应确认的回执（可选） |
+| `ping` | `run_id`, `ts` | SSE 保活；可忽略 |
 | `message_end` | `message_id`, `conversation_id`, `answer?` | 轮次结束 |
 | `message_queued` | `message_id`, `queue_depth` | 会话忙且 `busy_policy=queue` |
-| `error` | `error` | 错误（§2.6） |
+| `error` | `error`, `kind?` | 错误（§2.6） |
 
 `message_end.answer` 默认省略（`include_answer_in_message_end = true` 时附带）。
 
@@ -251,6 +263,10 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 
 - 拼接 `text_delta` 得完整回复；断开 SSE **不**停止 agent，内容仍写入 history
 - `message_queued` 后勿立即重开 SSE；等上轮结束或轮询 history
+- 收到 `permission_request` / `question_request` 时弹出确认窗口；用 `expires_at` 倒计时；通过 §4.7 回传结果，**不要**把确认结果当普通 `chat-messages`
+- `ping` 为保活事件，客户端可忽略
+- 同一 run 若出现新的确认，会先发 `interaction_superseded`；旧 `interaction_id` 不可再 respond
+- AskUserQuestion 超时后当前阻塞 turn 会取消；后续用户输入应重新 `POST /chat-messages`，作为普通对话
 - 取消：`POST /runs/{run_id}/cancel`（`run_id` 来自 `message` 事件）
 
 ### 3.4 Input（多模态）
@@ -266,6 +282,64 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 ```
 
 `transfer_method` 仅支持 `base64`。`type`：`image` | `file` | `audio`（audio 每请求最多一条）。
+
+### 3.5 用户确认窗口
+
+Agent 在工具权限或 AskUserQuestion 时，SSE 中插入结构化交互事件。两类确认都保持原 SSE **打开**，App 弹窗后调用 §4.7 回传；确认后同一 SSE 继续 `text_delta` → `message_end`。
+
+同一时刻每个 run **最多一个**未决 interaction。若同 turn 再次弹出确认，会先发 `interaction_superseded`，再发新的 `permission_request` / `question_request`。
+
+无 `perm:` / `askq:` 结构化按钮的普通卡片按纯文本 `Reply`，**不会**当作确认窗口。
+
+**`permission_request`**
+
+```text
+event: permission_request
+data: {
+  "interaction_id":"ix_abc",
+  "run_id":"run_abc",
+  "message_id":"s1a2b3c:1",
+  "prompt":"Allow tool Bash?",
+  "expires_at":1780004100,
+  "actions":[
+    {"id":"allow","label":"Allow"},
+    {"id":"deny","label":"Deny"},
+    {"id":"allow_all","label":"Allow All"}
+  ]
+}
+```
+
+**`question_request`**
+
+```text
+event: question_request
+data: {
+  "interaction_id":"ix_abc",
+  "run_id":"run_abc",
+  "message_id":"s1a2b3c:1",
+  "prompt":"选择部署环境",
+  "expires_at":1780004100,
+  "actions":[
+    {"id":"0:1","label":"Staging"},
+    {"id":"0:2","label":"Production"}
+  ]
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `interaction_id` | 本次交互 ID（回传时必填） |
+| `expires_at` | Unix 秒；过期后前端应禁用按钮（服务端以 interaction 状态为准） |
+| `actions` | 可选按钮；`id` 为公共 ID（权限：`allow`/`deny`/`allow_all`；问答：`0:1`），与 §4.7 的 `decision` / `option_id` 对齐 |
+
+**超时**（`interaction_timeout`，默认 `10m`，且不超过当前 run 剩余 `request_timeout`）
+
+| 类型 | 行为 |
+|------|------|
+| `permission_request` | 超时自动 `deny`；agent 收到拒绝结果后可自行收束；SSE 可继续至 `message_end` |
+| `question_request` | 超时取消当前阻塞 turn（`/stop`）；SSE `error` 含 `kind=question`；后续输入为普通新对话 |
+
+`expires_at` 仅为客户端提示；安全边界是 run / interaction 是否仍有效、user 是否匹配。
 
 ---
 
@@ -387,6 +461,44 @@ X-Chat-API-User: user_001
 
 SSE 仍连接时发送 `event: error`，`data.error` 为 `canceled by user`。
 
+### 4.7 响应确认窗口
+
+```http
+POST /runs/{run_id}/interactions/{interaction_id}/respond
+X-Chat-API-User: user_001
+Content-Type: application/json
+
+{"decision":"allow"}
+```
+
+用于响应 `permission_request` 和 `question_request`。响应后原 SSE 继续等待 agent 输出。
+
+推荐公共字段（互斥，恰好一个）：
+
+```json
+{"decision":"allow"}
+{"decision":"deny"}
+{"decision":"allow_all"}
+{"option_id":"0:2"}
+{"option_ids":["0:1","0:3"]}
+{"answer":"自由文本"}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `decision` | 权限结果：`allow` / `deny` / `allow_all` |
+| `option_id` | 单选问答；`"0:2"` 映射为内部 `askq:0:2` |
+| `option_ids` | 多选问答；映射为 Engine 编号列表（如 `1,3`） |
+| `answer` | 自由文本答案 |
+
+归属 user 须与发起 `chat-messages` 的 user 一致，否则 `404`。已响应 → `409 interaction already responded`；已过期 → `409 interaction expired`；已被 supersede → `404`。
+
+```json
+{"ok": true, "data": {"result": "success"}}
+```
+
+响应成功后，原 SSE 可发送 `interaction_ack`，随后 agent 继续输出 `thinking_delta` / `text_delta`，最终 `message_end`。确认回执**不会**提前结束轮次。
+
 ---
 
 ## 5. 接口清单
@@ -399,6 +511,7 @@ SSE 仍连接时发送 `event: error`，`data.error` 为 `canceled by user`。
 | `GET` | `/conversations/{id}/messages` | 历史 |
 | `POST` | `/chat-messages` | 发消息（SSE） |
 | `POST` | `/runs/{run_id}/cancel` | 取消轮次 |
+| `POST` | `/runs/{run_id}/interactions/{interaction_id}/respond` | 响应确认窗口 |
 
 **v1 不提供**：`POST /conversations`、`response_mode=blocking`、历史附件 replay、`tool_call_*` SSE、`/health`。
 
@@ -419,6 +532,8 @@ user_name_header = "X-Chat-API-User-Name"
 channel_header = "X-Chat-API-Channel"
 cors_origins = ["https://app.example.com"]
 request_timeout = "30m"
+interaction_timeout = "10m"
+sse_ping_interval = "15s"
 busy_policy = "queue"
 include_answer_in_message_end = false
 max_runs = 1000
@@ -435,12 +550,14 @@ run_ttl = "2h"
 | `channel_header` | `X-Chat-API-Channel` | 可选工作区 channel header |
 | `cors_origins` | 空 | CORS 允许来源 |
 | `request_timeout` / `timeout` | `30m` | SSE 等待上限 |
+| `interaction_timeout` | `10m` | 确认窗口超时；不超过当前 run 剩余 `request_timeout` |
+| `sse_ping_interval` | `15s` | SSE 保活间隔；`0` / `0s` 关闭 |
 | `busy_policy` | `queue` | `queue` 或 `reject` |
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
 | `max_runs` | `1000` | 内存 pending run 上限 |
 | `run_ttl` | `2h` | run 记录 TTL |
 
-会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态。
+会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态（确认窗口不支持多副本共享）。
 
 ---
 
@@ -448,5 +565,7 @@ run_ttl = "2h"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.1.1 | 2026-07-14 | 确认窗口硬化：公共 `decision`/`option_id(s)`、SSE actions 公共 id、`ping`、`interaction_superseded`、结构化超时错误 |
+| v1.1.0 | 2026-07-14 | 用户确认窗口：`permission_request` / `question_request`、交互响应端点、`interaction_timeout` |
 | v1.0.0 | 2026-07-09 | 精简规范；新增可选 `X-Chat-API-Channel` |
 | v1.0.0-draft | 2026-06-29 | 初版：6 端点、SSE-only、queue 默认 |
