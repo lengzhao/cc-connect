@@ -2,13 +2,13 @@ package chatapi
 
 import "strings"
 
-// defaultWorkspaceChannelID is an internal binding key used when the client omits
-// X-Chat-API-Channel in multi-workspace mode. It is never exposed in the HTTP API.
-const defaultWorkspaceChannelID = "__default__"
+// defaultWorkspaceChannelID is assigned at the API entry layer when the client
+// omits X-Chat-API-Channel. It is a real channel (base_dir/default_channel), not
+// a sentinel mapped to the project root.
+const defaultWorkspaceChannelID = "default_channel"
 
-// channelKeyForMessage maps an omitted channel header to the internal default
-// workspace channel. In multi-workspace mode ResolveChannelName maps that
-// channel to "." so Engine's existing convention matcher resolves base_dir.
+// channelKeyForMessage maps an omitted channel header to the default workspace
+// channel so Engine can convention-match base_dir/<channel>.
 func (p *Platform) channelKeyForMessage(headerChannel string) string {
 	if strings.TrimSpace(headerChannel) != "" {
 		return headerChannel
@@ -17,12 +17,8 @@ func (p *Platform) channelKeyForMessage(headerChannel string) string {
 }
 
 // ResolveChannelName implements core.ChannelNameResolver for multi-workspace mode.
-// The default internal channel maps to "." (project base_dir). Explicit channels
-// return their header value so Engine can convention-match base_dir/<channel>.
+// Valid channels return themselves for base_dir/<channel> convention matching.
 func (p *Platform) ResolveChannelName(channelID string) (string, error) {
-	if channelID == defaultWorkspaceChannelID {
-		return ".", nil
-	}
 	if name, ok := workspaceChannelName(channelID); ok {
 		return name, nil
 	}
@@ -30,7 +26,7 @@ func (p *Platform) ResolveChannelName(channelID string) (string, error) {
 }
 
 func workspaceChannelName(channelID string) (string, bool) {
-	if channelID == "" || channelID == defaultWorkspaceChannelID {
+	if channelID == "" {
 		return "", false
 	}
 	if !isSafeWorkspaceChannelPath(channelID) {

@@ -32,7 +32,7 @@ Implements `core.Platform`, `StreamingCardPlatform`, `HookContextProvider` — s
 |-----|------------|
 | `user`（创建者 / 发送者） | 列表归属 `chat-api:{user}`；`Message.UserID` |
 | `user_name`（可选 header） | `Message.UserName` + 历史 `HistoryEntry` |
-| `channel`（可选 header） | `Message.ChannelKey` / `ChannelID`；multi-workspace 下按 `<base_dir>/<channel>` 约定匹配；未传则使用默认 `work_dir` |
+| `channel`（可选 header） | `Message.ChannelKey` / `ChannelID`；省略时入口分配 `default_channel`；multi-workspace 下按 `<base_dir>/<channel>` 约定匹配 |
 | `conversation_id` | `Session.ID`（`conv_` + 22 字符随机串）；Engine `session_key = chat-api:{channel}:{conversation_id}` |
 | `message_id` | `{conversation_id}:{turn_index}` |
 | History | 相邻 `user` + `assistant` 配对 |
@@ -41,7 +41,7 @@ Implements `core.Platform`, `StreamingCardPlatform`, `HookContextProvider` — s
 - **Participate**: `FindByID(conversation_id)` — 任意知情 user 可发消息 / 读历史
 - **Create**: 隐式 `NewSession(chat-api:{creator})` on first message
 - **Persist**: Engine `sessions.json`
-- **Default workspace**: no `channel` header uses the project default `work_dir` via an internal workspace binding (no extra config)
+- **Default workspace**: no `channel` header → API assigns `default_channel` (`base_dir/default_channel`); project `base_dir` is injected as platform `cc_base_dir` in multi-workspace mode
 
 ## Busy session policy
 

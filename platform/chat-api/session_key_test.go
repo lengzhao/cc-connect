@@ -8,7 +8,8 @@ func TestEngineSessionKey(t *testing.T) {
 		conv    string
 		want    string
 	}{
-		{defaultWorkspaceChannelID, "conv_abc123", "chat-api:__default__:conv_abc123"},
+		{defaultWorkspaceChannelID, "conv_abc123", "chat-api:default_channel:conv_abc123"},
+		{"", "conv_abc123", "chat-api:default_channel:conv_abc123"},
 		{"chat-123", "conv_abc123", "chat-api:chat-123:conv_abc123"},
 		{"team/backend", "conv_abc123", "chat-api:team/backend:conv_abc123"},
 		{"team:alpha", "conv_abc123", "chat-api:team%3Aalpha:conv_abc123"},

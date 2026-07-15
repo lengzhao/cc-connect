@@ -28,7 +28,7 @@
 - Chat: successful `POST /chat-messages` returns SSE (not JSON envelope)
 - Auth: `Authorization: Bearer <api_token>` (required in production)
 - User: `X-Chat-API-User` on writes; query or header on list/delete
-- Optional `X-Chat-API-Channel` on send/cancel/respond for multi-workspace `work_dir` binding
+- Optional `X-Chat-API-Channel` on send for multi-workspace `work_dir` binding (omit → `default_channel`; cancel/respond reuse run channel)
 - `message_id`: `{conversation_id}:{turn_index}`
 - Client disconnect does not stop the agent; use cancel endpoint to abort
 

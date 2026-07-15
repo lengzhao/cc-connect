@@ -29,7 +29,7 @@ func (p *Platform) ensureChannelWorkspace(channelKey string) error {
 	if err != nil {
 		return err
 	}
-	if channelName == "" || channelName == "." {
+	if channelName == "" {
 		return nil
 	}
 

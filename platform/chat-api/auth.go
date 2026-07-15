@@ -108,7 +108,8 @@ func displayUserName(userID, userName string) string {
 }
 
 // resolveChannel returns an optional workspace channel id from channel_header.
-// Empty header is allowed. Invalid values write 400 and return ok=false.
+// Empty header is allowed (filled later as default_channel). Invalid values
+// write 400 and return ok=false.
 func (p *Platform) resolveChannel(w http.ResponseWriter, r *http.Request) (string, bool) {
 	channel := strings.TrimSpace(r.Header.Get(p.channelHeader))
 	if channel == "" {

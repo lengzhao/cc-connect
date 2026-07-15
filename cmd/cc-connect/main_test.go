@@ -191,6 +191,52 @@ func TestBuildAgentOptionsInjectsProjectScope(t *testing.T) {
 	}
 }
 
+func TestBuildPlatformOptionsInjectsBaseDirInMultiWorkspace(t *testing.T) {
+	proj := config.ProjectConfig{
+		Name:    "demo-project",
+		Mode:    "multi-workspace",
+		BaseDir: "~/workspace",
+	}
+	pc := config.PlatformConfig{
+		Type: "chat-api",
+		Options: map[string]any{
+			"listen_addr": ":8030",
+			"token":       "secret",
+		},
+	}
+
+	got := buildPlatformOptions("/tmp/data", proj, pc)
+
+	if got["cc_data_dir"] != "/tmp/data" {
+		t.Fatalf("cc_data_dir = %v, want %q", got["cc_data_dir"], "/tmp/data")
+	}
+	if got["cc_project"] != "demo-project" {
+		t.Fatalf("cc_project = %v, want %q", got["cc_project"], "demo-project")
+	}
+	if got["cc_base_dir"] != "~/workspace" {
+		t.Fatalf("cc_base_dir = %v, want %q", got["cc_base_dir"], "~/workspace")
+	}
+	if got["listen_addr"] != ":8030" || got["token"] != "secret" {
+		t.Fatalf("buildPlatformOptions() lost existing options: %v", got)
+	}
+	if _, exists := pc.Options["cc_base_dir"]; exists {
+		t.Fatalf("platform options mutated: %v", pc.Options)
+	}
+}
+
+func TestBuildPlatformOptionsSkipsBaseDirOutsideMultiWorkspace(t *testing.T) {
+	proj := config.ProjectConfig{
+		Name:    "demo-project",
+		BaseDir: "~/workspace",
+	}
+	pc := config.PlatformConfig{Type: "chat-api", Options: map[string]any{"token": "secret"}}
+
+	got := buildPlatformOptions("/tmp/data", proj, pc)
+	if _, exists := got["cc_base_dir"]; exists {
+		t.Fatalf("cc_base_dir should not be injected outside multi-workspace: %v", got)
+	}
+}
+
 func TestWireAgentProvidersStartsRefreshAfterProviderWiring(t *testing.T) {
 	agent := &stubProviderRefreshAgent{activateOK: true}
 	proj := config.ProjectConfig{

@@ -394,12 +394,7 @@ func main() {
 
 		var platforms []core.Platform
 		for _, pc := range proj.Platforms {
-			opts := make(map[string]any, len(pc.Options)+2)
-			for k, v := range pc.Options {
-				opts[k] = v
-			}
-			opts["cc_data_dir"] = cfg.DataDir
-			opts["cc_project"] = proj.Name
+			opts := buildPlatformOptions(cfg.DataDir, proj, pc)
 			p, err := core.CreatePlatform(pc.Type, opts)
 			if err != nil {
 				slog.Error("failed to create platform", "project", proj.Name, "type", pc.Type, "error", err)
@@ -1877,6 +1872,30 @@ func buildAgentOptions(dataDir string, proj config.ProjectConfig) map[string]any
 	}
 	opts["cc_data_dir"] = dataDir
 	opts["cc_project"] = proj.Name
+	return opts
+}
+
+// buildPlatformOptions copies platform options and injects project-scoped keys.
+// In multi-workspace mode it also injects cc_base_dir from the project base_dir
+// so platforms (e.g. chat-api) can auto-bootstrap channel workspaces without
+// duplicating base_dir in platform options. Explicit platform base_dir still
+// wins via multiWorkspaceBaseDirFromOpts precedence.
+func buildPlatformOptions(dataDir string, proj config.ProjectConfig, pc config.PlatformConfig) map[string]any {
+	extra := 2
+	if proj.Mode == "multi-workspace" && strings.TrimSpace(proj.BaseDir) != "" {
+		extra++
+	}
+	opts := make(map[string]any, len(pc.Options)+extra)
+	for k, v := range pc.Options {
+		opts[k] = v
+	}
+	opts["cc_data_dir"] = dataDir
+	opts["cc_project"] = proj.Name
+	if proj.Mode == "multi-workspace" {
+		if baseDir := strings.TrimSpace(proj.BaseDir); baseDir != "" {
+			opts["cc_base_dir"] = baseDir
+		}
+	}
 	return opts
 }
 

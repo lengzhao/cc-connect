@@ -478,7 +478,7 @@ func TestE2ELocalChatAPIMultiWorkspaceChannelHistory(t *testing.T) {
 }
 
 func TestE2ELocalChatAPIMultiWorkspaceDefaultWorkDirWithoutChannel(t *testing.T) {
-	_, base, _, _ := startLocalChatAPIMultiWorkspaceServer(t)
+	_, base, _, baseDir := startLocalChatAPIMultiWorkspaceServer(t)
 	const user = "e2e_user"
 	const token = "e2e-token"
 
@@ -492,6 +492,72 @@ func TestE2ELocalChatAPIMultiWorkspaceDefaultWorkDirWithoutChannel(t *testing.T)
 	}
 	if !hasEvent(parseSSEEvents(raw), "message_end") {
 		t.Fatalf("chat SSE missing message_end: %s", raw)
+	}
+	channelDir := filepath.Join(baseDir, defaultWorkspaceChannelID)
+	if st, err := os.Stat(channelDir); err != nil || !st.IsDir() {
+		t.Fatalf("expected auto-created default channel dir %q: %v", channelDir, err)
+	}
+}
+
+func TestE2ELocalChatAPIMultiWorkspaceDefaultChannelWithInjectedCCBaseDir(t *testing.T) {
+	// Simulates production: project multi-workspace base_dir is injected as
+	// cc_base_dir; platform options do not duplicate base_dir.
+	dataDir := t.TempDir()
+	baseDir := t.TempDir()
+	bindingPath := filepath.Join(dataDir, "workspace_bindings.json")
+	sessionPath := filepath.Join(dataDir, "sessions.json")
+
+	plat, err := New(map[string]any{
+		"listen_addr":     "127.0.0.1:0",
+		"token":           "e2e-token",
+		"path":            "/v1/",
+		"cc_data_dir":     dataDir,
+		"cc_project":      "e2e",
+		"cc_base_dir":     baseDir,
+		"request_timeout": "2s",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+
+	agentSess := newE2EAgentSession("我是 workspace 测试助手。")
+	engine := core.NewEngine("e2e", &e2eAgent{session: agentSess}, []core.Platform{p}, sessionPath, core.LangChinese)
+	engine.SetMultiWorkspace(baseDir, bindingPath)
+	engine.SetWorkspaceInitAllowLocalPaths(true)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("engine.Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = engine.Stop()
+		_ = p.Stop()
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for p.ResolvedBaseURL() == "" || !strings.Contains(p.ResolvedBaseURL(), "127.0.0.1:") {
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not start, base url = %q", p.ResolvedBaseURL())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	base := p.ResolvedBaseURL()
+
+	const user = "e2e_user"
+	const token = "e2e-token"
+	body := `{"query":"hi","auto_generate_name":true}`
+	resp, raw := e2eRequest(t, http.MethodPost, base+"/chat-messages", token, user, strings.NewReader(body), "text/event-stream")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("chat status = %d body=%s", resp.StatusCode, raw)
+	}
+	if strings.Contains(raw, "此频道未找到工作区") || strings.Contains(raw, "Directory not found") || strings.Contains(raw, "目录不存在") {
+		t.Fatalf("unexpected workspace init when cc_base_dir is injected: %s", raw)
+	}
+	if !hasEvent(parseSSEEvents(raw), "message_end") {
+		t.Fatalf("chat SSE missing message_end: %s", raw)
+	}
+	channelDir := filepath.Join(baseDir, defaultWorkspaceChannelID)
+	if st, err := os.Stat(channelDir); err != nil || !st.IsDir() {
+		t.Fatalf("expected auto-created default channel dir %q: %v", channelDir, err)
 	}
 }
 

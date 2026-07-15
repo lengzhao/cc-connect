@@ -1326,10 +1326,9 @@ app_secret = "your-feishu-app-secret"
 # api_token = "your-service-token"   # Required in production; alias: token
 # user_header = "X-Chat-API-User"
 # user_name_header = "X-Chat-API-User-Name"
-# channel_header = "X-Chat-API-Channel"   # Optional workspace key for multi-workspace mode
-# base_dir = "/data/workspaces"           # Required for multi-workspace auto channel bootstrap (same as project base_dir; fallback: AGENT_WORK_DIR)
-# cc_data_dir = "/var/lib/cc-connect"     # Data dir for sessions + workspace_bindings.json (same as project data_dir)
-# cc_project = "my-project"               # Project name for workspace_bindings.json keys
+# channel_header = "X-Chat-API-Channel"   # Optional workspace key for multi-workspace mode (omit → default_channel)
+# base_dir = "/data/workspaces"           # Optional override; project base_dir is injected as cc_base_dir in multi-workspace mode (fallback: AGENT_WORK_DIR)
+# cc_data_dir / cc_project                # Injected by cc-connect from project data_dir / name — do not set manually in normal deployments
 # cors_origins = ["https://app.example.com"]
 # request_timeout = "30m"            # alias: timeout
 # busy_policy = "queue"                # queue | reject
