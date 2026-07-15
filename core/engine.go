@@ -11378,13 +11378,6 @@ func preferAskUserButtons(p Platform) bool {
 	return ok && pref.PreferAskUserButtons()
 }
 
-func boolExtra(v bool) string {
-	if v {
-		return "1"
-	}
-	return "0"
-}
-
 // sendAskQuestionPrompt renders one question (by index) from the AskUserQuestion list.
 // qIdx is the 0-based index of the question to display.
 func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []UserQuestion, qIdx int) {
@@ -11430,7 +11423,6 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 				cb.ListItemBtnExtra(desc, opt.Label, "default", answerData, map[string]string{
 					"askq_label":    opt.Label,
 					"askq_question": q.Question,
-					"multi_select":  boolExtra(q.MultiSelect),
 				})
 			}
 			cb.Note(e.i18n.T(MsgAskQuestionNote))
