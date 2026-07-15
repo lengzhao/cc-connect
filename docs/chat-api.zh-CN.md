@@ -146,6 +146,8 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | `{"error":"too many concurrent requests"}` | 超过 `max_runs` |
 | （队列满文案） | Engine 队列已满 |
 
+Agent 执行中的 `EventError`（工具失败等）经 StreamingCard `Finalize` 收束为 `message_end`（错误文案出现在 `text_delta` / `answer`），**不会**再挂到 `request_timeout`。
+
 ### 2.7 message_id
 
 ```text

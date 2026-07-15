@@ -5877,7 +5877,22 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 						break
 					}
 				}
-				e.send(p, replyCtx, userMsg)
+				// StreamingCard platforms (e.g. chat-api) end the turn via Finalize.
+				// Plain send leaves those transports hanging until request timeout.
+				if streamCard != nil && !streamCard.Failed() {
+					finalContent := buildCardContent(cardThinkingText, cardToolCalls, userMsg)
+					if err := streamCard.Finalize(e.ctx, finalContent); err != nil {
+						slog.Error("streaming card finalize failed on agent error, sending fallback", "error", err)
+						e.send(p, replyCtx, userMsg)
+					}
+				} else {
+					e.send(p, replyCtx, userMsg)
+				}
+			} else if streamCard != nil && !streamCard.Failed() {
+				// Close the streaming turn even when Error is nil.
+				if err := streamCard.Finalize(e.ctx, buildCardContent(cardThinkingText, cardToolCalls, "")); err != nil {
+					slog.Error("streaming card finalize failed on empty agent error", "error", err)
+				}
 			}
 			// Only drop queued messages if the agent session is dead.
 			// Some agents (e.g. Codex) emit EventError for per-turn failures

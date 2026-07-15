@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,10 +38,11 @@ func (a *e2eAgent) ListSessions(_ context.Context) ([]core.AgentSessionInfo, err
 func (a *e2eAgent) Stop() error                                                     { return nil }
 
 type e2eAgentSession struct {
-	events  chan core.Event
-	reply   string
-	mu      sync.Mutex
-	prompts []string
+	events       chan core.Event
+	reply        string
+	errorOnSend  error
+	mu           sync.Mutex
+	prompts      []string
 }
 
 func newE2EAgentSession(reply string) *e2eAgentSession {
@@ -53,7 +55,12 @@ func newE2EAgentSession(reply string) *e2eAgentSession {
 func (s *e2eAgentSession) Send(prompt string, _ []core.ImageAttachment, _ []core.FileAttachment) error {
 	s.mu.Lock()
 	s.prompts = append(s.prompts, prompt)
+	errOnSend := s.errorOnSend
 	s.mu.Unlock()
+	if errOnSend != nil {
+		s.events <- core.Event{Type: core.EventError, Error: errOnSend, Done: true}
+		return nil
+	}
 	s.events <- core.Event{Type: core.EventResult, Content: s.reply, Done: true}
 	return nil
 }
@@ -203,6 +210,58 @@ func sseConversationID(events []sseEvent) string {
 		}
 	}
 	return ""
+}
+
+// TestE2ELocalChatAPIEventErrorEndsSSEWithMessageEnd verifies Engine Finalize on
+// EventError closes the chat-api SSE (no hang until request_timeout).
+func TestE2ELocalChatAPIEventErrorEndsSSEWithMessageEnd(t *testing.T) {
+	sessionPath := filepath.Join(t.TempDir(), "sessions.json")
+	plat, err := New(map[string]any{
+		"listen_addr":     "127.0.0.1:0",
+		"token":           "e2e-token",
+		"path":            "/v1/",
+		"request_timeout": "5s",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+
+	agentSess := newE2EAgentSession("")
+	agentSess.errorOnSend = errors.New("bash tool exited with code 1: permission denied")
+	engine := core.NewEngine("e2e", &e2eAgent{session: agentSess}, []core.Platform{p}, sessionPath, core.LangChinese)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("engine.Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = engine.Stop()
+		_ = p.Stop()
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for p.ResolvedBaseURL() == "" || !strings.Contains(p.ResolvedBaseURL(), "127.0.0.1:") {
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not start, base url = %q", p.ResolvedBaseURL())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	base := p.ResolvedBaseURL()
+
+	resp, raw := e2eRequest(t, http.MethodPost, base+"/chat-messages", "e2e-token", "e2e_user",
+		strings.NewReader(`{"query":"run failing tool","auto_generate_name":true}`), "text/event-stream")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, raw)
+	}
+	if strings.Contains(raw, "request timed out") {
+		t.Fatalf("SSE hung until timeout instead of Finalize: %s", raw)
+	}
+	events := parseSSEEvents(raw)
+	if !hasEvent(events, "message_end") {
+		t.Fatalf("expected message_end after EventError Finalize, got: %s", raw)
+	}
+	if !strings.Contains(raw, "permission denied") && !strings.Contains(raw, "bash tool exited") {
+		t.Fatalf("expected agent error text in SSE, got: %s", raw)
+	}
 }
 
 // TestE2ELocalChatAPIFlow starts a real HTTP server and walks through create → list →

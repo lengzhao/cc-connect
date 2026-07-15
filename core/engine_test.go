@@ -14045,6 +14045,7 @@ type stubStreamingCardPlatform struct {
 	stubPlatformEngine
 	cardCreated bool
 	cardFail    bool // when true, CreateStreamingCard returns an error
+	lastCard    *stubStreamingCard
 }
 
 func (p *stubStreamingCardPlatform) CreateStreamingCard(_ context.Context, _ any) (StreamingCard, error) {
@@ -14052,15 +14053,108 @@ func (p *stubStreamingCardPlatform) CreateStreamingCard(_ context.Context, _ any
 		return nil, fmt.Errorf("stub: card_template_id not configured")
 	}
 	p.cardCreated = true
-	return &stubStreamingCard{}, nil
+	card := &stubStreamingCard{}
+	p.lastCard = card
+	return card, nil
 }
 
 // stubStreamingCard is a minimal StreamingCard for tests.
-type stubStreamingCard struct{}
+type stubStreamingCard struct {
+	mu            sync.Mutex
+	finalizeCalls int
+	lastFinalize  string
+}
 
-func (c *stubStreamingCard) Update(_ context.Context, _ string) error   { return nil }
-func (c *stubStreamingCard) Finalize(_ context.Context, _ string) error { return nil }
-func (c *stubStreamingCard) Failed() bool                               { return false }
+func (c *stubStreamingCard) Update(_ context.Context, _ string) error { return nil }
+
+func (c *stubStreamingCard) Finalize(_ context.Context, content string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.finalizeCalls++
+	c.lastFinalize = content
+	return nil
+}
+
+func (c *stubStreamingCard) Failed() bool { return false }
+
+func (c *stubStreamingCard) finalizeCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.finalizeCalls
+}
+
+func (c *stubStreamingCard) finalizedContent() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastFinalize
+}
+
+// errorAgentSession emits a single EventError on Send (simulates mid-turn tool failure).
+type errorAgentSession struct {
+	events   chan Event
+	err      error
+	sendOnce sync.Once
+}
+
+func newErrorAgentSession(err error) *errorAgentSession {
+	return &errorAgentSession{
+		events: make(chan Event, 1),
+		err:    err,
+	}
+}
+
+func (s *errorAgentSession) Send(_ string, _ []ImageAttachment, _ []FileAttachment) error {
+	s.sendOnce.Do(func() {
+		s.events <- Event{Type: EventError, Error: s.err, Done: true}
+	})
+	return nil
+}
+
+func (s *errorAgentSession) RespondPermission(_ string, _ PermissionResult) error {
+	return nil
+}
+func (s *errorAgentSession) Events() <-chan Event     { return s.events }
+func (s *errorAgentSession) CurrentSessionID() string { return "error-session" }
+func (s *errorAgentSession) Alive() bool              { return true }
+func (s *errorAgentSession) Close() error             { return nil }
+
+// TestHandleMessage_EventErrorFinalizesStreamingCard pins the chat-api hang where
+// EventError only called e.send and never streamCard.Finalize, so SSE never ended.
+func TestHandleMessage_EventErrorFinalizesStreamingCard(t *testing.T) {
+	p := &stubStreamingCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}}
+	agentSession := newErrorAgentSession(errors.New("bash tool exited with code 1: permission denied"))
+	agent := &resultAgent{session: agentSession}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	msg := &Message{
+		SessionKey: "chat-api:default_channel:conv_test",
+		Platform:   "chat-api",
+		UserID:     "u1",
+		UserName:   "user",
+		Content:    "run failing tool",
+		ReplyCtx:   "ctx",
+	}
+	e.handleMessage(p, msg)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if p.lastCard != nil && p.lastCard.finalizeCount() >= 1 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for streamCard.Finalize on EventError; cardCreated=%v lastCard=%v sent=%v",
+				p.cardCreated, p.lastCard != nil, p.getSent())
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	got := p.lastCard.finalizedContent()
+	if !strings.Contains(got, "permission denied") && !strings.Contains(got, "bash tool exited") {
+		t.Fatalf("Finalize content = %q, want agent error text", got)
+	}
+}
 
 func TestHandleMessage_InstantReply_SendsConfirmationWhenEnabled(t *testing.T) {
 	p := &stubPlatformEngine{n: "test"}
