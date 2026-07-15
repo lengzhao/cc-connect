@@ -11373,6 +11373,18 @@ func (e *Engine) sendPermissionPrompt(p Platform, replyCtx any, prompt, toolName
 	e.send(p, replyCtx, prompt)
 }
 
+func preferAskUserButtons(p Platform) bool {
+	pref, ok := p.(PreferAskUserButtons)
+	return ok && pref.PreferAskUserButtons()
+}
+
+func boolExtra(v bool) string {
+	if v {
+		return "1"
+	}
+	return "0"
+}
+
 // sendAskQuestionPrompt renders one question (by index) from the AskUserQuestion list.
 // qIdx is the 0-based index of the question to display.
 func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []UserQuestion, qIdx int) {
@@ -11387,8 +11399,10 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 		titleSuffix = fmt.Sprintf(" (%d/%d)", qIdx+1, total)
 	}
 
-	// Try card (Feishu/Lark)
-	if supportsCards(p) {
+	// Prefer inline buttons when the platform opts in (e.g. chat-api). Card
+	// multiSelect intentionally has no askq buttons so users can reply with
+	// "1,3" as text — that path cannot emit question_request SSE.
+	if supportsCards(p) && !preferAskUserButtons(p) {
 		cb := NewCard().Title(e.i18n.T(MsgAskQuestionTitle)+titleSuffix, "blue")
 		body := "**" + q.Question + "**"
 		if q.MultiSelect {
@@ -11416,6 +11430,7 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 				cb.ListItemBtnExtra(desc, opt.Label, "default", answerData, map[string]string{
 					"askq_label":    opt.Label,
 					"askq_question": q.Question,
+					"multi_select":  boolExtra(q.MultiSelect),
 				})
 			}
 			cb.Note(e.i18n.T(MsgAskQuestionNote))
@@ -11454,7 +11469,11 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 		}
 		var rows [][]ButtonOption
 		for i, opt := range q.Options {
-			rows = append(rows, []ButtonOption{{Text: opt.Label, Data: fmt.Sprintf("askq:%d:%d", qIdx, i+1)}})
+			rows = append(rows, []ButtonOption{{
+				Text:        opt.Label,
+				Data:        fmt.Sprintf("askq:%d:%d", qIdx, i+1),
+				MultiSelect: q.MultiSelect,
+			}})
 		}
 		if err := e.waitOutgoing(p); err != nil {
 			slog.Warn("sendAskQuestionPrompt: outgoing wait cancelled", "platform", p.Name(), "error", err)

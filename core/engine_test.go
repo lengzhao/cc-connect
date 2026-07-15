@@ -716,6 +716,21 @@ func (p *stubAskQuestionRichCardPlatform) BuildRichCard(status CardStatus, title
 	return "rich card"
 }
 
+// Like chat-api: CardSender + InlineButtonSender + PreferAskUserButtons.
+type stubPreferAskButtonsPlatform struct {
+	stubCardPlatform
+	buttonContent string
+	buttonRows    [][]ButtonOption
+}
+
+func (p *stubPreferAskButtonsPlatform) PreferAskUserButtons() bool { return true }
+
+func (p *stubPreferAskButtonsPlatform) SendWithButtons(_ context.Context, _ any, content string, buttons [][]ButtonOption) error {
+	p.buttonContent = content
+	p.buttonRows = buttons
+	return nil
+}
+
 type stubModelModeAgent struct {
 	stubAgent
 	model           string
@@ -6971,6 +6986,42 @@ func TestProcessInteractiveEvents_AskUserQuestionFromAgent_RendersRichCardPrompt
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("processInteractiveEvents did not complete")
+	}
+}
+
+func TestSendAskQuestionPrompt_PreferAskUserButtonsUsesInlineEvenWithCard(t *testing.T) {
+	p := &stubPreferAskButtonsPlatform{
+		stubCardPlatform: stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}},
+	}
+	e := NewEngine("test", &controllableAgent{}, []Platform{p}, "", LangEnglish)
+	qs := []UserQuestion{{
+		Question:    "Pick bodies",
+		MultiSelect: true,
+		Options: []UserQuestionOption{
+			{Label: "simple"},
+			{Label: "nested"},
+			{Label: "array"},
+		},
+	}}
+	e.sendAskQuestionPrompt(p, "ctx", qs, 0)
+
+	p.mu.Lock()
+	nCards := len(p.sentCards) + len(p.repliedCards)
+	p.mu.Unlock()
+	if nCards != 0 {
+		t.Fatalf("expected no cards when PreferAskUserButtons, got %d", nCards)
+	}
+	if len(p.buttonRows) != 3 {
+		t.Fatalf("button rows = %d, want 3 askq options for multiSelect", len(p.buttonRows))
+	}
+	if !p.buttonRows[0][0].MultiSelect {
+		t.Fatal("expected MultiSelect=true on ask buttons")
+	}
+	if got := p.buttonRows[0][0].Data; got != "askq:0:1" {
+		t.Fatalf("first button data = %q, want askq:0:1", got)
+	}
+	if !strings.Contains(p.buttonContent, "Pick bodies") {
+		t.Fatalf("button content missing question: %q", p.buttonContent)
 	}
 }
 

@@ -303,7 +303,11 @@ func (c *Card) CollectButtons() [][]ButtonOption {
 				rows = append(rows, row)
 			}
 		case CardListItem:
-			rows = append(rows, []ButtonOption{{Text: e.BtnText, Data: e.BtnValue}})
+			rows = append(rows, []ButtonOption{{
+				Text:        e.BtnText,
+				Data:        e.BtnValue,
+				MultiSelect: e.Extra != nil && e.Extra["multi_select"] == "1",
+			}})
 		}
 	}
 	return rows

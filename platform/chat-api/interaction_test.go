@@ -176,6 +176,14 @@ func TestPermissionRequestSSEAndRespond(t *testing.T) {
 	}
 }
 
+func TestPreferAskUserButtons_ChatAPI(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	pref, ok := any(p).(core.PreferAskUserButtons)
+	if !ok || !pref.PreferAskUserButtons() {
+		t.Fatal("chat-api must prefer ask-user buttons so multiSelect emits question_request")
+	}
+}
+
 func TestAskQuestionRequestSSEAndRespond(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	bindTestSessions(t, p)
@@ -347,11 +355,12 @@ func TestEmitInteractionPublicActionIDs(t *testing.T) {
 			t.Fatal(err)
 		}
 		actions, _ = payload["actions"].([]any)
-		if _, ok := payload["multi_select"]; ok {
-			t.Fatalf("multi_select should be removed: %#v", payload)
+		ms, ok := payload["multi_select"].(bool)
+		if !ok {
+			t.Fatalf("missing multi_select bool: %#v", payload)
 		}
-		if _, ok := payload["description"]; ok {
-			// top-level description unexpected
+		if ms {
+			t.Fatalf("single-select question_request must set multi_select=false: %#v", payload)
 		}
 	}
 	if len(actions) < 2 {
@@ -370,7 +379,8 @@ func TestEmitInteractionPublicActionIDs(t *testing.T) {
 
 func TestAskQuestionMultiSelectActions(t *testing.T) {
 	ix := &interactionState{
-		Kind: interactionQuestion,
+		Kind:        interactionQuestion,
+		MultiSelect: true,
 		Actions: []interactionAction{
 			{ID: "askq:0:1", Label: "A"},
 			{ID: "askq:0:2", Label: "B"},
@@ -389,6 +399,108 @@ func TestAskQuestionMultiSelectActions(t *testing.T) {
 	if content != "1,3" {
 		t.Fatalf("content = %q, want 1,3", content)
 	}
+}
+
+func TestAskQuestionSingleSelectRejectsMultiOptionIDs(t *testing.T) {
+	ix := &interactionState{
+		Kind:        interactionQuestion,
+		MultiSelect: false,
+		Actions: []interactionAction{
+			{ID: "askq:0:1", Label: "A"},
+			{ID: "askq:0:2", Label: "B"},
+			{ID: "askq:0:3", Label: "C"},
+		},
+	}
+	_, _, err := normalizeInteractionResponse(ix, interactionRespondRequest{
+		OptionIDs: []string{"0:1", "0:2", "0:3"},
+	})
+	if err == nil {
+		t.Fatal("expected error for multi option_ids on single-select")
+	}
+}
+
+func TestAskQuestionMultiSelectSSE(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
+	bindTestSessions(t, p)
+
+	ready := make(chan struct{}, 1)
+	release := make(chan struct{})
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		if msg.Content == "/stop" {
+			return
+		}
+		if strings.HasPrefix(msg.Content, "askq:") || msg.Content == "1,3" {
+			if scp, ok := platform.(core.StreamingCardPlatform); ok {
+				c, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+				_ = c.Finalize(context.Background(), "ok")
+			}
+			return
+		}
+		_ = platform.(core.InlineButtonSender).SendWithButtons(context.Background(), msg.ReplyCtx,
+			"pick many",
+			[][]core.ButtonOption{
+				{{Text: "A", Data: "askq:0:1", MultiSelect: true}},
+				{{Text: "B", Data: "askq:0:2", MultiSelect: true}},
+				{{Text: "C", Data: "askq:0:3", MultiSelect: true}},
+			})
+		ready <- struct{}{}
+		<-release
+		if scp, ok := platform.(core.StreamingCardPlatform); ok {
+			c, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+			_ = c.Finalize(context.Background(), "done")
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(`{"query":"q"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		p.routes().ServeHTTP(rec, req)
+		close(done)
+	}()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout")
+	}
+	ixID := waitInteractionID(t, rec, "question_request")
+	runID := ""
+	var multi any
+	for _, e := range parseSSE(rec.Body.String()) {
+		if e.Name != "question_request" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(e.Data), &payload); err != nil {
+			t.Fatal(err)
+		}
+		multi = payload["multi_select"]
+		runID, _ = payload["run_id"].(string)
+	}
+	if multi != true {
+		t.Fatalf("multi_select = %#v, want true", multi)
+	}
+	if runID == "" {
+		t.Fatal("missing run_id")
+	}
+
+	respondReq := httptest.NewRequest(http.MethodPost,
+		"/v1/runs/"+runID+"/interactions/"+ixID+"/respond",
+		strings.NewReader(`{"option_ids":["0:1","0:3"]}`))
+	respondReq.Header.Set("Authorization", "Bearer secret")
+	respondReq.Header.Set("X-Chat-API-User", "user_001")
+	respondReq.Header.Set("Content-Type", "application/json")
+	respondRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(respondRec, respondReq)
+	if respondRec.Code != http.StatusOK {
+		t.Fatalf("respond status=%d body=%s", respondRec.Code, respondRec.Body.String())
+	}
+	close(release)
+	<-done
 }
 
 func TestNormalizeInteractionResponse_PublicDecision(t *testing.T) {
@@ -410,7 +522,8 @@ func TestNormalizeInteractionResponse_PublicDecision(t *testing.T) {
 
 func TestNormalizeInteractionResponse_PublicOptionIDs(t *testing.T) {
 	ix := &interactionState{
-		Kind: interactionQuestion,
+		Kind:        interactionQuestion,
+		MultiSelect: true,
 		Actions: []interactionAction{
 			{ID: "askq:0:1", Label: "A"},
 			{ID: "askq:0:2", Label: "B"},

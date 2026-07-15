@@ -38,6 +38,8 @@
 
 `tool_call` / `tool_result` / interaction events are ephemeral (not written to history). See [Tool SSE design](./plans/2026-07-15-chat-api-tool-sse-design.md) and [Interaction hardening](./plans/2026-07-14-chat-api-interaction-hardening.md).
 
+`question_request` includes `multi_select` (`true`/`false`). Clients must use `option_id` for single-select and `option_ids` only when `multi_select=true`.
+
 ## Configuration
 
 ```toml

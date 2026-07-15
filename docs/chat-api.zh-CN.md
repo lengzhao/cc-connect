@@ -371,6 +371,7 @@ data: {
   "message_id":"s1a2b3c:1",
   "prompt":"选择部署环境",
   "expires_at":1780004100,
+  "multi_select": false,
   "actions":[
     {"id":"0:1","label":"Staging"},
     {"id":"0:2","label":"Production"}
@@ -382,6 +383,7 @@ data: {
 |------|------|
 | `interaction_id` | 本次交互 ID（回传时必填） |
 | `expires_at` | Unix 秒；过期后前端应禁用按钮（服务端以 interaction 状态为准） |
+| `multi_select` | 仅 `question_request`：`true` 允许多选（用 `option_ids`），`false` 单选（一键 `option_id`）；缺省按 `false` 处理 |
 | `actions` | 可选按钮；`id` 为公共 ID（权限：`allow`/`deny`/`allow_all`；问答：`0:1`），与 §4.7 的 `decision` / `option_id` 对齐 |
 
 **超时**（`interaction_timeout`，默认 `10m`，且不超过当前 run 剩余 `request_timeout`）
@@ -540,7 +542,7 @@ Content-Type: application/json
 |------|------|
 | `decision` | 权限结果：`allow` / `deny` / `allow_all` |
 | `option_id` | 单选问答；`"0:2"` 映射为内部 `askq:0:2` |
-| `option_ids` | 多选问答；映射为 Engine 编号列表（如 `1,3`） |
+| `option_ids` | 多选问答（仅当 `question_request.multi_select=true`）；映射为 Engine 编号列表（如 `1,3`）。单选收到多个 `option_ids` → `400` |
 | `answer` | 自由文本答案 |
 
 归属 user 须与发起 `chat-messages` 的 user 一致，否则 `404`。已响应 → `409 interaction already responded`；已过期 → `409 interaction expired`；已被 supersede → `404`。

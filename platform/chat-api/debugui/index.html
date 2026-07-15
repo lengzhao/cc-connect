@@ -261,6 +261,73 @@
       flex: 1;
       min-width: 0;
     }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(4, 8, 12, 0.72);
+      backdrop-filter: blur(6px);
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      width: min(560px, 100%);
+      max-height: min(80vh, 720px);
+      overflow: auto;
+      background: var(--bg-panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+      padding: 18px 20px 16px;
+    }
+    .modal h2 {
+      margin: 0 0 8px;
+      font-family: var(--display);
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--warn);
+    }
+    .modal .modal-meta {
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 12px;
+    }
+    .modal .modal-prompt {
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.55;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--bg);
+      margin-bottom: 14px;
+      max-height: 40vh;
+      overflow: auto;
+    }
+    .modal .modal-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .modal .modal-actions button.primary {
+      background: linear-gradient(180deg, #2a9f96, #1f7f78);
+      border-color: #2a9f96;
+      color: #041413;
+      font-weight: 600;
+    }
+    .modal .modal-actions button.danger {
+      color: var(--danger);
+      border-color: #5a2c2c;
+    }
+    .modal .ix-free { margin-top: 0; width: 100%; }
+
     .bubble.sys {
       align-self: center;
       color: var(--warn);
@@ -423,6 +490,15 @@
     </section>
   </div>
 
+  <div id="ixModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="ixModalTitle">
+    <div class="modal">
+      <h2 id="ixModalTitle">确认</h2>
+      <div id="ixModalMeta" class="modal-meta"></div>
+      <div id="ixModalPrompt" class="modal-prompt"></div>
+      <div id="ixModalActions" class="modal-actions"></div>
+    </div>
+  </div>
+
   <script>
     const LS_KEY = "chat-api-debug-v1";
     const $ = (id) => document.getElementById(id);
@@ -432,6 +508,7 @@
       runId: null,
       abort: null,
       sending: false,
+      activeInteractionId: null,
     };
 
     const fields = ["baseUrl", "token", "userId", "userName", "channel", "lang", "taskId", "traceId", "tenantId"];
@@ -691,6 +768,12 @@
         return lastStreamBubble;
       }
 
+      function closeIxModal() {
+        $("ixModal").classList.remove("open");
+        state.activeInteractionId = null;
+        $("ixModalActions").innerHTML = "";
+      }
+
       function disableInteraction(id, note) {
         const ix = interactionBubbles.get(id);
         if (!ix) return;
@@ -704,11 +787,13 @@
           n.textContent = note;
           ix.el.appendChild(n);
         }
+        if (state.activeInteractionId === id) closeIxModal();
       }
 
       async function respondInteraction(interactionId, payload) {
         const runId = state.runId;
         if (!runId || !interactionId) return;
+        $("ixModalActions").querySelectorAll("button, input").forEach((n) => { n.disabled = true; });
         try {
           const res = await fetch(
             `${apiBase()}/runs/${encodeURIComponent(runId)}/interactions/${encodeURIComponent(interactionId)}/respond`,
@@ -722,68 +807,149 @@
           logSSE("respond", json, res.ok ? "" : "err");
           if (!res.ok || json.ok === false) {
             addBubble("sys", "respond failed: " + (json.error || res.status));
+            $("ixModalActions").querySelectorAll("button, input").forEach((n) => { n.disabled = false; });
             return;
           }
-          disableInteraction(interactionId, "responded");
+          disableInteraction(interactionId, "responded · " + JSON.stringify(payload));
         } catch (e) {
           logSSE("respond_error", e.message, "err");
           addBubble("sys", e.message);
+          $("ixModalActions").querySelectorAll("button, input").forEach((n) => { n.disabled = false; });
         }
+      }
+
+      function showIxModal(kind, data) {
+        const id = String(data.interaction_id || "");
+        if (!id) return;
+        state.activeInteractionId = id;
+        const isQuestion = kind === "question_request";
+        $("ixModalTitle").textContent = isQuestion ? "问答确认" : "权限确认";
+        const meta = [];
+        if (data.run_id) meta.push("run=" + data.run_id);
+        if (id) meta.push("ix=" + id);
+        if (data.expires_at) {
+          const left = Math.max(0, Number(data.expires_at) - Math.floor(Date.now() / 1000));
+          meta.push("expires_in=" + left + "s");
+        }
+        $("ixModalMeta").textContent = meta.join(" · ");
+        $("ixModalPrompt").textContent = data.prompt || "";
+
+        const actionsEl = $("ixModalActions");
+        actionsEl.innerHTML = "";
+        const actions = Array.isArray(data.actions) ? data.actions : [];
+        const multiSelect = isQuestion && data.multi_select === true;
+
+        if (isQuestion && multiSelect && actions.length) {
+          // Multi-select: checkboxes + submit (option_ids).
+          const list = document.createElement("div");
+          list.style.cssText = "display:flex;flex-direction:column;gap:8px;width:100%;margin-bottom:10px;";
+          const checks = [];
+          for (const a of actions) {
+            const label = document.createElement("label");
+            label.style.cssText = "display:flex;align-items:flex-start;gap:8px;cursor:pointer;";
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.value = a.id;
+            checks.push(cb);
+            const span = document.createElement("span");
+            span.textContent = a.label || a.id || "?";
+            label.appendChild(cb);
+            label.appendChild(span);
+            list.appendChild(label);
+          }
+          actionsEl.appendChild(list);
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "primary";
+          btn.textContent = "提交选择";
+          btn.addEventListener("click", () => {
+            const selected = checks.filter((c) => c.checked).map((c) => c.value);
+            if (!selected.length) return;
+            if (selected.length === 1) {
+              respondInteraction(id, { option_id: selected[0] });
+            } else {
+              respondInteraction(id, { option_ids: selected });
+            }
+          });
+          actionsEl.appendChild(btn);
+        } else if (actions.length) {
+          for (const a of actions) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = a.label || a.id || "?";
+            const decision = String(a.id || "");
+            if (decision === "allow" || decision === "allow_all") btn.className = "primary";
+            if (decision === "deny") btn.className = "danger";
+            if (isQuestion) btn.className = "primary";
+            btn.addEventListener("click", () => {
+              if (isQuestion) {
+                respondInteraction(id, { option_id: a.id });
+              } else {
+                respondInteraction(id, { decision: a.id });
+              }
+            });
+            actionsEl.appendChild(btn);
+          }
+        }
+
+        if (isQuestion) {
+          // Always offer free-text answer for questions.
+          const row = document.createElement("div");
+          row.className = "ix-free";
+          row.style.marginTop = actions.length ? "12px" : "0";
+          const input = document.createElement("input");
+          input.placeholder = actions.length ? "或输入自由文本回答" : "请输入回答";
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "primary";
+          btn.textContent = "提交回答";
+          const submitFree = () => {
+            const answerText = input.value.trim();
+            if (!answerText) return;
+            respondInteraction(id, { answer: answerText });
+          };
+          btn.addEventListener("click", submitFree);
+          input.addEventListener("keydown", (e) => {
+            if (e.isComposing || e.keyCode === 229) return;
+            if (e.key === "Enter") {
+              e.preventDefault();
+              submitFree();
+            }
+          });
+          row.appendChild(input);
+          row.appendChild(btn);
+          actionsEl.appendChild(row);
+          setTimeout(() => input.focus(), 0);
+        }
+
+        $("ixModal").classList.add("open");
       }
 
       function renderInteraction(kind, data) {
         const id = String(data.interaction_id || "");
         if (!id) return;
-        const tag = kind === "permission_request" ? "permission" : "question";
+        const isQuestion = kind === "question_request";
+        const tag = isQuestion ? "question" : "permission";
         const bubble = streamBubble("interaction", id, tag);
         interactionBubbles.set(id, bubble);
         bubble.body.textContent = data.prompt || "";
         bubble.el.querySelectorAll(".ix-actions, .ix-free").forEach((n) => n.remove());
-
-        const actions = Array.isArray(data.actions) ? data.actions : [];
-        if (actions.length) {
-          const row = document.createElement("div");
-          row.className = "ix-actions";
-          for (const a of actions) {
-            const btn = document.createElement("button");
-            btn.type = "button";
-            btn.textContent = a.label || a.id || "?";
-            btn.addEventListener("click", () => {
-              if (kind === "permission_request") {
-                respondInteraction(id, { decision: a.id });
-              } else {
-                respondInteraction(id, { option_id: a.id });
-              }
-            });
-            row.appendChild(btn);
-          }
-          bubble.el.appendChild(row);
-        } else if (kind === "question_request") {
-          const row = document.createElement("div");
-          row.className = "ix-free";
-          const input = document.createElement("input");
-          input.placeholder = "free-text answer";
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.textContent = "send";
-          btn.addEventListener("click", () => {
-            const answerText = input.value.trim();
-            if (!answerText) return;
-            respondInteraction(id, { answer: answerText });
-          });
-          row.appendChild(input);
-          row.appendChild(btn);
-          bubble.el.appendChild(row);
-        }
+        const hint = document.createElement("div");
+        hint.className = "body";
+        hint.style.marginTop = "6px";
+        hint.style.color = "var(--muted)";
+        hint.textContent = isQuestion ? "请在弹窗中回答" : "请在弹窗中选择";
+        bubble.el.appendChild(hint);
         if (data.expires_at) {
           const exp = document.createElement("div");
           exp.className = "body";
-          exp.style.marginTop = "6px";
+          exp.style.marginTop = "4px";
           exp.style.color = "var(--muted)";
           exp.textContent = "expires_at=" + data.expires_at;
           bubble.el.appendChild(exp);
         }
         $("messages").scrollTop = $("messages").scrollHeight;
+        showIxModal(kind, data);
       }
 
       const body = {
@@ -836,8 +1002,9 @@
                 setConvLabel();
               }
             } else if (event === "thinking_delta") {
-              thinking += data.text || "";
+              // Ensure bubble exists first — streamBubble resets thinking when creating a new one.
               const thinkingBubble = streamBubble("thinking", "thinking", "thinking");
+              thinking += data.text || "";
               thinkingBubble.body.textContent = thinking;
               $("messages").scrollTop = $("messages").scrollHeight;
             } else if (event === "tool_call") {
@@ -860,8 +1027,9 @@
               toolBubble.body.textContent = prev + lines.join("\n");
               $("messages").scrollTop = $("messages").scrollHeight;
             } else if (event === "text_delta") {
-              answer += data.text || "";
+              // Ensure bubble exists first — streamBubble resets answer when creating a new one.
               const answerBubble = streamBubble("assistant", "assistant", "assistant");
+              answer += data.text || "";
               answerBubble.body.textContent = answer;
               $("messages").scrollTop = $("messages").scrollHeight;
             } else if (event === "permission_request" || event === "question_request") {
@@ -877,10 +1045,12 @@
             } else if (event === "error") {
               const kind = data.kind ? ` kind=${data.kind}` : "";
               addBubble("sys", "error: " + (data.error || JSON.stringify(data)) + kind);
+              closeIxModal();
             } else if (event === "message_end") {
+              closeIxModal();
               if (!answer && data.answer) {
-                answer = data.answer;
                 const answerBubble = streamBubble("assistant", "assistant", "assistant");
+                answer = data.answer;
                 answerBubble.body.textContent = answer;
               }
             }

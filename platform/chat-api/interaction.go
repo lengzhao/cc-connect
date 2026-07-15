@@ -48,21 +48,23 @@ func (p *Platform) interactionExpiresAt(run *runState) time.Time {
 	return expires
 }
 
-func flattenButtons(buttons [][]core.ButtonOption) []interactionAction {
-	var out []interactionAction
+func flattenButtons(buttons [][]core.ButtonOption) (actions []interactionAction, multiSelect bool) {
 	for _, row := range buttons {
 		for _, btn := range row {
 			id := strings.TrimSpace(btn.Data)
 			if id == "" {
 				continue
 			}
-			out = append(out, interactionAction{
+			if btn.MultiSelect {
+				multiSelect = true
+			}
+			actions = append(actions, interactionAction{
 				ID:    id,
 				Label: btn.Text,
 			})
 		}
 	}
-	return out
+	return actions, multiSelect
 }
 
 func classifyButtons(actions []interactionAction) (interactionKind, bool) {
@@ -85,17 +87,21 @@ func classifyButtons(actions []interactionAction) (interactionKind, bool) {
 	}
 }
 
+func (p *Platform) PreferAskUserButtons() bool {
+	return true
+}
+
 func (p *Platform) SendWithButtons(_ context.Context, replyTo any, content string, buttons [][]core.ButtonOption) error {
 	rc, ok := replyTo.(*replyContext)
 	if !ok || rc == nil || rc.runID == "" {
 		return fmt.Errorf("chat-api: unsupported reply context %T", replyTo)
 	}
-	actions := flattenButtons(buttons)
+	actions, multiSelect := flattenButtons(buttons)
 	kind, ok := classifyButtons(actions)
 	if !ok {
 		return p.Reply(context.Background(), replyTo, content)
 	}
-	return p.emitInteraction(rc, kind, content, actions)
+	return p.emitInteraction(rc, kind, content, actions, multiSelect)
 }
 
 func (p *Platform) SendCard(_ context.Context, replyTo any, card *core.Card) error {
@@ -114,10 +120,10 @@ func (p *Platform) emitCardInteraction(replyTo any, card *core.Card) error {
 	if card == nil {
 		return nil
 	}
-	actions := flattenButtons(card.CollectButtons())
+	actions, multiSelect := flattenButtons(card.CollectButtons())
 	if kind, ok := classifyButtons(actions); ok {
 		prompt := strings.TrimSpace(card.RenderText())
-		return p.emitInteraction(rc, kind, prompt, actions)
+		return p.emitInteraction(rc, kind, prompt, actions, multiSelect)
 	}
 	// Cards without structured askq/perm buttons are plain text — do not invent a confirmation window.
 	return p.Reply(context.Background(), replyTo, card.RenderText())
@@ -148,7 +154,7 @@ func publicizeActions(actions []interactionAction) []interactionAction {
 	return out
 }
 
-func (p *Platform) emitInteraction(rc *replyContext, kind interactionKind, prompt string, actions []interactionAction) error {
+func (p *Platform) emitInteraction(rc *replyContext, kind interactionKind, prompt string, actions []interactionAction, multiSelect bool) error {
 	runID := rc.runID
 	run := p.pending.get(runID)
 	if run == nil {
@@ -160,11 +166,12 @@ func (p *Platform) emitInteraction(rc *replyContext, kind interactionKind, promp
 	ixID := newInteractionID()
 	expiresAt := p.interactionExpiresAt(run)
 	ix := &interactionState{
-		ID:        ixID,
-		Kind:      kind,
-		Prompt:    prompt,
-		Actions:   actions, // keep Engine IDs for respond validation
-		ExpiresAt: expiresAt,
+		ID:          ixID,
+		Kind:        kind,
+		Prompt:      prompt,
+		Actions:     actions, // keep Engine IDs for respond validation
+		MultiSelect: multiSelect && kind == interactionQuestion,
+		ExpiresAt:   expiresAt,
 	}
 
 	delay := time.Until(expiresAt)
@@ -191,6 +198,7 @@ func (p *Platform) emitInteraction(rc *replyContext, kind interactionKind, promp
 	}
 	if kind == interactionQuestion {
 		eventName = "question_request"
+		payload["multi_select"] = ix.MultiSelect
 	}
 	run.enqueueEvent(eventName, payload)
 	return nil
@@ -337,6 +345,16 @@ func normalizeInteractionResponse(ix *interactionState, body interactionRespondR
 		return askq, false, nil
 	}
 	if len(optionIDs) > 0 {
+		if !ix.MultiSelect {
+			if len(optionIDs) != 1 {
+				return "", false, errors.New("single-select question accepts only one option")
+			}
+			askq := toAskqID(optionIDs[0])
+			if !isAllowedAction(ix, askq) {
+				return "", false, errUnknownOption
+			}
+			return askq, false, nil
+		}
 		return optionIDsToNumbers(ix, optionIDs)
 	}
 	return "", false, errRespondExactlyOneField

@@ -360,6 +360,10 @@ type ProgressUpdateThrottler interface {
 type ButtonOption struct {
 	Text string // display text on the button
 	Data string // callback data returned when clicked (≤64 bytes for Telegram)
+	// MultiSelect is set on AskUserQuestion option buttons when the question
+	// allows selecting more than one option. Platforms that surface structured
+	// interactions (e.g. chat-api question_request) may use this flag.
+	MultiSelect bool
 }
 
 // InlineButtonSender is an optional interface for platforms that support
@@ -375,6 +379,15 @@ type InlineButtonSender interface {
 type CardSender interface {
 	SendCard(ctx context.Context, replyCtx any, card *Card) error
 	ReplyCard(ctx context.Context, replyCtx any, card *Card) error
+}
+
+// PreferAskUserButtons is an optional interface for platforms that implement
+// both CardSender and InlineButtonSender but want AskUserQuestion to use
+// buttons (so multi-select still exposes askq options). Chat-api needs this
+// because buttonless multi-select cards become plain Reply text with no
+// question_request SSE, and the busy SSE turn cannot accept a text answer.
+type PreferAskUserButtons interface {
+	PreferAskUserButtons() bool
 }
 
 // CardNavigationHandler is called by platforms to render a card for in-place

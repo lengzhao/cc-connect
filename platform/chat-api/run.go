@@ -41,13 +41,14 @@ type interactionAction struct {
 }
 
 type interactionState struct {
-	ID        string
-	Kind      interactionKind
-	Prompt    string
-	Actions   []interactionAction
-	ExpiresAt time.Time
-	Responded bool
-	Expired   bool
+	ID          string
+	Kind        interactionKind
+	Prompt      string
+	Actions     []interactionAction
+	MultiSelect bool
+	ExpiresAt   time.Time
+	Responded   bool
+	Expired     bool
 }
 
 type pendingSSEEvent struct {

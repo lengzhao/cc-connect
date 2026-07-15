@@ -49,10 +49,11 @@ func TestDebugUIServesPage(t *testing.T) {
 		strings.Contains(html, `const answerBody = addBubble("assistant", "", "assistant")`) {
 		t.Fatalf("debug UI must not pre-create thinking or answer bubbles")
 	}
-	if !strings.Contains(html, "permission_request") ||
-		!strings.Contains(html, "/interactions/") ||
-		!strings.Contains(html, "respondInteraction") {
-		t.Fatalf("debug UI should support permission/question confirm respond")
+	if !strings.Contains(html, "Ensure bubble exists first") {
+		t.Fatalf("debug UI must create assistant/thinking bubble before appending deltas")
+	}
+	if !strings.Contains(html, "multi_select") || !strings.Contains(html, "showIxModal") {
+		t.Fatalf("debug UI must honor question_request.multi_select for single vs multi UI")
 	}
 	// Debug page itself must not require auth (otherwise hard to open).
 	if rec.Header().Get("Content-Type") == "" || !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
