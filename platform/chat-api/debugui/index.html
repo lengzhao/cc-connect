@@ -230,6 +230,37 @@
       font-size: 12px;
     }
     .bubble.tool .tag { color: var(--ok); }
+    .bubble.interaction {
+      align-self: flex-start;
+      border-color: #4a3a20;
+      background: #1a1510;
+      font-size: 12px;
+    }
+    .bubble.interaction .tag { color: var(--warn); }
+    .bubble.interaction.done { opacity: 0.65; }
+    .ix-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .ix-actions button {
+      font-size: 11px;
+      padding: 6px 10px;
+    }
+    .ix-actions button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .ix-free {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .ix-free input {
+      flex: 1;
+      min-width: 0;
+    }
     .bubble.sys {
       align-self: center;
       color: var(--warn);
@@ -497,7 +528,7 @@
       el.appendChild(body);
       $("messages").appendChild(el);
       $("messages").scrollTop = $("messages").scrollHeight;
-      return body;
+      return { el, body };
     }
 
     async function ping() {
@@ -641,8 +672,9 @@
       let thinking = "";
       let answer = "";
       let lastStreamBubble = null;
+      const interactionBubbles = new Map();
 
-      addBubble("user", query, $("userName").value.trim() || "user");
+      addBubble("user", query, $("userId").value.trim() || "user");
 
       // Stream elements are created lazily. Consecutive events with the same
       // identity reuse the last bubble; a changed identity starts a new one.
@@ -650,11 +682,108 @@
         if (lastStreamBubble &&
             lastStreamBubble.role === role &&
             lastStreamBubble.key === key) {
-          return lastStreamBubble.body;
+          return lastStreamBubble;
         }
-        const body = addBubble(role, "", tag);
-        lastStreamBubble = { role, key, body };
-        return body;
+        if (role === "thinking") thinking = "";
+        if (role === "assistant") answer = "";
+        const created = addBubble(role, "", tag);
+        lastStreamBubble = { role, key, body: created.body, el: created.el };
+        return lastStreamBubble;
+      }
+
+      function disableInteraction(id, note) {
+        const ix = interactionBubbles.get(id);
+        if (!ix) return;
+        ix.el.classList.add("done");
+        ix.el.querySelectorAll("button, input").forEach((n) => { n.disabled = true; });
+        if (note) {
+          const n = document.createElement("div");
+          n.className = "body";
+          n.style.marginTop = "6px";
+          n.style.color = "var(--muted)";
+          n.textContent = note;
+          ix.el.appendChild(n);
+        }
+      }
+
+      async function respondInteraction(interactionId, payload) {
+        const runId = state.runId;
+        if (!runId || !interactionId) return;
+        try {
+          const res = await fetch(
+            `${apiBase()}/runs/${encodeURIComponent(runId)}/interactions/${encodeURIComponent(interactionId)}/respond`,
+            {
+              method: "POST",
+              headers: { ...authHeaders(), "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            }
+          );
+          const json = await res.json().catch(() => ({}));
+          logSSE("respond", json, res.ok ? "" : "err");
+          if (!res.ok || json.ok === false) {
+            addBubble("sys", "respond failed: " + (json.error || res.status));
+            return;
+          }
+          disableInteraction(interactionId, "responded");
+        } catch (e) {
+          logSSE("respond_error", e.message, "err");
+          addBubble("sys", e.message);
+        }
+      }
+
+      function renderInteraction(kind, data) {
+        const id = String(data.interaction_id || "");
+        if (!id) return;
+        const tag = kind === "permission_request" ? "permission" : "question";
+        const bubble = streamBubble("interaction", id, tag);
+        interactionBubbles.set(id, bubble);
+        bubble.body.textContent = data.prompt || "";
+        bubble.el.querySelectorAll(".ix-actions, .ix-free").forEach((n) => n.remove());
+
+        const actions = Array.isArray(data.actions) ? data.actions : [];
+        if (actions.length) {
+          const row = document.createElement("div");
+          row.className = "ix-actions";
+          for (const a of actions) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = a.label || a.id || "?";
+            btn.addEventListener("click", () => {
+              if (kind === "permission_request") {
+                respondInteraction(id, { decision: a.id });
+              } else {
+                respondInteraction(id, { option_id: a.id });
+              }
+            });
+            row.appendChild(btn);
+          }
+          bubble.el.appendChild(row);
+        } else if (kind === "question_request") {
+          const row = document.createElement("div");
+          row.className = "ix-free";
+          const input = document.createElement("input");
+          input.placeholder = "free-text answer";
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = "send";
+          btn.addEventListener("click", () => {
+            const answerText = input.value.trim();
+            if (!answerText) return;
+            respondInteraction(id, { answer: answerText });
+          });
+          row.appendChild(input);
+          row.appendChild(btn);
+          bubble.el.appendChild(row);
+        }
+        if (data.expires_at) {
+          const exp = document.createElement("div");
+          exp.className = "body";
+          exp.style.marginTop = "6px";
+          exp.style.color = "var(--muted)";
+          exp.textContent = "expires_at=" + data.expires_at;
+          bubble.el.appendChild(exp);
+        }
+        $("messages").scrollTop = $("messages").scrollHeight;
       }
 
       const body = {
@@ -695,7 +824,7 @@
           if (done) break;
           buf += decoder.decode(value, { stream: true });
           buf = parseSSEChunk(buf, (event, data) => {
-            logSSE(event, data, event === "error" ? "err" : event === "message_queued" ? "warn" : "");
+            logSSE(event, data, event === "error" ? "err" : event === "message_queued" || event === "ping" ? "warn" : "");
             if (event === "message") {
               if (data.conversation_id) {
                 state.conversationId = data.conversation_id;
@@ -708,42 +837,51 @@
               }
             } else if (event === "thinking_delta") {
               thinking += data.text || "";
-              const thinkingBody = streamBubble("thinking", "thinking", "thinking");
-              thinkingBody.textContent = thinking;
+              const thinkingBubble = streamBubble("thinking", "thinking", "thinking");
+              thinkingBubble.body.textContent = thinking;
               $("messages").scrollTop = $("messages").scrollHeight;
             } else if (event === "tool_call") {
               const id = String(data.tool_call_id || "unknown");
-              const bodyEl = streamBubble("tool", id, "tool #" + id);
+              const toolBubble = streamBubble("tool", id, "tool #" + id);
               const lines = ["call · " + (data.name || "?")];
               if (data.input) lines.push(data.input);
-              bodyEl.textContent = lines.join("\n");
+              toolBubble.body.textContent = lines.join("\n");
               $("messages").scrollTop = $("messages").scrollHeight;
             } else if (event === "tool_result") {
               const id = String(data.tool_call_id || "unknown");
-              const bodyEl = streamBubble("tool", id, "tool #" + id);
-              const prev = bodyEl.textContent ? bodyEl.textContent + "\n" : "";
+              const toolBubble = streamBubble("tool", id, "tool #" + id);
+              const prev = toolBubble.body.textContent ? toolBubble.body.textContent + "\n" : "";
               const meta = [];
               if (data.status) meta.push("status=" + data.status);
               if (data.exit_code !== undefined && data.exit_code !== null) meta.push("exit=" + data.exit_code);
               if (data.success !== undefined && data.success !== null) meta.push("ok=" + data.success);
               const lines = ["result" + (meta.length ? " · " + meta.join(" ") : "")];
               if (data.output) lines.push(data.output);
-              bodyEl.textContent = prev + lines.join("\n");
+              toolBubble.body.textContent = prev + lines.join("\n");
               $("messages").scrollTop = $("messages").scrollHeight;
             } else if (event === "text_delta") {
               answer += data.text || "";
-              const answerBody = streamBubble("assistant", "assistant", "assistant");
-              answerBody.textContent = answer;
+              const answerBubble = streamBubble("assistant", "assistant", "assistant");
+              answerBubble.body.textContent = answer;
               $("messages").scrollTop = $("messages").scrollHeight;
+            } else if (event === "permission_request" || event === "question_request") {
+              renderInteraction(event, data);
+            } else if (event === "interaction_superseded") {
+              disableInteraction(String(data.interaction_id || ""), "superseded → " + (data.replacement_id || "?"));
+            } else if (event === "interaction_ack") {
+              disableInteraction(String(data.interaction_id || ""), data.text || "ack");
+            } else if (event === "ping") {
+              // keepalive only — already logged
             } else if (event === "message_queued") {
               addBubble("sys", `queued (depth=${data.queue_depth ?? "?"})`);
             } else if (event === "error") {
-              addBubble("sys", "error: " + (data.error || JSON.stringify(data)));
+              const kind = data.kind ? ` kind=${data.kind}` : "";
+              addBubble("sys", "error: " + (data.error || JSON.stringify(data)) + kind);
             } else if (event === "message_end") {
               if (!answer && data.answer) {
                 answer = data.answer;
-                const answerBody = streamBubble("assistant", "assistant", "assistant");
-                answerBody.textContent = answer;
+                const answerBubble = streamBubble("assistant", "assistant", "assistant");
+                answerBubble.body.textContent = answer;
               }
             }
           });

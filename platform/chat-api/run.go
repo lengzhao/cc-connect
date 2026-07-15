@@ -9,27 +9,62 @@ import (
 	"time"
 )
 
-var errUserCanceled = errors.New("canceled by user")
+var (
+	errUserCanceled         = errors.New("canceled by user")
+	errInteractionTimedOut  = errors.New("interaction timed out")
+	errInteractionResponded = errors.New("interaction already responded")
+	errInteractionExpired   = errors.New("interaction expired")
+)
 
 type pendingResult struct {
-	answer       string
-	err          error
-	queued       bool
-	queueFull    bool
-	errMsg       string
-	queueDepth   int
-	userCanceled bool
+	answer                 string
+	err                    error
+	queued                 bool
+	queueFull              bool
+	errMsg                 string
+	queueDepth             int
+	userCanceled           bool
+	interactionTimedOut    bool
+	interactionTimeoutKind string
+}
+
+type interactionKind string
+
+const (
+	interactionPermission interactionKind = "permission"
+	interactionQuestion   interactionKind = "question"
+)
+
+type interactionAction struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+type interactionState struct {
+	ID        string
+	Kind      interactionKind
+	Prompt    string
+	Actions   []interactionAction
+	ExpiresAt time.Time
+	Responded bool
+	Expired   bool
+}
+
+type pendingSSEEvent struct {
+	name    string
+	payload any
 }
 
 // runState tracks one chat-messages SSE run and its in-flight agent turn.
 type runState struct {
-	id             string
-	user           string
-	channelKey     string
-	sessionKey     string
-	conversationID string
-	messageID      string
-	created        time.Time
+	id              string
+	user            string
+	channelKey      string
+	sessionKey      string
+	conversationID  string
+	messageID       string
+	created         time.Time
+	requestDeadline time.Time
 
 	mu                   sync.Mutex
 	latestThinking       string
@@ -44,6 +79,9 @@ type runState struct {
 	streamingCardCreated bool
 	sse                  *sseWriter
 	detached             bool
+	pendingEvents        []pendingSSEEvent
+	interaction          *interactionState
+	interactionTimer     *time.Timer
 
 	notify chan struct{}
 	done   chan pendingResult
@@ -91,19 +129,23 @@ func (s *pendingStore) get(id string) *runState {
 func (s *pendingStore) delete(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if run := s.runs[id]; run != nil {
+		run.stopInteractionTimer()
+	}
 	delete(s.runs, id)
 }
 
 func (s *pendingStore) cleanupLocked(now time.Time) {
 	for id, run := range s.runs {
 		if now.Sub(run.created) > s.ttl {
+			run.stopInteractionTimer()
 			run.complete(pendingResult{err: context.DeadlineExceeded})
 			delete(s.runs, id)
 		}
 	}
 }
 
-func newRunState(id, user, channelKey, sessionKey, conversationID, messageID string, sse *sseWriter) *runState {
+func newRunState(id, user, channelKey, sessionKey, conversationID, messageID string, sse *sseWriter, requestDeadline time.Time) *runState {
 	return &runState{
 		id:              id,
 		user:            user,
@@ -112,6 +154,7 @@ func newRunState(id, user, channelKey, sessionKey, conversationID, messageID str
 		conversationID:  conversationID,
 		messageID:       messageID,
 		created:         time.Now(),
+		requestDeadline: requestDeadline,
 		sse:             sse,
 		sentToolCallIDs: make(map[string]bool),
 		notify:          make(chan struct{}, 1),
@@ -124,6 +167,10 @@ func (r *runState) setStreamContent(thinking, answer string) {
 	r.latestThinking = thinking
 	r.answerText = answer
 	r.mu.Unlock()
+	r.signal()
+}
+
+func (r *runState) signal() {
 	select {
 	case r.notify <- struct{}{}:
 	default:
@@ -138,10 +185,7 @@ func (r *runState) applyCardContent(content string) {
 	r.answerText = answer
 	r.mergeToolCallsLocked(tools)
 	r.mu.Unlock()
-	select {
-	case r.notify <- struct{}{}:
-	default:
-	}
+	r.signal()
 }
 
 func (r *runState) mergeToolCallsLocked(tools []streamToolCall) {
@@ -162,10 +206,14 @@ func (r *runState) enqueueToolResult(res streamToolResult) {
 	r.mu.Lock()
 	r.pendingToolResults = append(r.pendingToolResults, res)
 	r.mu.Unlock()
-	select {
-	case r.notify <- struct{}{}:
-	default:
-	}
+	r.signal()
+}
+
+func (r *runState) enqueueEvent(name string, payload any) {
+	r.mu.Lock()
+	r.pendingEvents = append(r.pendingEvents, pendingSSEEvent{name: name, payload: payload})
+	r.mu.Unlock()
+	r.signal()
 }
 
 func (r *runState) detach() {
@@ -185,7 +233,29 @@ func (r *runState) flushDelta() error {
 	if err := r.flushToolResultEvents(); err != nil {
 		return err
 	}
-	return r.flushAnswerDelta()
+	if err := r.flushAnswerDelta(); err != nil {
+		return err
+	}
+	return r.flushEvents()
+}
+
+func (r *runState) flushEvents() error {
+	r.mu.Lock()
+	events := r.pendingEvents
+	r.pendingEvents = nil
+	sse := r.sse
+	detached := r.detached
+	r.mu.Unlock()
+	if sse == nil || detached {
+		return nil
+	}
+	for _, ev := range events {
+		if err := sse.Event(ev.name, ev.payload); err != nil {
+			r.detach()
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *runState) flushThinkingDelta() error {
@@ -339,18 +409,26 @@ func (r *runState) flushAnswerDelta() error {
 func (r *runState) complete(result pendingResult) bool {
 	var ok bool
 	r.once.Do(func() {
+		r.stopInteractionTimer()
 		r.done <- result
 		ok = true
 	})
 	return ok
 }
 
-func (r *runState) replyContext() replyContext {
-	return replyContext{
+func (r *runState) replyContext() *replyContext {
+	return &replyContext{
 		runID:          r.id,
 		conversationID: r.conversationID,
 		messageID:      r.messageID,
 	}
+}
+
+func (r *runState) interactionReplyContext(interactionID string) *replyContext {
+	rc := r.replyContext()
+	rc.interactionAck = true
+	rc.interactionID = interactionID
+	return rc
 }
 
 func (r *runState) markStreamingCardCreated() {
@@ -363,6 +441,9 @@ func (r *runState) shouldFinishPlainReply() (answer string, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.finalized || r.streamingCardCreated {
+		return "", false
+	}
+	if r.interaction != nil && !r.interaction.Responded && !r.interaction.Expired {
 		return "", false
 	}
 	if strings.TrimSpace(r.answerText) == "" {
@@ -378,6 +459,81 @@ func (r *runState) finalAnswer(fallback string) string {
 		return fallback
 	}
 	return r.answerText
+}
+
+func (r *runState) stopInteractionTimer() {
+	r.mu.Lock()
+	timer := r.interactionTimer
+	r.interactionTimer = nil
+	r.mu.Unlock()
+	if timer != nil {
+		timer.Stop()
+	}
+}
+
+func (r *runState) getInteraction(id string) *interactionState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.interaction == nil || r.interaction.ID != id {
+		return nil
+	}
+	// Return a shallow copy for safe reads outside lock.
+	cp := *r.interaction
+	return &cp
+}
+
+func (r *runState) replaceInteraction(ix *interactionState, timer *time.Timer) *interactionState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var superseded *interactionState
+	if r.interaction != nil && !r.interaction.Responded && !r.interaction.Expired {
+		cp := *r.interaction
+		superseded = &cp
+	}
+	if r.interactionTimer != nil {
+		r.interactionTimer.Stop()
+	}
+	r.interaction = ix
+	r.interactionTimer = timer
+	return superseded
+}
+
+func (r *runState) markInteractionResponded(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.interaction == nil || r.interaction.ID != id {
+		return errors.New("not found")
+	}
+	if r.interaction.Expired {
+		return errInteractionExpired
+	}
+	if r.interaction.Responded {
+		return errInteractionResponded
+	}
+	r.interaction.Responded = true
+	if r.interactionTimer != nil {
+		r.interactionTimer.Stop()
+		r.interactionTimer = nil
+	}
+	return nil
+}
+
+func (r *runState) markInteractionExpired(id string) (*interactionState, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.interaction == nil || r.interaction.ID != id {
+		return nil, false
+	}
+	if r.interaction.Responded || r.interaction.Expired {
+		return nil, false
+	}
+	r.interaction.Expired = true
+	if r.interactionTimer != nil {
+		r.interactionTimer.Stop()
+		r.interactionTimer = nil
+	}
+	cp := *r.interaction
+	return &cp, true
 }
 
 func (s *pendingStore) setStreamContent(id, content string) bool {
@@ -470,6 +626,22 @@ func (s *pendingStore) cancelTimeout(id string) bool {
 		return false
 	}
 	if !run.complete(pendingResult{err: context.DeadlineExceeded}) {
+		return false
+	}
+	s.delete(id)
+	return true
+}
+
+func (s *pendingStore) cancelInteractionTimeout(id, kind string) bool {
+	run := s.get(id)
+	if run == nil {
+		return false
+	}
+	if !run.complete(pendingResult{
+		err:                    errInteractionTimedOut,
+		interactionTimedOut:    true,
+		interactionTimeoutKind: kind,
+	}) {
 		return false
 	}
 	s.delete(id)

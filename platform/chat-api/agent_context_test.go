@@ -129,7 +129,7 @@ func TestChatMessagesPassesAgentContext(t *testing.T) {
 	}
 
 	// metadata remains hooks-only — ReplyCtx still carries it, AgentContext does not.
-	rc := replyContext{metadata: map[string]any{"hook_only": "yes"}}
+	rc := &replyContext{metadata: map[string]any{"hook_only": "yes"}}
 	hookCtx := p.HookContext(rc)
 	if hookCtx.Context["hook_only"] != "yes" {
 		t.Fatalf("hooks metadata broken: %#v", hookCtx.Context)

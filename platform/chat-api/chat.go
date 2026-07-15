@@ -17,11 +17,13 @@ import (
 )
 
 const (
-	maxRequestBody   = 10 << 20 // 10 MiB
-	defaultMaxRuns   = 1000
-	defaultRunTTL    = 2 * time.Hour
-	busyPolicyQueue  = "queue"
-	busyPolicyReject = "reject"
+	maxRequestBody            = 10 << 20 // 10 MiB
+	defaultMaxRuns            = 1000
+	defaultRunTTL             = 2 * time.Hour
+	defaultInteractionTimeout = 10 * time.Minute
+	defaultSSEPingInterval    = 15 * time.Second
+	busyPolicyQueue           = "queue"
+	busyPolicyReject          = "reject"
 )
 
 type chatInput struct {
@@ -45,6 +47,8 @@ type replyContext struct {
 	conversationID string
 	messageID      string
 	metadata       map[string]any
+	interactionAck bool // Reply is an interaction acknowledgment; do not end the turn
+	interactionID  string
 }
 
 func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
@@ -143,13 +147,14 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run := newRunState(runID, user, channelKey, engineSessionKey, session.ID, msgID, sse)
+	requestDeadline := time.Now().Add(p.requestTimeout)
+	run := newRunState(runID, user, channelKey, engineSessionKey, session.ID, msgID, sse, requestDeadline)
 	if !p.pending.create(run) {
 		_ = sse.Error("too many concurrent requests")
 		return
 	}
 
-	rc := replyContext{
+	rc := &replyContext{
 		runID:          runID,
 		conversationID: session.ID,
 		messageID:      msgID,
@@ -215,6 +220,14 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	deadline := time.NewTimer(p.requestTimeout)
 	defer deadline.Stop()
 
+	var pingTicker *time.Ticker
+	var pingC <-chan time.Time
+	if p.ssePingInterval > 0 {
+		pingTicker = time.NewTicker(p.ssePingInterval)
+		defer pingTicker.Stop()
+		pingC = pingTicker.C
+	}
+
 	for {
 		select {
 		case <-run.notify:
@@ -224,6 +237,11 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		case result := <-run.done:
 			p.emitTerminalSSE(run, result)
 			return
+		case <-pingC:
+			run.enqueueEvent("ping", map[string]any{
+				"run_id": runID,
+				"ts":     time.Now().Unix(),
+			})
 		case <-deadline.C:
 			p.dispatchStop(engineSessionKey, user, channelKey, rc)
 			p.pending.cancelTimeout(runID)
@@ -257,6 +275,14 @@ func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 		_ = sse.Error(result.errMsg)
 	case result.userCanceled:
 		_ = sse.Error(errUserCanceled.Error())
+	case result.interactionTimedOut || errors.Is(result.err, errInteractionTimedOut):
+		payload := map[string]any{
+			"error": errInteractionTimedOut.Error(),
+		}
+		if result.interactionTimeoutKind != "" {
+			payload["kind"] = result.interactionTimeoutKind
+		}
+		_ = sse.Event("error", payload)
 	case result.err != nil:
 		_ = sse.Error(result.err.Error())
 	default:
@@ -327,9 +353,24 @@ func newRunID() string {
 }
 
 func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
-	rc, ok := replyTo.(replyContext)
-	if !ok || rc.runID == "" {
+	rc, ok := replyTo.(*replyContext)
+	if !ok || rc == nil || rc.runID == "" {
 		return fmt.Errorf("chat-api: unsupported reply context %T", replyTo)
+	}
+	if rc.interactionAck {
+		run := p.pending.get(rc.runID)
+		if run == nil {
+			return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
+		}
+		payload := map[string]any{
+			"message_id": rc.messageID,
+			"text":       content,
+		}
+		if rc.interactionID != "" {
+			payload["interaction_id"] = rc.interactionID
+		}
+		run.enqueueEvent("interaction_ack", payload)
+		return nil
 	}
 	if kind, depth, msg := classifySystemReply(content); kind != replyKindContent {
 		switch kind {
@@ -362,19 +403,19 @@ func (p *Platform) Send(_ context.Context, replyCtx any, content string) error {
 }
 
 func (p *Platform) CreateStreamingCard(_ context.Context, replyTo any) (core.StreamingCard, error) {
-	rc, ok := replyTo.(replyContext)
-	if !ok || rc.runID == "" {
+	rc, ok := replyTo.(*replyContext)
+	if !ok || rc == nil || rc.runID == "" {
 		return nil, errors.New("chat-api: invalid streaming card reply context")
 	}
 	if run := p.pending.get(rc.runID); run != nil {
 		run.markStreamingCardCreated()
 	}
-	return &streamingCard{platform: p, runID: rc.runID}, nil
+	return &streamingCard{platform: p, rc: rc}, nil
 }
 
 func (p *Platform) OnProcessingEnd(_ context.Context, replyCtx any, _ core.ProcessingEndEvent) error {
-	rc, ok := replyCtx.(replyContext)
-	if !ok || rc.runID == "" {
+	rc, ok := replyCtx.(*replyContext)
+	if !ok || rc == nil || rc.runID == "" {
 		return fmt.Errorf("chat-api: unsupported processing-end context %T", replyCtx)
 	}
 	run := p.pending.get(rc.runID)
@@ -387,8 +428,8 @@ func (p *Platform) OnProcessingEnd(_ context.Context, replyCtx any, _ core.Proce
 }
 
 func (p *Platform) HookContext(replyCtx any) core.HookContext {
-	rc, ok := replyCtx.(replyContext)
-	if !ok || len(rc.metadata) == 0 {
+	rc, ok := replyCtx.(*replyContext)
+	if !ok || rc == nil || len(rc.metadata) == 0 {
 		return core.HookContext{}
 	}
 	out := core.HookContext{Context: make(map[string]any, len(rc.metadata))}
@@ -400,8 +441,15 @@ func (p *Platform) HookContext(replyCtx any) core.HookContext {
 
 type streamingCard struct {
 	platform *Platform
-	runID    string
+	rc       *replyContext
 	lastSent string
+}
+
+func (c *streamingCard) runID() string {
+	if c.rc == nil {
+		return ""
+	}
+	return c.rc.runID
 }
 
 func (c *streamingCard) Update(_ context.Context, content string) error {
@@ -409,8 +457,9 @@ func (c *streamingCard) Update(_ context.Context, content string) error {
 		return nil
 	}
 	c.lastSent = content
-	if !c.platform.pending.setStreamContent(c.runID, content) {
-		return fmt.Errorf("chat-api: run %q is not pending", c.runID)
+	id := c.runID()
+	if !c.platform.pending.setStreamContent(id, content) {
+		return fmt.Errorf("chat-api: run %q is not pending", id)
 	}
 	return nil
 }
@@ -421,15 +470,16 @@ func (c *streamingCard) Finalize(_ context.Context, content string) error {
 		raw = content
 		c.lastSent = raw
 	}
+	id := c.runID()
 	if strings.TrimSpace(raw) != "" {
-		if !c.platform.pending.setStreamContent(c.runID, raw) {
-			return fmt.Errorf("chat-api: run %q is not pending", c.runID)
+		if !c.platform.pending.setStreamContent(id, raw) {
+			return fmt.Errorf("chat-api: run %q is not pending", id)
 		}
 	}
 	_, answer := parseStreamingCardContent(raw)
 	// Never fall back to raw card markdown — that would reintroduce tool blocks.
-	if !c.platform.pending.finish(c.runID, pendingResult{answer: answer}) {
-		return fmt.Errorf("chat-api: run %q is not pending", c.runID)
+	if !c.platform.pending.finish(id, pendingResult{answer: answer}) {
+		return fmt.Errorf("chat-api: run %q is not pending", id)
 	}
 	return nil
 }

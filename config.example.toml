@@ -1337,6 +1337,8 @@ app_secret = "your-feishu-app-secret"
 # max_runs = 1000                      # Max concurrent SSE runs in memory
 # run_ttl = "2h"                       # TTL for pending run records
 # debug_ui = false                     # Serve embedded debug console at /debug/ (local only)
+# interaction_timeout = "10m"          # Confirm window timeout (permission auto-deny; ask-question cancels turn)
+# sse_ping_interval = "15s"            # SSE keepalive while waiting (0s disables)
 #
 # Map HTTP headers into Message.AgentContext (agent-visible when project
 # inject_context allowlists the same fields). Body metadata stays hooks-only.

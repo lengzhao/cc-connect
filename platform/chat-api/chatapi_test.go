@@ -52,6 +52,12 @@ func TestNewDefaults(t *testing.T) {
 	if p.busyPolicy != busyPolicyQueue {
 		t.Fatalf("busyPolicy = %q, want queue", p.busyPolicy)
 	}
+	if p.interactionTimeout != defaultInteractionTimeout {
+		t.Fatalf("interactionTimeout = %v, want %v", p.interactionTimeout, defaultInteractionTimeout)
+	}
+	if p.ssePingInterval != defaultSSEPingInterval {
+		t.Fatalf("ssePingInterval = %v, want %v", p.ssePingInterval, defaultSSEPingInterval)
+	}
 }
 
 func TestPairHistoryAndMessageID(t *testing.T) {
@@ -592,7 +598,7 @@ func TestPatchConversation(t *testing.T) {
 
 func TestHookContextMetadata(t *testing.T) {
 	p := newTestPlatform(t, nil)
-	rc := replyContext{metadata: map[string]any{"tenant": "acme"}}
+	rc := &replyContext{metadata: map[string]any{"tenant": "acme"}}
 	got := p.HookContext(rc)
 	if got.Context["tenant"] != "acme" {
 		t.Fatalf("context = %#v", got.Context)

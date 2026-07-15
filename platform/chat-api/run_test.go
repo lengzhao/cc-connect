@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chenhg5/cc-connect/core"
 )
@@ -16,7 +17,7 @@ func TestRunStateThinkingAndAnswerDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse)
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
 
 	run.setStreamContent("plan", "")
 	if err := run.flushDelta(); err != nil {
@@ -46,7 +47,7 @@ func TestEmitTerminalSSEFlushesPendingDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse)
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
 	run.setStreamContent("", "pending tail")
 	// Do not flush manually — emitTerminalSSE must drain before message_end.
 	p.emitTerminalSSE(run, pendingResult{answer: "pending tail"})
@@ -143,7 +144,7 @@ func TestMessageEndOmitsAnswerByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse)
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
 	run.setStreamContent("", "hello")
 	p.emitTerminalSSE(run, pendingResult{answer: "hello"})
 	if strings.Contains(rec.Body.String(), `"answer"`) {
@@ -158,7 +159,7 @@ func TestMessageEndIncludesAnswerWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse)
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
 	run.setStreamContent("", "hello")
 	p.emitTerminalSSE(run, pendingResult{answer: "hello"})
 	if !strings.Contains(rec.Body.String(), `"answer":"hello"`) {

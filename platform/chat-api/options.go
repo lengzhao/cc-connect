@@ -43,6 +43,22 @@ func durationOption(opts map[string]any, key string, fallback time.Duration) (ti
 	return d, nil
 }
 
+// durationOptionAllowZero parses a duration and allows 0 to mean "disabled".
+func durationOptionAllowZero(opts map[string]any, key string, fallback time.Duration) (time.Duration, error) {
+	raw := stringOption(opts, key, "")
+	if raw == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: %w", raw, err)
+	}
+	if d < 0 {
+		return 0, errors.New("duration must be non-negative")
+	}
+	return d, nil
+}
+
 func intOption(opts map[string]any, key string, fallback int) (int, error) {
 	if opts == nil {
 		return fallback, nil

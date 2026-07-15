@@ -49,6 +49,11 @@ func TestDebugUIServesPage(t *testing.T) {
 		strings.Contains(html, `const answerBody = addBubble("assistant", "", "assistant")`) {
 		t.Fatalf("debug UI must not pre-create thinking or answer bubbles")
 	}
+	if !strings.Contains(html, "permission_request") ||
+		!strings.Contains(html, "/interactions/") ||
+		!strings.Contains(html, "respondInteraction") {
+		t.Fatalf("debug UI should support permission/question confirm respond")
+	}
 	// Debug page itself must not require auth (otherwise hard to open).
 	if rec.Header().Get("Content-Type") == "" || !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("content-type = %q", rec.Header().Get("Content-Type"))

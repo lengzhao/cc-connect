@@ -66,5 +66,4 @@ flowchart TD
 ## Non-goals
 
 - No Engine `ToolEventNotifier` (revisit if multiple platforms need it).
-- No `permission_request` SSE.
 - Tool events are not replayed from history API.
