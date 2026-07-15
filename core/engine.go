@@ -339,6 +339,7 @@ type Engine struct {
 	display               DisplayCfg
 	injectSender          bool
 	injectTimestamp       bool
+	injectContext         []string
 	defaultTimezone       string
 	attachmentSendEnabled bool
 	startedAt             time.Time
@@ -495,6 +496,7 @@ type queuedMessage struct {
 	msgSessionKey     string // session key for extracting chat ID
 	channelKey        string // platform-provided channel identifier (preferred over sessionKey extraction)
 	userMessageTimeMs int64  // Feishu create_time ms (optional); see Message.UserMessageTimeMs
+	agentContext      AgentContext
 }
 
 // interactiveState tracks a running interactive agent session and its permission state.
@@ -982,6 +984,13 @@ func (e *Engine) SetInjectSender(v bool) {
 // timezone) is prepended to each message sent to the agent.
 func (e *Engine) SetInjectTimestamp(v bool) {
 	e.injectTimestamp = v
+}
+
+// SetInjectContext sets the project-level allowlist of AgentContext fields
+// that may be prepended to agent prompts (language, task_id, trace_id,
+// custom.*, custom.<slug>). Empty/nil disables context injection.
+func (e *Engine) SetInjectContext(keys []string) {
+	e.injectContext = NormalizeInjectContextAllowlist(keys)
 }
 
 // SetDefaultTimezone sets the fallback IANA timezone used when the platform
@@ -3143,6 +3152,7 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 		msgSessionKey:     msg.SessionKey,
 		channelKey:        msg.ChannelKey,
 		userMessageTimeMs: msg.UserMessageTimeMs,
+		agentContext:      msg.AgentContext.Clone(),
 	})
 	queueDepth := len(state.pendingMessages)
 
@@ -3775,7 +3785,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		drainEvents(state.agentSession.Events())
 	}
 
-	promptContent := e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, p)
+	promptContent := e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, p, msg.AgentContext)
 
 	sendStart := time.Now()
 	state.mu.Lock()
@@ -5724,7 +5734,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					}
 				}
 
-				queuedPrompt := e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform)
+				queuedPrompt := e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext)
 
 				state.mu.Lock()
 				as := state.agentSession // capture under lock to avoid race with cleanup
@@ -6045,7 +6055,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		e.emitQueuedMessageProcessingHook(queued)
 
 		e.i18n.DetectAndSet(queued.content)
-		prompt := e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform)
+		prompt := e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext)
 
 		state.mu.Lock()
 		as := state.agentSession // capture under lock to avoid race with cleanup (mirrors #1436)
@@ -15968,9 +15978,9 @@ func (e *Engine) cmdBindSetup(p Platform, msg *Message) {
 	}
 }
 
-// buildAgentPrompt prepends cc-connect metadata to content when injectTimestamp
-// and/or injectSender are enabled.
-func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey string, p Platform) string {
+// buildAgentPrompt prepends cc-connect metadata to content when injectTimestamp,
+// injectSender, and/or injectContext are enabled.
+func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey string, p Platform, agentCtx AgentContext) string {
 	var attrs []string
 	if e.injectTimestamp {
 		tzName := e.resolveUserTimezone(userID, p)
@@ -15989,6 +15999,10 @@ func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platfo
 			attrs = append(attrs, fmt.Sprintf(`sender_email="%s"`, promptAttrValue(senderEmail)))
 		}
 		attrs = append(attrs, fmt.Sprintf("platform=%s", platform), fmt.Sprintf("chat_id=%s", chatID))
+	}
+	if len(e.injectContext) > 0 && !agentCtx.Empty() {
+		filtered := FilterAgentContextByAllowlist(SanitizeAgentContext(agentCtx), e.injectContext)
+		attrs = append(attrs, filtered.PromptAttrs()...)
 	}
 	if len(attrs) == 0 {
 		return content

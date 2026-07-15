@@ -46,8 +46,9 @@ config.*.toml
 # Instance lock files (created at startup, released on shutdown)
 *.toml.lock
 
-# CC-Connect runtime state
-.cc-connect/
+# Local / generated state
+.local/
+
 
 # npm / pnpm (for npm package distribution and web admin)
 .npmrc

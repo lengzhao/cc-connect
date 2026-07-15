@@ -13,7 +13,7 @@
 
 - 会话列表、重命名、删除
 - 会话历史（游标分页）
-- 发送消息：**SSE 流式**（`message` → `thinking_delta?` → `text_delta` → `message_end`）
+- 发送消息：**SSE 流式**（`message` → `thinking_delta?` → `tool_call?` / `tool_result?` → `text_delta` → `message_end`）
 - 隐式创建会话（首条 `chat-messages` 不带 `conversation_id`）
 - 会话忙时排队（默认 `busy_policy=queue`，复用 Engine 队列）
 
@@ -218,6 +218,47 @@ message_id = "{conversation_id}:{turn_index}"
 
 `user` 由 header 提供，不在 body 中。
 
+### 3.3.1 AgentContext（个性化 header → Agent 提示）
+
+除 identity / channel header 外，可通过 `agent_context_headers` 将自定义 HTTP header **显式映射**到 `Message.AgentContext`，供项目级 `inject_context` 注入 Agent prompt。
+
+标准字段：`language`、`task_id`、`trace_id`；扩展字段：`custom.<slug>`（如 `custom.tenant_id`）。
+
+```toml
+# 项目级：决定哪些字段可进入 Agent
+inject_context = ["language", "task_id", "custom.tenant_id"]
+
+[projects.platforms.options.agent_context_headers]
+language = "X-Language"
+task_id = "X-Task-ID"
+"custom.tenant_id" = "X-Tenant-ID"
+```
+
+请求示例：
+
+```http
+X-Language: zh
+X-Task-ID: job-42
+X-Tenant-ID: acme
+```
+
+Agent 收到类似前缀（需开启 `inject_context`）：
+
+```text
+[cc-connect language="zh" task_id="job-42" custom.tenant_id="acme"]
+帮我解释这段代码
+```
+
+注意：
+
+- **未映射的 header 一律忽略**；敏感 header（`Authorization` / `Cookie` 等）不可映射。
+- body `metadata` **仍只进 hooks**，不会自动转成 AgentContext。
+- `language` 仅作为 Agent 侧提示，**不会**切换 Engine UI / i18n 语言。
+- AgentContext **不持久化**、不写入历史、不在 API 响应中返回。
+- 已映射 header 会加入 CORS `Access-Control-Allow-Headers`。
+
+详见 [Agent Context Injection 设计](./plans/2026-07-15-agent-context-injection-design.md)。
+
 **SSE 响应**（`Accept: text/event-stream`、`*/*` 或省略）
 
 ```text
@@ -226,6 +267,12 @@ data: {"conversation_id":"s1a2b3c","message_id":"s1a2b3c:1","run_id":"run_abc"}
 
 event: thinking_delta
 data: {"message_id":"s1a2b3c:1","text":"分析代码结构…"}
+
+event: tool_call
+data: {"message_id":"s1a2b3c:1","tool_call_id":"1","name":"Bash","input":"date"}
+
+event: tool_result
+data: {"message_id":"s1a2b3c:1","tool_call_id":"1","name":"Bash","status":"ok","exit_code":0,"success":true,"output":"Wed Jul 15 ..."}
 
 event: text_delta
 data: {"message_id":"s1a2b3c:1","text":"这段代码实现了……"}
@@ -238,10 +285,14 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 |-------|--------|------|
 | `message` | `conversation_id`, `message_id`, `run_id` | 轮次开始 |
 | `thinking_delta` | `message_id`, `text` | 推理增量（可选） |
-| `text_delta` | `message_id`, `text` | 正文增量 |
+| `tool_call` | `message_id`, `tool_call_id`, `name`, `input?` | 工具调用（可选） |
+| `tool_result` | `message_id`, `tool_call_id`, `name?`, `status?`, `exit_code?`, `success?`, `output?` | 工具结果（可选） |
+| `text_delta` | `message_id`, `text` | 正文增量（不含工具 markdown） |
 | `message_end` | `message_id`, `conversation_id`, `answer?` | 轮次结束 |
 | `message_queued` | `message_id`, `queue_depth` | 会话忙且 `busy_policy=queue` |
 | `error` | `error` | 错误（§2.6） |
+
+`tool_call` / `tool_result` 不写入历史（与 `thinking_delta` 相同）。详见 [Tool SSE 设计](./plans/2026-07-15-chat-api-tool-sse-design.md)。
 
 `message_end.answer` 默认省略（`include_answer_in_message_end = true` 时附带）。
 
@@ -249,7 +300,8 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 
 **客户端注意**
 
-- 拼接 `text_delta` 得完整回复；断开 SSE **不**停止 agent，内容仍写入 history
+- 拼接 `text_delta` 得完整回复；`tool_call` / `tool_result` 单独渲染，勿并入正文
+- 断开 SSE **不**停止 agent，内容仍写入 history
 - `message_queued` 后勿立即重开 SSE；等上轮结束或轮询 history
 - 取消：`POST /runs/{run_id}/cancel`（`run_id` 来自 `message` 事件）
 
@@ -400,7 +452,7 @@ SSE 仍连接时发送 `event: error`，`data.error` 为 `canceled by user`。
 | `POST` | `/chat-messages` | 发消息（SSE） |
 | `POST` | `/runs/{run_id}/cancel` | 取消轮次 |
 
-**v1 不提供**：`POST /conversations`、`response_mode=blocking`、历史附件 replay、`tool_call_*` SSE、`/health`。
+**v1 不提供**：`POST /conversations`、`response_mode=blocking`、历史附件 replay、`/health`。
 
 ---
 
@@ -423,6 +475,14 @@ busy_policy = "queue"
 include_answer_in_message_end = false
 max_runs = 1000
 run_ttl = "2h"
+
+# Optional embedded debug console (same origin): http://127.0.0.1:8030/debug/
+# debug_ui = true
+
+[projects.platforms.options.agent_context_headers]
+language = "X-Language"
+task_id = "X-Task-ID"
+"custom.tenant_id" = "X-Tenant-ID"
 ```
 
 | 选项 | 默认 | 说明 |
@@ -433,6 +493,8 @@ run_ttl = "2h"
 | `user_header` | `X-Chat-API-User` | 终端 user header |
 | `user_name_header` | `X-Chat-API-User-Name` | 可选显示名 header |
 | `channel_header` | `X-Chat-API-Channel` | 可选工作区 channel header |
+| `agent_context_headers` | 空 | 字段 → HTTP header 映射，写入 `Message.AgentContext` |
+| `debug_ui` | `false` | 为 `true` 时提供同源调试页 `/debug/`（不鉴权打开页面；调 API 仍需 token） |
 | `cors_origins` | 空 | CORS 允许来源 |
 | `request_timeout` / `timeout` | `30m` | SSE 等待上限 |
 | `busy_policy` | `queue` | `queue` 或 `reject` |
@@ -448,5 +510,8 @@ run_ttl = "2h"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.0.3 | 2026-07-15 | SSE 新增 `tool_call` / `tool_result`；工具内容不再进入 `text_delta` |
+| v1.0.2 | 2026-07-15 | 可选 `debug_ui` 同源调试页 `/debug/` |
+| v1.0.1 | 2026-07-15 | 新增 `agent_context_headers` / `inject_context` Agent 上下文注入 |
 | v1.0.0 | 2026-07-09 | 精简规范；新增可选 `X-Chat-API-Channel` |
 | v1.0.0-draft | 2026-06-29 | 初版：6 端点、SSE-only、queue 默认 |

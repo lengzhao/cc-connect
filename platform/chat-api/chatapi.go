@@ -28,6 +28,7 @@ type Platform struct {
 	userHeader                string
 	userNameHeader            string
 	channelHeader             string
+	agentContextHeaders       agentContextHeaderMap
 	corsOrigins               []string
 	requestTimeout            time.Duration
 	busyPolicy                string
@@ -37,6 +38,7 @@ type Platform struct {
 	dataDir                   string
 	multiWorkspaceBaseDir     string
 	resolvedAddr              string
+	debugUI                   bool
 
 	server   *http.Server
 	handler  core.MessageHandler
@@ -88,6 +90,10 @@ func New(opts map[string]any) (core.Platform, error) {
 	if err != nil {
 		return nil, err
 	}
+	agentContextHeaders, err := agentContextHeadersOption(opts)
+	if err != nil {
+		return nil, err
+	}
 
 	busyPolicy := strings.ToLower(stringOption(opts, "busy_policy", busyPolicyQueue))
 	if busyPolicy != busyPolicyQueue && busyPolicy != busyPolicyReject {
@@ -101,6 +107,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		userHeader:                userHeader,
 		userNameHeader:            userNameHeader,
 		channelHeader:             channelHeader,
+		agentContextHeaders:       agentContextHeaders,
 		corsOrigins:               stringSliceOption(opts, "cors_origins"),
 		requestTimeout:            timeout,
 		busyPolicy:                busyPolicy,
@@ -109,6 +116,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		pending:                   newPendingStore(maxRuns, runTTL),
 		dataDir:                   stringOption(opts, "cc_data_dir", ""),
 		multiWorkspaceBaseDir:     multiWorkspaceBaseDirFromOpts(opts),
+		debugUI:                   boolOption(opts, "debug_ui", false),
 	}
 	p.sessionStorePath = sessionStorePathFromOpts(opts)
 	return p, nil
@@ -161,6 +169,9 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 	}()
 
 	slog.Info("chat-api: server started", "listen_addr", p.resolvedAddr, "path", p.path)
+	if p.debugUI {
+		slog.Info("chat-api: debug UI enabled", "url", "http://"+p.resolvedAddr+"/debug/")
+	}
 	return nil
 }
 
@@ -221,6 +232,7 @@ func (p *Platform) routes() http.Handler {
 	mux.HandleFunc(p.path+"conversations/", wrap(p.handleConversationSub))
 	mux.HandleFunc(p.path+"chat-messages", wrap(p.handleChatMessages))
 	mux.HandleFunc(p.path+"runs/", wrap(p.handleRunRoutes))
+	p.registerDebugUI(mux)
 	return mux
 }
 

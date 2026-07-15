@@ -284,6 +284,14 @@ When project-level `inject_sender = true` is enabled, the sender is also injecte
 [cc-connect sender_id=U999 sender_name="Rock" platform=slack chat_id=C123]
 ```
 
+When `include_user_email = true` (platform) is also set and Slack returns an email, the sender header adds `sender_email="..."`:
+
+```text
+[cc-connect sender_id=U999 sender_name="Rock" sender_email="rock@example.com" platform=slack chat_id=C123]
+```
+
+This follows the shared Agent Context injection model: platforms collect identity fields, and project flags (`inject_sender` / `inject_context`) control what the agent sees. See [Agent Context Injection design](./plans/2026-07-15-agent-context-injection-design.md).
+
 When `inject_timestamp = true` is enabled, each agent message also includes the current time in the user's timezone (Slack profile timezone, or `default_timezone` fallback):
 
 ```text

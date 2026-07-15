@@ -165,3 +165,109 @@ func TestMessageEndIncludesAnswerWhenConfigured(t *testing.T) {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
 }
+
+func TestToolCallAndResultSSENotInTextDelta(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	bindTestSessions(t, p)
+
+	done := make(chan struct{})
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		scp := platform.(core.StreamingCardPlatform)
+		card, err := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+		if err != nil {
+			t.Errorf("CreateStreamingCard: %v", err)
+			close(done)
+			return
+		}
+		partial := streamThinkingHeader + "need clock" + streamSectionBreak +
+			"🔧 **Tool #1**: `Bash`\n```bash\ndate\n```\n\n" +
+			streamSectionBreak + "我来帮你查看当前时间。"
+		_ = card.Update(context.Background(), partial)
+		_ = platform.Reply(context.Background(), msg.ReplyCtx,
+			"🧾 Bash\n🟢 状态: ok\n🔢 退出码: 0\n```text\n2026年 7月15日\n```")
+		final := streamThinkingHeader + "need clock" + streamSectionBreak +
+			"🔧 **Tool #1**: `Bash`\n```bash\ndate\n```\n\n" +
+			streamSectionBreak + "我来帮你查看当前时间。现在是 **2026年7月15日**"
+		_ = card.Finalize(context.Background(), final)
+		close(done)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(`{"query":"现在是什么时间"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	<-done
+
+	out := rec.Body.String()
+	if !strings.Contains(out, "event: tool_call") {
+		t.Fatalf("missing tool_call: %s", out)
+	}
+	if !strings.Contains(out, "event: tool_result") {
+		t.Fatalf("missing tool_result: %s", out)
+	}
+	if !strings.Contains(out, `"name":"Bash"`) {
+		t.Fatalf("expected Bash in tool events: %s", out)
+	}
+	for _, block := range strings.Split(out, "\n\n") {
+		if !strings.Contains(block, "event: text_delta") {
+			continue
+		}
+		if strings.Contains(block, "🧾") || strings.Contains(block, "状态:") || strings.Contains(block, "退出码") || strings.Contains(block, "Tool #") {
+			t.Fatalf("tool markdown leaked into text_delta: %s", block)
+		}
+	}
+	joined := collectTextDeltas(out)
+	if strings.Count(joined, "现在是 **2026年7月15日**") != 1 {
+		t.Fatalf("answer should appear once, got %q from %s", joined, out)
+	}
+	if !strings.Contains(joined, "我来帮你查看当前时间。现在是 **2026年7月15日**") {
+		t.Fatalf("unexpected joined answer %q", joined)
+	}
+}
+
+func collectTextDeltas(sseBody string) string {
+	var b strings.Builder
+	for _, block := range strings.Split(sseBody, "\n\n") {
+		if !strings.Contains(block, "event: text_delta") {
+			continue
+		}
+		for _, line := range strings.Split(block, "\n") {
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			raw := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			const key = `"text":"`
+			i := strings.Index(raw, key)
+			if i < 0 {
+				continue
+			}
+			rest := raw[i+len(key):]
+			var out strings.Builder
+			for j := 0; j < len(rest); j++ {
+				if rest[j] == '\\' && j+1 < len(rest) {
+					switch rest[j+1] {
+					case 'n':
+						out.WriteByte('\n')
+					case 't':
+						out.WriteByte('\t')
+					case '"', '\\', '/':
+						out.WriteByte(rest[j+1])
+					default:
+						out.WriteByte(rest[j+1])
+					}
+					j++
+					continue
+				}
+				if rest[j] == '"' {
+					break
+				}
+				out.WriteByte(rest[j])
+			}
+			b.WriteString(out.String())
+		}
+	}
+	return b.String()
+}

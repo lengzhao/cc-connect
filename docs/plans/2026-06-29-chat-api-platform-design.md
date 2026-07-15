@@ -55,12 +55,15 @@ Do **not** duplicate TryLock logic in chat-api; let Engine own queue semantics.
 
 ## Streaming (v1)
 
-- Normative SSE: `message`, `thinking_delta`, `text_delta`, `message_end`, `error`, `message_queued`
-- `StreamingCard.Update` → `thinking_delta` + `text_delta` (parsed from card markdown); `Finalize` → `message_end`
+- Normative SSE: `message`, `thinking_delta`, `tool_call`, `tool_result`, `text_delta`, `message_end`, `error`, `message_queued`
+- `StreamingCard.Update` → `thinking_delta` + `tool_call` + `text_delta` (parsed from card markdown); `Finalize` → `message_end`
+- `Reply` tool-result fallback (`🧾` …) → `tool_result` (not `text_delta`)
 - `pendingStore` per run (from `platform/a2a`)
 - Client disconnect → detach SSE only; agent turn continues; partial text still saved to history
 
-**Deferred to v1.1**: `response_mode=blocking`, optional SSE extensions (`tool_call_*`, `agent_thought`, business `metadata` events).
+Tool SSE details: [2026-07-15-chat-api-tool-sse-design.md](./2026-07-15-chat-api-tool-sse-design.md).
+
+**Deferred to v1.1**: `response_mode=blocking`, optional SSE extensions (`agent_thought`, business `metadata` events).
 
 ## Authentication
 

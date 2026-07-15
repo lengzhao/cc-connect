@@ -33,7 +33,9 @@
 
 ## SSE events
 
-`message`, `thinking_delta`, `text_delta`, `message_end`, `error`, `message_queued`
+`message`, `thinking_delta`, `tool_call`, `tool_result`, `text_delta`, `message_end`, `error`, `message_queued`
+
+`tool_call` / `tool_result` are ephemeral (not written to history). See [Tool SSE design](./plans/2026-07-15-chat-api-tool-sse-design.md).
 
 ## Configuration
 

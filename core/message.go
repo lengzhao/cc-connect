@@ -201,6 +201,11 @@ type Message struct {
 	// drop late redeliveries that reuse a new message_id but an older create_time
 	// than a message already processed. Zero means unset (no ordering hint).
 	UserMessageTimeMs int64
+	// AgentContext is optional per-turn context collected by platforms
+	// (language, task_id, custom.*). Engine may prepend selected fields to
+	// the agent prompt when project inject_context allowlist permits them.
+	// Never persisted on Session / History.
+	AgentContext AgentContext
 }
 
 // EventType distinguishes different kinds of agent output.

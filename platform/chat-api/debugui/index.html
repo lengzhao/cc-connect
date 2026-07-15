@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>chat-api debug · local</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0c1117;
+      --bg-panel: #121a22;
+      --bg-elev: #182230;
+      --line: #243041;
+      --text: #e6edf5;
+      --muted: #8b9bb0;
+      --accent: #2fd3c8;
+      --accent-dim: #1a8f88;
+      --warn: #f0a35a;
+      --danger: #ef6b6b;
+      --ok: #6bcf8e;
+      --user: #c9d4e3;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --display: "Syne", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #16323a 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #1a2438 0%, transparent 50%),
+        var(--bg);
+      letter-spacing: 0.01em;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 280px 1fr 320px;
+      grid-template-rows: auto 1fr;
+      height: 100%;
+      gap: 0;
+    }
+
+    header {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(12, 17, 23, 0.85);
+      backdrop-filter: blur(8px);
+    }
+    header h1 {
+      margin: 0;
+      font-family: var(--display);
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    header h1 span { color: var(--accent); }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 0 3px rgba(239, 107, 107, 0.15);
+    }
+    .dot.ok {
+      background: var(--ok);
+      box-shadow: 0 0 0 3px rgba(107, 207, 142, 0.15);
+    }
+
+    aside, main, .log-pane {
+      min-height: 0;
+      border-right: 1px solid var(--line);
+    }
+    .log-pane { border-right: none; border-left: 1px solid var(--line); }
+
+    .panel {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: var(--bg-panel);
+    }
+    .panel-hd {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      font-family: var(--display);
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel-bd { padding: 12px; overflow: auto; flex: 1; }
+
+    label {
+      display: block;
+      margin: 10px 0 4px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    input, textarea, select, button {
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    input, textarea, select {
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      outline: none;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--accent-dim);
+      box-shadow: 0 0 0 2px rgba(47, 211, 200, 0.12);
+    }
+    textarea { resize: vertical; min-height: 64px; }
+
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+    button {
+      border: 1px solid var(--line);
+      background: var(--bg-elev);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      transition: border-color .15s, background .15s, transform .1s;
+    }
+    button:hover { border-color: var(--accent-dim); }
+    button:active { transform: translateY(1px); }
+    button.primary {
+      background: linear-gradient(180deg, #2a9f96, #1f7f78);
+      border-color: #2a9f96;
+      color: #041413;
+      font-weight: 600;
+    }
+    button.danger { color: var(--danger); border-color: #5a2c2c; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .conv-list { display: flex; flex-direction: column; gap: 6px; }
+    .conv-item {
+      text-align: left;
+      padding: 10px;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      width: 100%;
+    }
+    .conv-item.active {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1px rgba(47, 211, 200, 0.25);
+    }
+    .conv-item .name {
+      font-weight: 600;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .conv-item .meta {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .chat {
+      display: grid;
+      grid-template-rows: 1fr auto;
+      height: 100%;
+      background: transparent;
+    }
+    .messages {
+      overflow: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .bubble {
+      max-width: min(720px, 92%);
+      border-radius: 10px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      background: var(--bg-panel);
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.55;
+    }
+    .bubble.user {
+      align-self: flex-end;
+      background: #1a2736;
+      border-color: #31455c;
+      color: var(--user);
+    }
+    .bubble.assistant { align-self: flex-start; }
+    .bubble.thinking {
+      align-self: flex-start;
+      color: var(--muted);
+      border-style: dashed;
+      background: transparent;
+      font-size: 12px;
+    }
+    .bubble.tool {
+      align-self: flex-start;
+      color: var(--muted);
+      border-color: #3a4a3a;
+      background: #121a14;
+      font-size: 12px;
+    }
+    .bubble.tool .tag { color: var(--ok); }
+    .bubble.sys {
+      align-self: center;
+      color: var(--warn);
+      background: #241a10;
+      border-color: #4a3720;
+      font-size: 12px;
+    }
+    .bubble .tag {
+      display: inline-block;
+      margin-bottom: 6px;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .composer {
+      border-top: 1px solid var(--line);
+      padding: 14px 16px;
+      background: rgba(18, 26, 34, 0.95);
+      display: grid;
+      gap: 10px;
+    }
+    .composer-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .composer-actions .left { display: flex; gap: 8px; align-items: center; color: var(--muted); }
+
+    .log {
+      height: 100%;
+      overflow: auto;
+      padding: 10px 12px;
+      font-size: 11px;
+      line-height: 1.45;
+      background: #0a0e13;
+      color: #9db0c5;
+    }
+    .log .ev { margin-bottom: 8px; }
+    .log .ev .k { color: var(--accent); }
+    .log .ev .err { color: var(--danger); }
+    .log .ev .warn { color: var(--warn); }
+
+    details.advanced {
+      margin-top: 8px;
+      border-top: 1px dashed var(--line);
+      padding-top: 8px;
+    }
+    details.advanced summary {
+      cursor: pointer;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    @media (max-width: 1100px) {
+      .shell { grid-template-columns: 240px 1fr; }
+      .log-pane { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1>chat-api <span>debug</span></h1>
+      <div class="status">
+        <div id="healthDot" class="dot"></div>
+        <span id="healthText">checking…</span>
+        <span id="runMeta"></span>
+      </div>
+    </header>
+
+    <aside class="panel">
+      <div class="panel-hd">
+        <span>Config</span>
+        <button type="button" id="btnHealth" title="Ping list API">ping</button>
+      </div>
+      <div class="panel-bd">
+        <label>Base URL</label>
+        <input id="baseUrl" value="" placeholder="auto from this host" />
+        <label>Bearer Token</label>
+        <input id="token" value="local-chat-api-token" />
+        <div class="row">
+          <div>
+            <label>User</label>
+            <input id="userId" value="local_user" />
+          </div>
+          <div>
+            <label>User Name</label>
+            <input id="userName" value="Local Tester" />
+          </div>
+        </div>
+        <label>Channel (optional)</label>
+        <input id="channel" placeholder="team-alpha/backend" />
+
+        <details class="advanced" open>
+          <summary>AgentContext headers</summary>
+          <div class="row">
+            <div>
+              <label>X-Language</label>
+              <input id="lang" value="zh" />
+            </div>
+            <div>
+              <label>X-Task-ID</label>
+              <input id="taskId" value="ui-job-1" />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>X-Trace-ID</label>
+              <input id="traceId" value="" />
+            </div>
+            <div>
+              <label>X-Tenant-ID</label>
+              <input id="tenantId" value="acme" />
+            </div>
+          </div>
+        </details>
+
+        <div class="btn-row">
+          <button type="button" id="btnSave" class="primary">保存配置</button>
+          <button type="button" id="btnNew">新会话</button>
+        </div>
+
+        <div class="panel-hd" style="margin:16px -12px 8px; border-top:1px solid var(--line);">
+          <span>Conversations</span>
+          <button type="button" id="btnRefresh">刷新</button>
+        </div>
+        <div id="convList" class="conv-list"></div>
+        <div class="btn-row">
+          <button type="button" id="btnRename">重命名</button>
+          <button type="button" id="btnDelete" class="danger">删除</button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="chat">
+      <div id="messages" class="messages"></div>
+      <div class="composer">
+        <textarea id="query" rows="3" placeholder="输入消息… Enter 发送，Shift+Enter 换行"></textarea>
+        <div class="composer-actions">
+          <div class="left">
+            <span id="convLabel">conversation: (new)</span>
+          </div>
+          <div class="btn-row" style="margin:0">
+            <button type="button" id="btnCancel" disabled>取消当前 run</button>
+            <button type="button" id="btnSend" class="primary">发送</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <section class="panel log-pane">
+      <div class="panel-hd">
+        <span>SSE Log</span>
+        <button type="button" id="btnClearLog">清空</button>
+      </div>
+      <div id="sseLog" class="log"></div>
+    </section>
+  </div>
+
+  <script>
+    const LS_KEY = "chat-api-debug-v1";
+    const $ = (id) => document.getElementById(id);
+
+    const state = {
+      conversationId: null,
+      runId: null,
+      abort: null,
+      sending: false,
+    };
+
+    const fields = ["baseUrl", "token", "userId", "userName", "channel", "lang", "taskId", "traceId", "tenantId"];
+
+    function loadConfig() {
+      try {
+        const raw = localStorage.getItem(LS_KEY);
+        if (!raw) return;
+        const cfg = JSON.parse(raw);
+        for (const k of fields) {
+          if (cfg[k] != null) $(k).value = cfg[k];
+        }
+        if (cfg.conversationId) {
+          state.conversationId = cfg.conversationId;
+          setConvLabel();
+        }
+      } catch {}
+    }
+
+    function saveConfig() {
+      const cfg = {};
+      for (const k of fields) cfg[k] = $(k).value.trim();
+      cfg.conversationId = state.conversationId;
+      localStorage.setItem(LS_KEY, JSON.stringify(cfg));
+    }
+
+    function apiBase() {
+      const raw = $("baseUrl").value.trim();
+      if (raw) return raw.replace(/\/$/, "");
+      // Same-origin when served from /debug/
+      return window.location.origin.replace(/\/$/, "") + (window.__CHAT_API_PATH__ || "/v1").replace(/\/$/, "");
+    }
+
+    function authHeaders(extra = {}) {
+      const h = {
+        Authorization: "Bearer " + $("token").value.trim(),
+        ...extra,
+      };
+      const user = $("userId").value.trim();
+      if (user) h["X-Chat-API-User"] = user;
+      const name = $("userName").value.trim();
+      if (name) h["X-Chat-API-User-Name"] = name;
+      const channel = $("channel").value.trim();
+      if (channel) h["X-Chat-API-Channel"] = channel;
+      const lang = $("lang").value.trim();
+      if (lang) h["X-Language"] = lang;
+      const taskId = $("taskId").value.trim();
+      if (taskId) h["X-Task-ID"] = taskId;
+      const traceId = $("traceId").value.trim();
+      if (traceId) h["X-Trace-ID"] = traceId;
+      const tenantId = $("tenantId").value.trim();
+      if (tenantId) h["X-Tenant-ID"] = tenantId;
+      return h;
+    }
+
+    function setHealth(ok, text) {
+      $("healthDot").classList.toggle("ok", !!ok);
+      $("healthText").textContent = text;
+    }
+
+    function setConvLabel() {
+      $("convLabel").textContent = "conversation: " + (state.conversationId || "(new)");
+      $("runMeta").textContent = state.runId ? "run: " + state.runId : "";
+    }
+
+    function logSSE(kind, payload, cls = "") {
+      const el = document.createElement("div");
+      el.className = "ev";
+      const data = typeof payload === "string" ? payload : JSON.stringify(payload, null, 0);
+      el.innerHTML = `<span class="k${cls ? " " + cls : ""}">${kind}</span> ${escapeHtml(data)}`;
+      $("sseLog").appendChild(el);
+      $("sseLog").scrollTop = $("sseLog").scrollHeight;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    function addBubble(role, text, tag) {
+      const el = document.createElement("div");
+      el.className = "bubble " + role;
+      if (tag) {
+        const t = document.createElement("div");
+        t.className = "tag";
+        t.textContent = tag;
+        el.appendChild(t);
+      }
+      const body = document.createElement("div");
+      body.className = "body";
+      body.textContent = text;
+      el.appendChild(body);
+      $("messages").appendChild(el);
+      $("messages").scrollTop = $("messages").scrollHeight;
+      return body;
+    }
+
+    async function ping() {
+      try {
+        const user = encodeURIComponent($("userId").value.trim());
+        const res = await fetch(`${apiBase()}/conversations?limit=1&user=${user}`, {
+          headers: authHeaders(),
+        });
+        if (!res.ok) {
+          setHealth(false, `HTTP ${res.status}`);
+          return false;
+        }
+        setHealth(true, "online · " + apiBase());
+        return true;
+      } catch (e) {
+        setHealth(false, "offline · " + e.message);
+        return false;
+      }
+    }
+
+    async function refreshConversations() {
+      const user = encodeURIComponent($("userId").value.trim());
+      const res = await fetch(`${apiBase()}/conversations?limit=50&user=${user}`, {
+        headers: authHeaders(),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        addBubble("sys", "list conversations failed: " + JSON.stringify(json));
+        return;
+      }
+      const list = $("convList");
+      list.innerHTML = "";
+      for (const c of json.data.conversations || []) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "conv-item" + (c.id === state.conversationId ? " active" : "");
+        btn.innerHTML = `<div class="name">${escapeHtml(c.name || c.id)}</div>
+          <div class="meta">${escapeHtml(c.id)}<br/>${escapeHtml((c.last_message_preview || "").slice(0, 80))}</div>`;
+        btn.addEventListener("click", () => openConversation(c.id));
+        list.appendChild(btn);
+      }
+    }
+
+    async function openConversation(id) {
+      state.conversationId = id;
+      setConvLabel();
+      saveConfig();
+      $("messages").innerHTML = "";
+      await refreshConversations();
+      const res = await fetch(`${apiBase()}/conversations/${encodeURIComponent(id)}/messages?limit=50`, {
+        headers: authHeaders(),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        addBubble("sys", "load history failed: " + JSON.stringify(json));
+        return;
+      }
+      const msgs = (json.data.messages || []).slice().reverse();
+      for (const m of msgs) {
+        if (m.query) addBubble("user", m.query, m.user_name || m.user_id || "user");
+        if (m.answer) addBubble("assistant", m.answer, "assistant");
+      }
+    }
+
+    function newConversation() {
+      state.conversationId = null;
+      state.runId = null;
+      setConvLabel();
+      $("messages").innerHTML = "";
+      saveConfig();
+      refreshConversations();
+    }
+
+    async function renameConversation() {
+      if (!state.conversationId) return alert("先选中或创建会话");
+      const name = prompt("新名称", "renamed");
+      if (!name) return;
+      const res = await fetch(`${apiBase()}/conversations/${encodeURIComponent(state.conversationId)}`, {
+        method: "PATCH",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) return alert(JSON.stringify(json));
+      await refreshConversations();
+    }
+
+    async function deleteConversation() {
+      if (!state.conversationId) return alert("先选中会话");
+      if (!confirm("删除 " + state.conversationId + " ?")) return;
+      const res = await fetch(`${apiBase()}/conversations/${encodeURIComponent(state.conversationId)}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) return alert(JSON.stringify(json));
+      newConversation();
+    }
+
+    async function cancelRun() {
+      if (!state.runId) return;
+      const res = await fetch(`${apiBase()}/runs/${encodeURIComponent(state.runId)}/cancel`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const json = await res.json().catch(() => ({}));
+      logSSE("cancel", json, res.ok ? "" : "err");
+      if (state.abort) state.abort.abort();
+    }
+
+    function parseSSEChunk(buffer, onEvent) {
+      const parts = buffer.split("\n\n");
+      const rest = parts.pop() || "";
+      for (const block of parts) {
+        let event = "message";
+        const dataLines = [];
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+        }
+        if (!dataLines.length) continue;
+        const raw = dataLines.join("\n");
+        let data = raw;
+        try { data = JSON.parse(raw); } catch {}
+        onEvent(event, data, raw);
+      }
+      return rest;
+    }
+
+    async function sendMessage() {
+      if (state.sending) return;
+      const query = $("query").value.trim();
+      if (!query) return;
+
+      saveConfig();
+      state.sending = true;
+      $("btnSend").disabled = true;
+      $("btnCancel").disabled = false;
+      $("query").value = "";
+
+      let thinking = "";
+      let answer = "";
+      let lastStreamBubble = null;
+
+      addBubble("user", query, $("userName").value.trim() || "user");
+
+      // Stream elements are created lazily. Consecutive events with the same
+      // identity reuse the last bubble; a changed identity starts a new one.
+      function streamBubble(role, key, tag) {
+        if (lastStreamBubble &&
+            lastStreamBubble.role === role &&
+            lastStreamBubble.key === key) {
+          return lastStreamBubble.body;
+        }
+        const body = addBubble(role, "", tag);
+        lastStreamBubble = { role, key, body };
+        return body;
+      }
+
+      const body = {
+        query,
+        auto_generate_name: true,
+        metadata: { source: "chat-api-debug-ui" },
+      };
+      if (state.conversationId) body.conversation_id = state.conversationId;
+
+      const controller = new AbortController();
+      state.abort = controller;
+
+      try {
+        const res = await fetch(`${apiBase()}/chat-messages`, {
+          method: "POST",
+          headers: {
+            ...authHeaders(),
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          logSSE("http_error", text, "err");
+          addBubble("sys", `HTTP ${res.status}: ${text}`);
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          buf = parseSSEChunk(buf, (event, data) => {
+            logSSE(event, data, event === "error" ? "err" : event === "message_queued" ? "warn" : "");
+            if (event === "message") {
+              if (data.conversation_id) {
+                state.conversationId = data.conversation_id;
+                setConvLabel();
+                saveConfig();
+              }
+              if (data.run_id) {
+                state.runId = data.run_id;
+                setConvLabel();
+              }
+            } else if (event === "thinking_delta") {
+              thinking += data.text || "";
+              const thinkingBody = streamBubble("thinking", "thinking", "thinking");
+              thinkingBody.textContent = thinking;
+              $("messages").scrollTop = $("messages").scrollHeight;
+            } else if (event === "tool_call") {
+              const id = String(data.tool_call_id || "unknown");
+              const bodyEl = streamBubble("tool", id, "tool #" + id);
+              const lines = ["call · " + (data.name || "?")];
+              if (data.input) lines.push(data.input);
+              bodyEl.textContent = lines.join("\n");
+              $("messages").scrollTop = $("messages").scrollHeight;
+            } else if (event === "tool_result") {
+              const id = String(data.tool_call_id || "unknown");
+              const bodyEl = streamBubble("tool", id, "tool #" + id);
+              const prev = bodyEl.textContent ? bodyEl.textContent + "\n" : "";
+              const meta = [];
+              if (data.status) meta.push("status=" + data.status);
+              if (data.exit_code !== undefined && data.exit_code !== null) meta.push("exit=" + data.exit_code);
+              if (data.success !== undefined && data.success !== null) meta.push("ok=" + data.success);
+              const lines = ["result" + (meta.length ? " · " + meta.join(" ") : "")];
+              if (data.output) lines.push(data.output);
+              bodyEl.textContent = prev + lines.join("\n");
+              $("messages").scrollTop = $("messages").scrollHeight;
+            } else if (event === "text_delta") {
+              answer += data.text || "";
+              const answerBody = streamBubble("assistant", "assistant", "assistant");
+              answerBody.textContent = answer;
+              $("messages").scrollTop = $("messages").scrollHeight;
+            } else if (event === "message_queued") {
+              addBubble("sys", `queued (depth=${data.queue_depth ?? "?"})`);
+            } else if (event === "error") {
+              addBubble("sys", "error: " + (data.error || JSON.stringify(data)));
+            } else if (event === "message_end") {
+              if (!answer && data.answer) {
+                answer = data.answer;
+                const answerBody = streamBubble("assistant", "assistant", "assistant");
+                answerBody.textContent = answer;
+              }
+            }
+          });
+        }
+      } catch (e) {
+        if (e.name !== "AbortError") {
+          logSSE("client_error", e.message, "err");
+          addBubble("sys", e.message);
+        }
+      } finally {
+        state.sending = false;
+        state.abort = null;
+        state.runId = null;
+        $("btnSend").disabled = false;
+        $("btnCancel").disabled = true;
+        setConvLabel();
+        refreshConversations().catch(() => {});
+      }
+    }
+
+    $("btnSave").addEventListener("click", () => { saveConfig(); ping(); });
+    $("btnHealth").addEventListener("click", ping);
+    $("btnRefresh").addEventListener("click", () => refreshConversations().catch(console.error));
+    $("btnNew").addEventListener("click", newConversation);
+    $("btnRename").addEventListener("click", () => renameConversation().catch(console.error));
+    $("btnDelete").addEventListener("click", () => deleteConversation().catch(console.error));
+    $("btnSend").addEventListener("click", () => sendMessage().catch(console.error));
+    $("btnCancel").addEventListener("click", () => cancelRun().catch(console.error));
+    $("btnClearLog").addEventListener("click", () => { $("sseLog").innerHTML = ""; });
+    $("query").addEventListener("keydown", (e) => {
+      // IME 组字确认（选词/回车确认）时不要当成发送。
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage().catch(console.error);
+      }
+    });
+
+    loadConfig();
+    setConvLabel();
+    ping().then((ok) => {
+      if (ok) return refreshConversations();
+    }).then(() => {
+      if (state.conversationId) return openConversation(state.conversationId);
+    }).catch(console.error);
+  </script>
+</body>
+</html>

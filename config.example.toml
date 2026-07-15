@@ -775,6 +775,10 @@ name = "my-backend"
 #                                   # 在每条发给 agent 的消息前注入发送者身份（默认 false）
 # inject_timestamp = true           # Prepend current local time to each agent message (default: false)
 #                                   # 在每条发给 agent 的消息前注入当前本地时间（默认 false）
+# inject_context = ["language", "task_id", "trace_id", "custom.*"]
+#                                   # Allowlisted AgentContext fields to prepend (default: none)
+#                                   # 允许注入 Agent 的上下文白名单（默认不注入）
+#                                   # Supported: language, task_id, trace_id, custom.*, custom.<slug>
 # default_timezone = "Asia/Shanghai" # Fallback IANA timezone when platform user timezone is unknown
 #                                   # 平台用户时区未知时的默认 IANA 时区（Slack 会自动读取用户 profile 时区）
 
@@ -1332,6 +1336,23 @@ app_secret = "your-feishu-app-secret"
 # include_answer_in_message_end = false
 # max_runs = 1000                      # Max concurrent SSE runs in memory
 # run_ttl = "2h"                       # TTL for pending run records
+# debug_ui = false                     # Serve embedded debug console at /debug/ (local only)
+#
+# Map HTTP headers into Message.AgentContext (agent-visible when project
+# inject_context allowlists the same fields). Body metadata stays hooks-only.
+# 将 HTTP header 映射到 Message.AgentContext（需配合项目 inject_context 白名单才会进入 Agent）。
+# body metadata 仍仅进 hooks，不进 Agent。
+#
+# [projects.platforms.options.agent_context_headers]
+# language = "X-Language"
+# task_id = "X-Task-ID"
+# trace_id = "X-Trace-ID"
+# "custom.tenant_id" = "X-Tenant-ID"
+#
+# Example project allowlist (with the mapping above):
+#   inject_context = ["language", "task_id", "trace_id", "custom.tenant_id"]
+# language here is an agent hint only; it does not change Engine UI i18n.
+# 此处 language 仅作为 Agent 提示，不会切换 Engine UI 语言。
 #
 # A2A SendMessage metadata example / A2A SendMessage metadata 示例:
 # {

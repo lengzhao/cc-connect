@@ -731,6 +731,9 @@ func main() {
 		if proj.InjectTimestamp != nil {
 			engine.SetInjectTimestamp(*proj.InjectTimestamp)
 		}
+		if len(proj.InjectContext) > 0 {
+			engine.SetInjectContext(proj.InjectContext)
+		}
 		if proj.DefaultTimezone != "" {
 			engine.SetDefaultTimezone(proj.DefaultTimezone)
 		}
@@ -1185,6 +1188,7 @@ func main() {
 				ReplyFooter:          u.ReplyFooter,
 				InjectSender:         u.InjectSender,
 				InjectTimestamp:      u.InjectTimestamp,
+				InjectContext:        u.InjectContext,
 				DefaultTimezone:      u.DefaultTimezone,
 				PlatformAllowFrom:    u.PlatformAllowFrom,
 			})
@@ -1752,6 +1756,7 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 	// Reload sender injection
 	engine.SetInjectSender(proj.InjectSender != nil && *proj.InjectSender)
 	engine.SetInjectTimestamp(proj.InjectTimestamp != nil && *proj.InjectTimestamp)
+	engine.SetInjectContext(proj.InjectContext)
 	engine.SetDefaultTimezone(proj.DefaultTimezone)
 
 	// Reload attachment send-back switch

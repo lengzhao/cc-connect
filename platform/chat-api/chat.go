@@ -174,19 +174,20 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msg := core.Message{
-		SessionKey: engineSessionKey,
-		Platform:   p.Name(),
-		MessageID:  runID,
-		ChannelID:  channelKey,
-		ChannelKey: channelKey,
-		ChatName:   chatName,
-		UserID:     user,
-		UserName:   userName,
-		Content:    query,
-		Images:     images,
-		Files:      files,
-		Audio:      audio,
-		ReplyCtx:   rc,
+		SessionKey:   engineSessionKey,
+		Platform:     p.Name(),
+		MessageID:    runID,
+		ChannelID:    channelKey,
+		ChannelKey:   channelKey,
+		ChatName:     chatName,
+		UserID:       user,
+		UserName:     userName,
+		Content:      query,
+		Images:       images,
+		Files:        files,
+		Audio:        audio,
+		ReplyCtx:     rc,
+		AgentContext: p.agentContextHeaders.collectAgentContext(r),
 	}
 
 	handler := p.getHandler()
@@ -343,6 +344,12 @@ func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
 		}
 		return nil
 	}
+	if tr, ok := parseToolResultFallback(content); ok {
+		if !p.pending.enqueueToolResult(rc.runID, tr) {
+			return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
+		}
+		return nil
+	}
 	if !p.pending.setStreamContent(rc.runID, content) {
 		return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
 	}
@@ -420,9 +427,7 @@ func (c *streamingCard) Finalize(_ context.Context, content string) error {
 		}
 	}
 	_, answer := parseStreamingCardContent(raw)
-	if answer == "" {
-		answer = strings.TrimSpace(raw)
-	}
+	// Never fall back to raw card markdown — that would reintroduce tool blocks.
 	if !c.platform.pending.finish(c.runID, pendingResult{answer: answer}) {
 		return fmt.Errorf("chat-api: run %q is not pending", c.runID)
 	}

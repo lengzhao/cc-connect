@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,8 +37,10 @@ func (a *e2eAgent) ListSessions(_ context.Context) ([]core.AgentSessionInfo, err
 func (a *e2eAgent) Stop() error                                                     { return nil }
 
 type e2eAgentSession struct {
-	events chan core.Event
-	reply  string
+	events  chan core.Event
+	reply   string
+	mu      sync.Mutex
+	prompts []string
 }
 
 func newE2EAgentSession(reply string) *e2eAgentSession {
@@ -47,9 +50,20 @@ func newE2EAgentSession(reply string) *e2eAgentSession {
 	}
 }
 
-func (s *e2eAgentSession) Send(_ string, _ []core.ImageAttachment, _ []core.FileAttachment) error {
+func (s *e2eAgentSession) Send(prompt string, _ []core.ImageAttachment, _ []core.FileAttachment) error {
+	s.mu.Lock()
+	s.prompts = append(s.prompts, prompt)
+	s.mu.Unlock()
 	s.events <- core.Event{Type: core.EventResult, Content: s.reply, Done: true}
 	return nil
+}
+
+func (s *e2eAgentSession) getPrompts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.prompts))
+	copy(out, s.prompts)
+	return out
 }
 func (s *e2eAgentSession) RespondPermission(_ string, _ core.PermissionResult) error { return nil }
 func (s *e2eAgentSession) Events() <-chan core.Event                                 { return s.events }
@@ -318,6 +332,100 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("deleted messages status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestE2ELocalChatAPIAgentContextInjection verifies mapped headers reach the agent
+// prompt when inject_context is enabled, while history stays raw.
+func TestE2ELocalChatAPIAgentContextInjection(t *testing.T) {
+	sessionPath := filepath.Join(t.TempDir(), "sessions.json")
+	plat, err := New(map[string]any{
+		"listen_addr": "127.0.0.1:0",
+		"token":       "e2e-token",
+		"path":        "/v1/",
+		"agent_context_headers": map[string]any{
+			"language":         "X-Language",
+			"task_id":          "X-Task-ID",
+			"custom.tenant_id": "X-Tenant-ID",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+	agentSess := newE2EAgentSession("ctx-ok")
+	engine := core.NewEngine("e2e", &e2eAgent{session: agentSess}, []core.Platform{p}, sessionPath, core.LangChinese)
+	engine.SetInjectContext([]string{"language", "task_id", "custom.tenant_id"})
+	if err := engine.Start(); err != nil {
+		t.Fatalf("engine.Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = engine.Stop()
+		_ = p.Stop()
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for p.ResolvedBaseURL() == "" || !strings.Contains(p.ResolvedBaseURL(), "127.0.0.1:") {
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not start, base url = %q", p.ResolvedBaseURL())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	base := p.ResolvedBaseURL()
+
+	body := `{"query":"hello with context"}`
+	headers := map[string]string{
+		"X-Language":  "zh",
+		"X-Task-ID":   "job-local-1",
+		"X-Tenant-ID": "acme",
+		"X-Unknown":   "ignored",
+	}
+	resp, raw := e2eRequestWithHeaders(t, http.MethodPost, base+"/chat-messages", "e2e-token", "e2e_user", headers, strings.NewReader(body), "text/event-stream")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, raw)
+	}
+	events := parseSSEEvents(raw)
+	if !hasEvent(events, "message_end") {
+		t.Fatalf("SSE missing message_end: %s", raw)
+	}
+	convID := sseConversationID(events)
+
+	deadline = time.Now().Add(2 * time.Second)
+	var prompts []string
+	for {
+		prompts = agentSess.getPrompts()
+		if len(prompts) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("agent never received prompt")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	prompt := prompts[0]
+	if !strings.Contains(prompt, `language="zh"`) || !strings.Contains(prompt, `task_id="job-local-1"`) ||
+		!strings.Contains(prompt, `custom.tenant_id="acme"`) || !strings.Contains(prompt, "hello with context") {
+		t.Fatalf("agent prompt missing context: %q", prompt)
+	}
+
+	waitForHistory(t, base, "e2e-token", convID, 1)
+	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", "e2e-token", "", nil, "")
+	var hist struct {
+		Data struct {
+			Messages []map[string]any `json:"messages"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &hist); err != nil {
+		t.Fatalf("decode history: %v body=%s", err, raw)
+	}
+	if len(hist.Data.Messages) != 1 {
+		t.Fatalf("messages = %+v", hist.Data.Messages)
+	}
+	q, _ := hist.Data.Messages[0]["query"].(string)
+	if q != "hello with context" {
+		t.Fatalf("history query = %q, want raw user text", q)
+	}
+	if strings.Contains(q, "[cc-connect") || strings.Contains(q, "task_id=") {
+		t.Fatalf("history leaked inject header: %q", q)
 	}
 }
 

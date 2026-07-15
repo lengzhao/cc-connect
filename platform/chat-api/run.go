@@ -3,6 +3,7 @@ package chatapi
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,11 +31,15 @@ type runState struct {
 	messageID      string
 	created        time.Time
 
-	mu              sync.Mutex
-	latestThinking string
-	sentThinking   string
-	answerText     string
-	sentAnswer     string
+	mu                   sync.Mutex
+	latestThinking       string
+	sentThinking         string
+	answerText           string
+	sentAnswer           string
+	toolCalls            []streamToolCall
+	sentToolCallIDs      map[string]bool
+	pendingToolResults   []streamToolResult
+	toolResultMatchIndex int
 	finalized            bool
 	streamingCardCreated bool
 	sse                  *sseWriter
@@ -100,16 +105,17 @@ func (s *pendingStore) cleanupLocked(now time.Time) {
 
 func newRunState(id, user, channelKey, sessionKey, conversationID, messageID string, sse *sseWriter) *runState {
 	return &runState{
-		id:             id,
-		user:           user,
-		channelKey:     channelKey,
-		sessionKey:     sessionKey,
-		conversationID: conversationID,
-		messageID:      messageID,
-		created:        time.Now(),
-		sse:            sse,
-		notify:         make(chan struct{}, 1),
-		done:           make(chan pendingResult, 1),
+		id:              id,
+		user:            user,
+		channelKey:      channelKey,
+		sessionKey:      sessionKey,
+		conversationID:  conversationID,
+		messageID:       messageID,
+		created:         time.Now(),
+		sse:             sse,
+		sentToolCallIDs: make(map[string]bool),
+		notify:          make(chan struct{}, 1),
+		done:            make(chan pendingResult, 1),
 	}
 }
 
@@ -117,6 +123,44 @@ func (r *runState) setStreamContent(thinking, answer string) {
 	r.mu.Lock()
 	r.latestThinking = thinking
 	r.answerText = answer
+	r.mu.Unlock()
+	select {
+	case r.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (r *runState) applyCardContent(content string) {
+	thinking, answer := parseStreamingCardContent(content)
+	tools := extractStreamingToolCalls(content)
+	r.mu.Lock()
+	r.latestThinking = thinking
+	r.answerText = answer
+	r.mergeToolCallsLocked(tools)
+	r.mu.Unlock()
+	select {
+	case r.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (r *runState) mergeToolCallsLocked(tools []streamToolCall) {
+	known := make(map[string]bool, len(r.toolCalls))
+	for _, tc := range r.toolCalls {
+		known[tc.ID] = true
+	}
+	for _, tc := range tools {
+		if known[tc.ID] {
+			continue
+		}
+		r.toolCalls = append(r.toolCalls, tc)
+		known[tc.ID] = true
+	}
+}
+
+func (r *runState) enqueueToolResult(res streamToolResult) {
+	r.mu.Lock()
+	r.pendingToolResults = append(r.pendingToolResults, res)
 	r.mu.Unlock()
 	select {
 	case r.notify <- struct{}{}:
@@ -133,6 +177,12 @@ func (r *runState) detach() {
 
 func (r *runState) flushDelta() error {
 	if err := r.flushThinkingDelta(); err != nil {
+		return err
+	}
+	if err := r.flushToolCallEvents(); err != nil {
+		return err
+	}
+	if err := r.flushToolResultEvents(); err != nil {
 		return err
 	}
 	return r.flushAnswerDelta()
@@ -165,6 +215,96 @@ func (r *runState) flushThinkingDelta() error {
 	r.sentThinking = curr
 	r.mu.Unlock()
 	return nil
+}
+
+func (r *runState) flushToolCallEvents() error {
+	r.mu.Lock()
+	sse := r.sse
+	messageID := r.messageID
+	if sse == nil || r.detached {
+		r.mu.Unlock()
+		return nil
+	}
+	var pending []streamToolCall
+	for _, tc := range r.toolCalls {
+		if r.sentToolCallIDs[tc.ID] {
+			continue
+		}
+		pending = append(pending, tc)
+	}
+	r.mu.Unlock()
+
+	for _, tc := range pending {
+		payload := map[string]any{
+			"message_id":   messageID,
+			"tool_call_id": tc.ID,
+			"name":         tc.Name,
+		}
+		if tc.Input != "" {
+			payload["input"] = tc.Input
+		}
+		if err := sse.Event("tool_call", payload); err != nil {
+			r.detach()
+			return err
+		}
+		r.mu.Lock()
+		r.sentToolCallIDs[tc.ID] = true
+		r.mu.Unlock()
+	}
+	return nil
+}
+
+func (r *runState) flushToolResultEvents() error {
+	r.mu.Lock()
+	sse := r.sse
+	messageID := r.messageID
+	if sse == nil || r.detached {
+		r.mu.Unlock()
+		return nil
+	}
+	pending := append([]streamToolResult(nil), r.pendingToolResults...)
+	r.pendingToolResults = nil
+	r.mu.Unlock()
+
+	for _, res := range pending {
+		r.mu.Lock()
+		toolCallID := r.nextToolCallIDLocked(res.Name)
+		r.toolResultMatchIndex++
+		r.mu.Unlock()
+
+		payload := map[string]any{
+			"message_id":   messageID,
+			"tool_call_id": toolCallID,
+		}
+		if res.Name != "" {
+			payload["name"] = res.Name
+		}
+		if res.Status != "" {
+			payload["status"] = res.Status
+		}
+		if res.ExitCode != nil {
+			payload["exit_code"] = *res.ExitCode
+		}
+		if res.Success != nil {
+			payload["success"] = *res.Success
+		}
+		if res.Output != "" {
+			payload["output"] = res.Output
+		}
+		if err := sse.Event("tool_result", payload); err != nil {
+			r.detach()
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *runState) nextToolCallIDLocked(_ string) string {
+	idx := r.toolResultMatchIndex
+	if idx < len(r.toolCalls) {
+		return r.toolCalls[idx].ID
+	}
+	return strconv.Itoa(idx + 1)
 }
 
 func (r *runState) flushAnswerDelta() error {
@@ -245,8 +385,16 @@ func (s *pendingStore) setStreamContent(id, content string) bool {
 	if run == nil {
 		return false
 	}
-	thinking, answer := parseStreamingCardContent(content)
-	run.setStreamContent(thinking, answer)
+	run.applyCardContent(content)
+	return true
+}
+
+func (s *pendingStore) enqueueToolResult(id string, res streamToolResult) bool {
+	run := s.get(id)
+	if run == nil {
+		return false
+	}
+	run.enqueueToolResult(res)
 	return true
 }
 

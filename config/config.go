@@ -512,6 +512,7 @@ type ProjectConfig struct {
 	ReplyFooter      *bool        `toml:"reply_footer,omitempty"`
 	InjectSender     *bool        `toml:"inject_sender,omitempty"`     // prepend sender identity (platform + user ID) to each message sent to the agent
 	InjectTimestamp  *bool        `toml:"inject_timestamp,omitempty"`  // prepend current local time (user timezone) to each message sent to the agent
+	InjectContext    []string     `toml:"inject_context,omitempty"`    // allowlisted AgentContext fields to prepend (language, task_id, trace_id, custom.*, custom.<slug>)
 	DefaultTimezone  string       `toml:"default_timezone,omitempty"`  // fallback IANA timezone when platform/user timezone is unknown
 	DisabledCommands []string     `toml:"disabled_commands,omitempty"` // commands to disable for this project (e.g. ["restart", "upgrade"])
 	AdminFrom        string       `toml:"admin_from,omitempty"`        // comma-separated user IDs allowed to run privileged commands; "*" = all allowed users
@@ -3073,6 +3074,7 @@ type ProjectSettingsUpdate struct {
 	ReplyFooter          *bool
 	InjectSender         *bool
 	InjectTimestamp      *bool
+	InjectContext        []string
 	DefaultTimezone      *string
 	PlatformAllowFrom    map[string]string
 }
@@ -3167,6 +3169,9 @@ func SaveProjectSettings(projectName string, update ProjectSettingsUpdate) error
 			v := *update.InjectTimestamp
 			proj.InjectTimestamp = &v
 		}
+		if update.InjectContext != nil {
+			proj.InjectContext = append([]string(nil), update.InjectContext...)
+		}
 		if update.DefaultTimezone != nil {
 			proj.DefaultTimezone = *update.DefaultTimezone
 		}
@@ -3259,6 +3264,9 @@ func GetProjectConfigDetails(projectName string) map[string]any {
 		}
 		if p.InjectTimestamp != nil {
 			result["inject_timestamp"] = *p.InjectTimestamp
+		}
+		if len(p.InjectContext) > 0 {
+			result["inject_context"] = append([]string(nil), p.InjectContext...)
 		}
 		if p.DefaultTimezone != "" {
 			result["default_timezone"] = p.DefaultTimezone

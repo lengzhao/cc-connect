@@ -1090,8 +1090,8 @@ func TestCUJ_A3_ImageReachesAgent(t *testing.T) {
 	msg := &Message{
 		SessionKey: "test:img", Platform: "test", MessageID: "img1",
 		UserID: "img", UserName: "img",
-		Content: "what is in this image",
-		Images:  []ImageAttachment{{MimeType: "image/png", Data: []byte("\x89PNG fake"), FileName: "chart.png"}},
+		Content:  "what is in this image",
+		Images:   []ImageAttachment{{MimeType: "image/png", Data: []byte("\x89PNG fake"), FileName: "chart.png"}},
 		ReplyCtx: "ctx",
 	}
 	e.ReceiveMessage(plat, msg)
@@ -1154,8 +1154,8 @@ func TestCUJ_A5_FileReachesAgent(t *testing.T) {
 	msg := &Message{
 		SessionKey: "test:file", Platform: "test", MessageID: "f1",
 		UserID: "file", UserName: "file",
-		Content: "read this file",
-		Files:   []FileAttachment{{MimeType: "text/plain", Data: []byte("hello world"), FileName: "note.txt"}},
+		Content:  "read this file",
+		Files:    []FileAttachment{{MimeType: "text/plain", Data: []byte("hello world"), FileName: "note.txt"}},
 		ReplyCtx: "ctx",
 	}
 	e.ReceiveMessage(plat, msg)
@@ -2009,3 +2009,75 @@ func TestCUJ_H2_TwoPlatformsConcurrentNoBleed(t *testing.T) {
 	}
 }
 
+// CUJ · Per-turn AgentContext injection: consecutive turns carry different
+// context, history stores the raw user text (no inject header), and values
+// never leak across turns.
+func TestCUJ_A8_AgentContextPerTurnNoLeak(t *testing.T) {
+	env := newCUJEnv(t)
+	env.engine.SetInjectContext([]string{"language", "task_id", "custom.tenant_id"})
+
+	sendWithCtx := func(content string, ctx AgentContext) {
+		t.Helper()
+		msg := &Message{
+			SessionKey:   "test:alex",
+			Platform:     "test",
+			MessageID:    "msg-" + content,
+			UserID:       "alex",
+			UserName:     "alex",
+			Content:      content,
+			ReplyCtx:     "ctx-alex",
+			AgentContext: ctx,
+		}
+		env.engine.ReceiveMessage(plat(env.plat), msg)
+	}
+
+	sendWithCtx("first turn", AgentContext{
+		Language: "zh",
+		TaskID:   "task-1",
+		Custom:   map[string]string{"custom.tenant_id": "acme"},
+	})
+	env.waitFor("turn1 reply", 2*time.Second, func() bool { return len(env.plat.getSent()) >= 1 })
+
+	sendWithCtx("second turn", AgentContext{
+		Language: "en",
+		TaskID:   "task-2",
+		Custom:   map[string]string{"custom.tenant_id": "globex"},
+	})
+	env.waitFor("turn2 reply", 2*time.Second, func() bool { return len(env.plat.getSent()) >= 2 })
+
+	env.agent.mu.Lock()
+	defer env.agent.mu.Unlock()
+	if len(env.agent.sessions) == 0 {
+		t.Fatal("agent did not receive a session")
+	}
+	prompts := env.agent.sessions[0].getSentPrompts()
+	if len(prompts) < 2 {
+		t.Fatalf("agent prompts = %d, want ≥2; %#v", len(prompts), prompts)
+	}
+
+	if !strings.Contains(prompts[0], `language="zh"`) || !strings.Contains(prompts[0], `task_id="task-1"`) ||
+		!strings.Contains(prompts[0], `custom.tenant_id="acme"`) || !strings.Contains(prompts[0], "first turn") {
+		t.Fatalf("turn1 prompt missing expected context: %q", prompts[0])
+	}
+	if strings.Contains(prompts[0], "task-2") || strings.Contains(prompts[0], "globex") {
+		t.Fatalf("turn1 prompt leaked turn2 context: %q", prompts[0])
+	}
+
+	if !strings.Contains(prompts[1], `language="en"`) || !strings.Contains(prompts[1], `task_id="task-2"`) ||
+		!strings.Contains(prompts[1], `custom.tenant_id="globex"`) || !strings.Contains(prompts[1], "second turn") {
+		t.Fatalf("turn2 prompt missing expected context: %q", prompts[1])
+	}
+	if strings.Contains(prompts[1], "task-1") || strings.Contains(prompts[1], "acme") {
+		t.Fatalf("turn2 prompt leaked turn1 context: %q", prompts[1])
+	}
+
+	hist := env.activeSession("test:alex").GetHistory(0)
+	for _, h := range hist {
+		if h.Role != "user" {
+			continue
+		}
+		if strings.Contains(h.Content, "[cc-connect") || strings.Contains(h.Content, "task_id=") {
+			t.Fatalf("user history must stay raw without inject header: %+v", h)
+		}
+	}
+}
