@@ -113,6 +113,111 @@ func TestGenerateConversationNameAsync(t *testing.T) {
 	t.Fatalf("name = %q, want generated title", s.GetName())
 }
 
+func TestGenerateConversationNameUsesDedicatedModel(t *testing.T) {
+	modelReady := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		modelReady <- body.Model
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"轻量代码会话"}}]}`))
+	}))
+	defer server.Close()
+
+	p := newTestPlatform(t, map[string]any{
+		"token":                  "secret",
+		"name_provider_api_key":  "provider-key",
+		"name_provider_base_url": server.URL,
+		"name_model":             "cheap-model",
+	})
+	sm := bindTestSessions(t, p)
+	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
+	if err != nil {
+		t.Fatalf("NewSessionWithID: %v", err)
+	}
+	s.AddUserHistory("hello", "owner", "Owner")
+	s.AddHistory("assistant", "world")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/conversations/"+s.ID+"/name/generate", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "owner")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && s.GetName() == "default" {
+		time.Sleep(10 * time.Millisecond)
+	}
+	var gotModel string
+	select {
+	case gotModel = <-modelReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dedicated model request was not received")
+	}
+	if s.GetName() != "轻量代码会话" || gotModel != "cheap-model" {
+		t.Fatalf("name = %q, model = %q", s.GetName(), gotModel)
+	}
+}
+
+func TestGenerateConversationNameUsesClaudeMessagesAPI(t *testing.T) {
+	requestReady := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("path = %q, want /v1/messages", r.URL.Path)
+		}
+		if r.Header.Get("x-api-key") != "provider-key" {
+			t.Errorf("x-api-key = %q", r.Header.Get("x-api-key"))
+		}
+		if r.Header.Get("anthropic-version") != "2023-06-01" {
+			t.Errorf("anthropic-version = %q", r.Header.Get("anthropic-version"))
+		}
+		requestReady <- struct{}{}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"Claude session"}]}`))
+	}))
+	defer server.Close()
+
+	p := newTestPlatform(t, map[string]any{
+		"token":                  "secret",
+		"name_provider_type":     "claude",
+		"name_provider_api_key":  "provider-key",
+		"name_provider_base_url": server.URL,
+		"name_model":             "claude-haiku",
+	})
+	sm := bindTestSessions(t, p)
+	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
+	if err != nil {
+		t.Fatalf("NewSessionWithID: %v", err)
+	}
+	s.AddUserHistory("hello", "owner", "Owner")
+	s.AddHistory("assistant", "world")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/conversations/"+s.ID+"/name/generate", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "owner")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	select {
+	case <-requestReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("claude request was not received")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && s.GetName() == "default" {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s.GetName() != "Claude session" {
+		t.Fatalf("name = %q", s.GetName())
+	}
+}
+
 func TestGenerateConversationNameSkipsWhenNamedUnlessForce(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	sm := bindTestSessions(t, p)
@@ -144,6 +249,19 @@ func TestAutoGenerateNameModeDefaultHeuristic(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{})
 	if p.autoGenerateNameMode != autoGenerateNameModeHeuristic {
 		t.Fatalf("mode = %q, want heuristic", p.autoGenerateNameMode)
+	}
+	if p.nameProviderType != defaultNameProviderType {
+		t.Fatalf("provider type = %q, want %q", p.nameProviderType, defaultNameProviderType)
+	}
+}
+
+func TestShouldGenerateAINameSkipsShortInput(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"auto_generate_name_mode": "ai"})
+	if p.shouldGenerateAIName("你好") {
+		t.Fatal("short input should skip AI name generation")
+	}
+	if !p.shouldGenerateAIName("请帮我解释这段代码") {
+		t.Fatal("long input should generate AI name")
 	}
 }
 

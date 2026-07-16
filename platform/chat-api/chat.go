@@ -195,6 +195,11 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		AgentContext: p.agentContextHeaders.collectAgentContext(r),
 	}
 
+	var autoNameJob *nameGeneration
+	if implicitCreate && autoName && p.shouldGenerateAIName(query) {
+		autoNameJob = p.startNameGeneration(newNameRunID(), user, session, sessions, false, query)
+	}
+
 	handler := p.getHandler()
 	if handler == nil {
 		_ = sse.Error("internal error")
@@ -212,7 +217,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if session.GetName() == "default" {
 				if p.autoGenerateNameMode == autoGenerateNameModeAI {
-					p.startNameGeneration(newNameRunID(), user, session, sessions)
+					go p.fallbackAutoName(autoNameJob, session, query)
 				} else {
 					session.SetName(autoNameFromQuery(query))
 					sessions.Save()

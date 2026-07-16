@@ -222,10 +222,12 @@ message_id = "{conversation_id}:{turn_index}"
 | `conversation_id` | 否 | 省略则隐式创建 |
 | `query` | 是 | 用户文本 |
 | `inputs` | 否 | 多模态附件（§3.4）；历史不 replay |
-| `auto_generate_name` | 否 | 默认 `true`；新会话首条后按 `auto_generate_name_mode` 生成 name |
+| `auto_generate_name` | 否 | 默认 `true`；新会话收到首条 input 后按 `auto_generate_name_mode` 异步生成 name |
 | `metadata` | 否 | 传入 hooks，不进 prompt，不在响应中返回 |
 
 `user` 由 header 提供，不在 body 中。
+
+`ai` 模式会在收到首条 input 后立即异步生成 name，不等待首轮回答；首轮处理结束时如果仍没有有效 name，则回退到首条 query 截断结果。
 
 ### 3.3.1 AgentContext（个性化 header → Agent 提示）
 
@@ -621,6 +623,8 @@ interaction_timeout = "10m"
 sse_ping_interval = "15s"
 busy_policy = "queue"
 auto_generate_name_mode = "heuristic"
+# name_provider_type = ""          # 留空默认 openai；也可使用 openai-compatible / claude
+# name_model = "gpt-4o-mini"       # 独立低成本 name 模型
 include_answer_in_message_end = false
 max_runs = 1000
 run_ttl = "2h"
@@ -649,7 +653,10 @@ task_id = "X-Task-ID"
 | `interaction_timeout` | `10m` | 确认窗口超时；不超过当前 run 剩余 `request_timeout` |
 | `sse_ping_interval` | `15s` | SSE 保活间隔；`0` / `0s` 关闭 |
 | `busy_policy` | `queue` | `queue` 或 `reject` |
-| `auto_generate_name_mode` | `heuristic` | `heuristic` 使用首条 query 截断；`ai` 使用 Agent 异步生成 name |
+| `auto_generate_name_mode` | `heuristic` | `heuristic` 使用首条 query 截断；`ai` 在收到 input 后异步生成 name，失败则回退 query 截断 |
+| `name_provider_type` | `openai` | 独立 name 模型协议类型；支持 `openai` / `openai-compatible` / `claude` |
+| `name_provider` | 当前 Agent provider | `ai` 模式使用的 provider 名称；API key / base_url 复用项目 Agent provider |
+| `name_model` | 空 | `ai` 模式使用的独立低成本模型；为空时兼容回退到 Agent |
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
 | `max_runs` | `1000` | 内存 pending run 上限 |
 | `run_ttl` | `2h` | run 记录 TTL |

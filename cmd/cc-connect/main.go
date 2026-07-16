@@ -1891,12 +1891,40 @@ func buildPlatformOptions(dataDir string, proj config.ProjectConfig, pc config.P
 	}
 	opts["cc_data_dir"] = dataDir
 	opts["cc_project"] = proj.Name
+	if strings.EqualFold(pc.Type, "chat-api") {
+		injectChatAPINameProviderOptions(opts, proj)
+	}
 	if proj.Mode == "multi-workspace" {
 		if baseDir := strings.TrimSpace(proj.BaseDir); baseDir != "" {
 			opts["cc_base_dir"] = baseDir
 		}
 	}
 	return opts
+}
+
+func injectChatAPINameProviderOptions(opts map[string]any, proj config.ProjectConfig) {
+	if strings.TrimSpace(fmt.Sprint(opts["name_model"])) == "" {
+		return
+	}
+	providerName, _ := opts["name_provider"].(string)
+	if strings.TrimSpace(providerName) == "" {
+		providerName, _ = proj.Agent.Options["provider"].(string)
+	}
+	var provider *config.ProviderConfig
+	for i := range proj.Agent.Providers {
+		if proj.Agent.Providers[i].Name == providerName {
+			provider = &proj.Agent.Providers[i]
+			break
+		}
+	}
+	if provider == nil && len(proj.Agent.Providers) == 1 {
+		provider = &proj.Agent.Providers[0]
+	}
+	if provider == nil {
+		return
+	}
+	opts["name_provider_api_key"] = provider.APIKey
+	opts["name_provider_base_url"] = provider.BaseURL
 }
 
 func projectEnvFromOptions(opts map[string]any) []string {

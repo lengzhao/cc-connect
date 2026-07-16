@@ -20,6 +20,8 @@ const (
 	defaultTimeout                = 30 * time.Minute
 	autoGenerateNameModeHeuristic = "heuristic"
 	autoGenerateNameModeAI        = "ai"
+	defaultNameRequestTimeout     = 30 * time.Second
+	defaultNameProviderType       = "openai"
 )
 
 // Platform exposes a Dify-like HTTP + SSE API for custom apps and BFFs.
@@ -38,6 +40,10 @@ type Platform struct {
 	busyPolicy                string
 	includeAnswerInMessageEnd bool
 	autoGenerateNameMode      string
+	nameProviderAPIKey        string
+	nameProviderBaseURL       string
+	nameProviderType          string
+	nameModel                 string
 	projectName               string
 	sessionStorePath          string
 	dataDir                   string
@@ -129,6 +135,10 @@ func New(opts map[string]any) (core.Platform, error) {
 		busyPolicy:                busyPolicy,
 		includeAnswerInMessageEnd: boolOption(opts, "include_answer_in_message_end", false),
 		autoGenerateNameMode:      strings.ToLower(stringOption(opts, "auto_generate_name_mode", autoGenerateNameModeHeuristic)),
+		nameProviderAPIKey:        strings.TrimSpace(stringOption(opts, "name_provider_api_key", "")),
+		nameProviderBaseURL:       strings.TrimSpace(stringOption(opts, "name_provider_base_url", "")),
+		nameProviderType:          strings.ToLower(stringOption(opts, "name_provider_type", defaultNameProviderType)),
+		nameModel:                 strings.TrimSpace(stringOption(opts, "name_model", "")),
 		projectName:               stringOption(opts, "cc_project", ""),
 		pending:                   newPendingStore(maxRuns, runTTL),
 		dataDir:                   stringOption(opts, "cc_data_dir", ""),
@@ -137,6 +147,9 @@ func New(opts map[string]any) (core.Platform, error) {
 	}
 	if p.autoGenerateNameMode != autoGenerateNameModeHeuristic && p.autoGenerateNameMode != autoGenerateNameModeAI {
 		return nil, errors.New("chat-api: auto_generate_name_mode must be heuristic or ai")
+	}
+	if p.nameProviderType != "openai" && p.nameProviderType != "openai-compatible" && p.nameProviderType != "claude" {
+		return nil, errors.New("chat-api: name_provider_type must be openai, openai-compatible, or claude")
 	}
 	p.sessionStorePath = sessionStorePathFromOpts(opts)
 	return p, nil

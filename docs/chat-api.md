@@ -32,6 +32,7 @@
 - User: `X-Chat-API-User` on writes; query or header on list/delete
 - Optional `X-Chat-API-Channel` on send for multi-workspace `work_dir` binding (omit → `default_channel`; cancel/respond reuse run channel)
 - `auto_generate_name` applies to newly created conversations; `auto_generate_name_mode` defaults to `heuristic` and may be set to `ai`
+- In `ai` mode, `name_model` selects a separate low-cost model while credentials and endpoint are reused from the configured project provider
 - `message_id`: `{conversation_id}:{turn_index}`
 - Client disconnect does not stop the agent; use cancel endpoint to abort
 
@@ -55,6 +56,8 @@ path = "/v1/"
 api_token = "your-service-token"
 busy_policy = "queue"
 auto_generate_name_mode = "heuristic"
+name_model = "gpt-4o-mini"
+name_provider_type = "openai" # openai | openai-compatible | claude
 interaction_timeout = "10m"
 sse_ping_interval = "15s"
 ```
