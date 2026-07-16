@@ -284,6 +284,23 @@
       box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
       padding: 18px 20px 16px;
     }
+    .modal .modal-hd {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .modal .modal-hd h2 {
+      margin: 0;
+      flex: 1;
+    }
+    .modal .modal-close {
+      flex-shrink: 0;
+      margin: 0;
+      padding: 4px 10px;
+      font-size: 12px;
+    }
     .modal h2 {
       margin: 0 0 8px;
       font-family: var(--display);
@@ -492,7 +509,10 @@
 
   <div id="ixModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="ixModalTitle">
     <div class="modal">
-      <h2 id="ixModalTitle">确认</h2>
+      <div class="modal-hd">
+        <h2 id="ixModalTitle">确认</h2>
+        <button type="button" id="btnIxClose" class="modal-close" title="隐藏窗口，可用底部输入框发新消息">隐藏</button>
+      </div>
       <div id="ixModalMeta" class="modal-meta"></div>
       <div id="ixModalPrompt" class="modal-prompt"></div>
       <div id="ixModalActions" class="modal-actions"></div>
@@ -508,7 +528,9 @@
       runId: null,
       abort: null,
       sending: false,
+      activeStreams: 0,
       activeInteractionId: null,
+      interactionRunId: null,
     };
 
     const fields = ["baseUrl", "token", "userId", "userName", "channel", "lang", "taskId", "traceId", "tenantId"];
@@ -706,8 +728,9 @@
     }
 
     async function cancelRun() {
-      if (!state.runId) return;
-      const res = await fetch(`${apiBase()}/runs/${encodeURIComponent(state.runId)}/cancel`, {
+      const runId = state.interactionRunId || state.runId;
+      if (!runId) return;
+      const res = await fetch(`${apiBase()}/runs/${encodeURIComponent(runId)}/cancel`, {
         method: "POST",
         headers: authHeaders(),
       });
@@ -736,22 +759,31 @@
     }
 
     async function sendMessage() {
-      if (state.sending) return;
+      // Allow a parallel POST while a confirmation is open (hide modal → type in composer).
+      const parallel = state.sending && !!state.activeInteractionId;
+      if (state.sending && !parallel) return;
       const query = $("query").value.trim();
       if (!query) return;
 
       saveConfig();
-      state.sending = true;
-      $("btnSend").disabled = true;
-      $("btnCancel").disabled = false;
+      if (!parallel) {
+        state.sending = true;
+        $("btnSend").disabled = true;
+        $("btnCancel").disabled = false;
+      }
+      state.activeStreams += 1;
       $("query").value = "";
 
       let thinking = "";
       let answer = "";
       let lastStreamBubble = null;
       const interactionBubbles = new Map();
+      const primaryRunId = state.runId;
 
       addBubble("user", query, $("userId").value.trim() || "user");
+      if (parallel) {
+        addBubble("sys", "并行发送中（用于验证：question 期间新 POST chat-messages）");
+      }
 
       // Stream elements are created lazily. Consecutive events with the same
       // identity reuse the last bubble; a changed identity starts a new one.
@@ -768,10 +800,15 @@
         return lastStreamBubble;
       }
 
-      function closeIxModal() {
+      function closeIxModal(opts) {
         $("ixModal").classList.remove("open");
-        state.activeInteractionId = null;
         $("ixModalActions").innerHTML = "";
+        // Hiding the modal unlocks the composer so a new chat-messages POST can be sent
+        // while the original SSE (and pending question) stays open.
+        if (opts && opts.unlockComposer) {
+          $("btnSend").disabled = false;
+          $("query").focus();
+        }
       }
 
       function disableInteraction(id, note) {
@@ -787,11 +824,15 @@
           n.textContent = note;
           ix.el.appendChild(n);
         }
-        if (state.activeInteractionId === id) closeIxModal();
+        if (state.activeInteractionId === id) {
+          state.activeInteractionId = null;
+          state.interactionRunId = null;
+          closeIxModal();
+        }
       }
 
       async function respondInteraction(interactionId, payload) {
-        const runId = state.runId;
+        const runId = state.interactionRunId || state.runId;
         if (!runId || !interactionId) return;
         $("ixModalActions").querySelectorAll("button, input").forEach((n) => { n.disabled = true; });
         try {
@@ -822,6 +863,7 @@
         const id = String(data.interaction_id || "");
         if (!id) return;
         state.activeInteractionId = id;
+        state.interactionRunId = data.run_id || state.runId || null;
         const isQuestion = kind === "question_request";
         $("ixModalTitle").textContent = isQuestion ? "问答确认" : "权限确认";
         const meta = [];
@@ -831,6 +873,7 @@
           const left = Math.max(0, Number(data.expires_at) - Math.floor(Date.now() / 1000));
           meta.push("expires_in=" + left + "s");
         }
+        if (isQuestion) meta.push("可点「隐藏」后用底部输入框发新消息验证");
         $("ixModalMeta").textContent = meta.join(" · ");
         $("ixModalPrompt").textContent = data.prompt || "";
 
@@ -998,7 +1041,10 @@
                 saveConfig();
               }
               if (data.run_id) {
-                state.runId = data.run_id;
+                // Keep the run that owns an open interaction for respond/cancel.
+                if (!state.activeInteractionId || !state.runId || !parallel) {
+                  state.runId = data.run_id;
+                }
                 setConvLabel();
               }
             } else if (event === "thinking_delta") {
@@ -1045,9 +1091,17 @@
             } else if (event === "error") {
               const kind = data.kind ? ` kind=${data.kind}` : "";
               addBubble("sys", "error: " + (data.error || JSON.stringify(data)) + kind);
-              closeIxModal();
+              if (!parallel) {
+                state.activeInteractionId = null;
+                state.interactionRunId = null;
+                closeIxModal();
+              }
             } else if (event === "message_end") {
-              closeIxModal();
+              if (!parallel) {
+                state.activeInteractionId = null;
+                state.interactionRunId = null;
+                closeIxModal();
+              }
               if (!answer && data.answer) {
                 const answerBubble = streamBubble("assistant", "assistant", "assistant");
                 answer = data.answer;
@@ -1062,11 +1116,19 @@
           addBubble("sys", e.message);
         }
       } finally {
-        state.sending = false;
-        state.abort = null;
-        state.runId = null;
-        $("btnSend").disabled = false;
-        $("btnCancel").disabled = true;
+        state.activeStreams = Math.max(0, state.activeStreams - 1);
+        if (!parallel) {
+          state.sending = false;
+          state.abort = null;
+          if (!state.activeInteractionId) {
+            state.runId = null;
+            state.interactionRunId = null;
+          } else if (primaryRunId) {
+            state.runId = primaryRunId;
+          }
+          $("btnSend").disabled = false;
+          $("btnCancel").disabled = !state.runId && !state.interactionRunId;
+        }
         setConvLabel();
         refreshConversations().catch(() => {});
       }
@@ -1080,6 +1142,15 @@
     $("btnDelete").addEventListener("click", () => deleteConversation().catch(console.error));
     $("btnSend").addEventListener("click", () => sendMessage().catch(console.error));
     $("btnCancel").addEventListener("click", () => cancelRun().catch(console.error));
+    $("btnIxClose").addEventListener("click", () => {
+      // hideIxModalForNewMessage is defined inside sendMessage; provide a top-level hide.
+      if (!$("ixModal").classList.contains("open")) return;
+      addBubble("sys", "已隐藏确认窗口 · 可在底部输入框发新消息验证（原 SSE 仍打开）");
+      $("ixModal").classList.remove("open");
+      $("ixModalActions").innerHTML = "";
+      $("btnSend").disabled = false;
+      $("query").focus();
+    });
     $("btnClearLog").addEventListener("click", () => { $("sseLog").innerHTML = ""; });
     $("query").addEventListener("keydown", (e) => {
       // IME 组字确认（选词/回车确认）时不要当成发送。

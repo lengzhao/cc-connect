@@ -272,6 +272,28 @@ func (s *CronStore) ListBySessionKey(sessionKey string) []*CronJob {
 	return out
 }
 
+// CronListQuery holds scope parameters for listing cron jobs.
+type CronListQuery struct {
+	SessionKey string
+	Project    string
+	All        bool
+}
+
+// QueryCronJobs returns cron jobs matching the query scope.
+// Priority: session_key > all=true > project > all jobs.
+func QueryCronJobs(store *CronStore, q CronListQuery) []*CronJob {
+	if strings.TrimSpace(q.SessionKey) != "" {
+		return store.ListBySessionKey(strings.TrimSpace(q.SessionKey))
+	}
+	if q.All {
+		return store.List()
+	}
+	if strings.TrimSpace(q.Project) != "" {
+		return store.ListByProject(strings.TrimSpace(q.Project))
+	}
+	return store.List()
+}
+
 func (s *CronStore) Get(id string) *CronJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()

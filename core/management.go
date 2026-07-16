@@ -1503,13 +1503,13 @@ func (m *ManagementServer) handleCron(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		project := r.URL.Query().Get("project")
-		var jobs []*CronJob
-		if project != "" {
-			jobs = m.cronScheduler.Store().ListByProject(project)
-		} else {
-			jobs = m.cronScheduler.Store().List()
-		}
+		q := r.URL.Query()
+		all, _ := strconv.ParseBool(q.Get("all"))
+		jobs := QueryCronJobs(m.cronScheduler.Store(), CronListQuery{
+			SessionKey: q.Get("session_key"),
+			Project:    q.Get("project"),
+			All:        all,
+		})
 		mgmtJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
 
 	case http.MethodPost:

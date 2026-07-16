@@ -222,7 +222,7 @@ message_id = "{conversation_id}:{turn_index}"
 | `conversation_id` | 否 | 省略则隐式创建 |
 | `query` | 是 | 用户文本 |
 | `inputs` | 否 | 多模态附件（§3.4）；历史不 replay |
-| `auto_generate_name` | 否 | 默认 `true`；新会话首条后取 query 前 32 rune 为标题 |
+| `auto_generate_name` | 否 | 默认 `true`；新会话首条后按 `auto_generate_name_mode` 生成 name |
 | `metadata` | 否 | 传入 hooks，不进 prompt，不在响应中返回 |
 
 `user` 由 header 提供，不在 body 中。
@@ -432,7 +432,34 @@ X-Chat-API-User: user_001
 }
 ```
 
-### 4.2 重命名
+### 4.2 会话详情
+
+```http
+GET /conversations/{conversation_id}
+X-Chat-API-User: user_001
+```
+
+须 owner。响应字段与列表项一致，包含 `id`、`name`、`last_message_preview`、`created_at`、`updated_at`。
+
+### 4.3 生成会话 Name
+
+```http
+POST /conversations/{conversation_id}/name/generate
+X-Chat-API-User: user_001
+Content-Type: application/json
+
+{"force": false}
+```
+
+须 owner。默认不覆盖已有非 `default` name；`force=true` 可强制重新生成。接口异步返回：
+
+```json
+{"ok": true, "data": {"name_run_id": "name_run_abc", "status": "running"}}
+```
+
+前端可轮询会话详情读取最新 name。
+
+### 4.4 重命名
 
 ```http
 PATCH /conversations/{conversation_id}
@@ -444,7 +471,7 @@ Content-Type: application/json
 
 须 owner。响应 `data`：`id`、`name`、`updated_at`。
 
-### 4.3 删除
+### 4.5 删除
 
 ```http
 DELETE /conversations/{conversation_id}
@@ -453,7 +480,7 @@ X-Chat-API-User: user_001
 
 须 owner。`{"ok": true, "data": {"result": "success"}}`
 
-### 4.4 历史消息
+### 4.6 历史消息
 
 ```http
 GET /conversations/{conversation_id}/messages?limit=20
@@ -482,7 +509,7 @@ GET /conversations/{conversation_id}/messages?cursor=s1a2b3c:5&limit=20
 }
 ```
 
-### 4.5 发送消息
+### 4.7 发送消息
 
 ```http
 POST /chat-messages
@@ -502,7 +529,7 @@ Accept: text/event-stream
 | `queue`（默认） | 入队；SSE 返回 `message_queued` 后关闭 |
 | `reject` | `409`，`error`: `conversation busy` |
 
-### 4.6 取消轮次
+### 4.8 取消轮次
 
 ```http
 POST /runs/{run_id}/cancel
@@ -517,7 +544,7 @@ X-Chat-API-User: user_001
 
 SSE 仍连接时发送 `event: error`，`data.error` 为 `canceled by user`。
 
-### 4.7 响应确认窗口
+### 4.9 响应确认窗口
 
 ```http
 POST /runs/{run_id}/interactions/{interaction_id}/respond
@@ -562,6 +589,8 @@ Content-Type: application/json
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/conversations` | 列表 |
+| `GET` | `/conversations/{id}` | 会话详情 |
+| `POST` | `/conversations/{id}/name/generate` | 异步生成 name |
 | `PATCH` | `/conversations/{id}` | 重命名 |
 | `DELETE` | `/conversations/{id}` | 删除 |
 | `GET` | `/conversations/{id}/messages` | 历史 |
@@ -591,6 +620,7 @@ request_timeout = "30m"
 interaction_timeout = "10m"
 sse_ping_interval = "15s"
 busy_policy = "queue"
+auto_generate_name_mode = "heuristic"
 include_answer_in_message_end = false
 max_runs = 1000
 run_ttl = "2h"
@@ -619,6 +649,7 @@ task_id = "X-Task-ID"
 | `interaction_timeout` | `10m` | 确认窗口超时；不超过当前 run 剩余 `request_timeout` |
 | `sse_ping_interval` | `15s` | SSE 保活间隔；`0` / `0s` 关闭 |
 | `busy_policy` | `queue` | `queue` 或 `reject` |
+| `auto_generate_name_mode` | `heuristic` | `heuristic` 使用首条 query 截断；`ai` 使用 Agent 异步生成 name |
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
 | `max_runs` | `1000` | 内存 pending run 上限 |
 | `run_ttl` | `2h` | run 记录 TTL |
@@ -631,6 +662,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.2.0 | 2026-07-16 | 新增会话详情、异步 Name 生成及 `auto_generate_name_mode` |
 | v1.1.2 | 2026-07-15 | 合并确认窗口与 `tool_call`/`tool_result` SSE、debug UI |
 | v1.1.1 | 2026-07-14 | 确认窗口硬化：公共 `decision`/`option_id(s)`、SSE actions 公共 id、`ping`、`interaction_superseded`、结构化超时错误 |
 | v1.1.0 | 2026-07-14 | 用户确认窗口：`permission_request` / `question_request`、交互响应端点、`interaction_timeout` |

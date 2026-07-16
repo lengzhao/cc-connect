@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -429,13 +430,13 @@ func (s *APIServer) handleCronList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project := r.URL.Query().Get("project")
-	var jobs []*CronJob
-	if project != "" {
-		jobs = s.cron.Store().ListByProject(project)
-	} else {
-		jobs = s.cron.Store().List()
-	}
+	q := r.URL.Query()
+	all, _ := strconv.ParseBool(q.Get("all"))
+	jobs := QueryCronJobs(s.cron.Store(), CronListQuery{
+		SessionKey: q.Get("session_key"),
+		Project:    q.Get("project"),
+		All:        all,
+	})
 
 	apiJSON(w, http.StatusOK, jobs)
 }

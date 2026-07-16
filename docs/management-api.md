@@ -840,13 +840,15 @@ Sets the model for the project.
 
 #### GET /api/v1/cron
 
-Lists all cron jobs, optionally filtered by project.
+Lists cron jobs. With no filters, returns all jobs. In multi-workspace setups, pass `session_key` to scope to the current session, or `all=true` for an explicit global view.
 
 **Query parameters:**
 
-| Param     | Type   | Description        |
-|-----------|--------|--------------------|
-| `project` | string | Filter by project  |
+| Param         | Type   | Description |
+|---------------|--------|-------------|
+| `session_key` | string | Scope to one session/channel (highest priority) |
+| `all`         | bool   | When `true`, return all jobs |
+| `project`     | string | Filter by project |
 
 **Response:**
 

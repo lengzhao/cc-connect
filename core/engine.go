@@ -3695,11 +3695,13 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	turnStart := time.Now()
 
 	e.i18n.DetectAndSet(msg.Content)
-	session.AddUserHistory(msg.Content, msg.UserID, msg.UserName)
-	// Persist user message immediately so crashes between user input and
-	// assistant reply don't lose it (the assistant-side Save below depends
-	// on the turn completing without a process crash).
-	sessions.Save()
+	if !msg.SkipHistory {
+		session.AddUserHistory(msg.Content, msg.UserID, msg.UserName)
+		// Persist user message immediately so crashes between user input and
+		// assistant reply don't lose it (the assistant-side Save below depends
+		// on the turn completing without a process crash).
+		sessions.Save()
+	}
 
 	// Use the agent override when available (multi-workspace mode)
 	var agentOverride Agent
@@ -3807,7 +3809,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		sendDone <- as.Send(promptContent, msg.Images, msg.Files)
 	}()
 
-	e.processInteractiveEvents(state, session, sessions, interactiveKey, msg.MessageID, turnStart, stopTyping, sendDone, msg.ReplyCtx)
+	e.processInteractiveEvents(state, session, sessions, interactiveKey, msg.MessageID, turnStart, stopTyping, sendDone, msg.ReplyCtx, msg.SkipHistory)
 	if elapsed := time.Since(sendStart); elapsed >= slowAgentSend {
 		slog.Warn("slow agent send", "elapsed", elapsed, "session", msg.SessionKey, "content_len", len(msg.Content))
 	}
@@ -4609,7 +4611,8 @@ var agentErrorHandlers = []agentErrorHandler{
 	{"Session not found", MsgSessionNotFound},
 }
 
-func (e *Engine) processInteractiveEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, msgID string, turnStart time.Time, stopTypingFn func(), sendDone <-chan error, replyCtx any) {
+func (e *Engine) processInteractiveEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, msgID string, turnStart time.Time, stopTypingFn func(), sendDone <-chan error, replyCtx any, skipHistoryOpt ...bool) {
+	skipHistory := len(skipHistoryOpt) > 0 && skipHistoryOpt[0]
 	if msgID != "" {
 		state.mu.Lock()
 		state.currentMessageID = msgID
@@ -5419,8 +5422,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			//   3. trailing marker with empty strip result   → fully silent
 			// History records the ORIGINAL baseResponse so the agent retains context of its own
 			// decision; only the outbound platform text gets rewritten/suppressed.
-			session.AddHistory("assistant", baseResponse)
-			sessions.Save()
+			if !skipHistory {
+				session.AddHistory("assistant", baseResponse)
+				sessions.Save()
+			}
 
 			isSilent := isSilentReply(baseResponse)
 			if !isSilent {
@@ -5919,7 +5924,9 @@ channelClosed:
 		state.mu.Unlock()
 
 		fullResponse := strings.Join(textParts, "")
-		session.AddHistory("assistant", fullResponse)
+		if !skipHistory {
+			session.AddHistory("assistant", fullResponse)
+		}
 		// Persist immediately — this path runs on abnormal channel close,
 		// so deferring the save until the next foreground turn risks losing
 		// the partial assistant response if the process exits next.
@@ -6100,7 +6107,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		}
 
 		slog.Info("processing queued message", "session", sessionKey)
-		e.processInteractiveEvents(state, session, sessions, sessionKey, queued.messageID, time.Now(), stopTyping, sendDone, queued.replyCtx)
+		e.processInteractiveEvents(state, session, sessions, sessionKey, queued.messageID, time.Now(), stopTyping, sendDone, queued.replyCtx, false)
 	}
 }
 

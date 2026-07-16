@@ -211,8 +211,12 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	if implicitCreate && autoName {
 		defer func() {
 			if session.GetName() == "default" {
-				session.SetName(autoNameFromQuery(query))
-				sessions.Save()
+				if p.autoGenerateNameMode == autoGenerateNameModeAI {
+					p.startNameGeneration(newNameRunID(), user, session, sessions)
+				} else {
+					session.SetName(autoNameFromQuery(query))
+					sessions.Save()
+				}
 			}
 		}()
 	}
@@ -353,6 +357,9 @@ func newRunID() string {
 }
 
 func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
+	if rc, ok := replyTo.(*nameReplyContext); ok {
+		return p.replyName(rc, content)
+	}
 	rc, ok := replyTo.(*replyContext)
 	if !ok || rc == nil || rc.runID == "" {
 		return fmt.Errorf("chat-api: unsupported reply context %T", replyTo)
@@ -414,6 +421,10 @@ func (p *Platform) CreateStreamingCard(_ context.Context, replyTo any) (core.Str
 }
 
 func (p *Platform) OnProcessingEnd(_ context.Context, replyCtx any, _ core.ProcessingEndEvent) error {
+	if rc, ok := replyCtx.(*nameReplyContext); ok {
+		rc.once.Do(func() { close(rc.done) })
+		return nil
+	}
 	rc, ok := replyCtx.(*replyContext)
 	if !ok || rc == nil || rc.runID == "" {
 		return fmt.Errorf("chat-api: unsupported processing-end context %T", replyCtx)

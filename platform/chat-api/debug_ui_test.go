@@ -55,6 +55,9 @@ func TestDebugUIServesPage(t *testing.T) {
 	if !strings.Contains(html, "multi_select") || !strings.Contains(html, "showIxModal") {
 		t.Fatalf("debug UI must honor question_request.multi_select for single vs multi UI")
 	}
+	if !strings.Contains(html, `id="btnIxClose"`) || !strings.Contains(html, "unlockComposer") {
+		t.Fatalf("debug UI must allow hiding confirmation modal to send a parallel chat-messages")
+	}
 	// Debug page itself must not require auth (otherwise hard to open).
 	if rec.Header().Get("Content-Type") == "" || !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("content-type = %q", rec.Header().Get("Content-Type"))

@@ -823,6 +823,68 @@ func TestCronStore_ListByProject(t *testing.T) {
 	}
 }
 
+func TestQueryCronJobs_SessionKeyScope(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := []*CronJob{
+		{ID: "j1", Project: "proj1", SessionKey: "chat-api:default_channel:conv_a", CronExpr: "0 6 * * *", Prompt: "a"},
+		{ID: "j2", Project: "proj1", SessionKey: "chat-api:team/backend:conv_b", CronExpr: "0 7 * * *", Prompt: "b"},
+		{ID: "j3", Project: "proj1", SessionKey: "chat-api:default_channel:conv_a", CronExpr: "0 8 * * *", Prompt: "c"},
+	}
+	for _, j := range jobs {
+		j.Enabled = true
+		if err := store.Add(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	scoped := QueryCronJobs(store, CronListQuery{SessionKey: "chat-api:default_channel:conv_a"})
+	if len(scoped) != 2 {
+		t.Fatalf("session scope = %d jobs, want 2", len(scoped))
+	}
+	for _, j := range scoped {
+		if j.SessionKey != "chat-api:default_channel:conv_a" {
+			t.Fatalf("unexpected session_key %q in scoped result", j.SessionKey)
+		}
+	}
+
+	all := QueryCronJobs(store, CronListQuery{All: true})
+	if len(all) != 3 {
+		t.Fatalf("all scope = %d jobs, want 3", len(all))
+	}
+
+	byProject := QueryCronJobs(store, CronListQuery{Project: "proj1"})
+	if len(byProject) != 3 {
+		t.Fatalf("project scope = %d jobs, want 3", len(byProject))
+	}
+}
+
+func TestQueryCronJobs_SessionKeyOverridesProjectAndAll(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range []*CronJob{
+		{ID: "j1", Project: "p", SessionKey: "s1", CronExpr: "0 6 * * *", Prompt: "p1", Enabled: true},
+		{ID: "j2", Project: "p", SessionKey: "s2", CronExpr: "0 7 * * *", Prompt: "p2", Enabled: true},
+	} {
+		if err := store.Add(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := QueryCronJobs(store, CronListQuery{
+		SessionKey: "s1",
+		Project:    "p",
+		All:        true,
+	})
+	if len(got) != 1 || got[0].ID != "j1" {
+		t.Fatalf("session_key priority = %+v, want only j1", got)
+	}
+}
+
 // TestCronScheduler_UpdateJob_EnabledNonBoolPreservesSchedule verifies that
 // passing a non-bool value for the "enabled" field is rejected up-front and
 // does NOT silently leave the scheduled cron entry removed. Before this fix,

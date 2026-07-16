@@ -59,12 +59,18 @@ func (p *Platform) handleConversationSub(w http.ResponseWriter, r *http.Request)
 		p.handleConversationMessages(w, r, conversationID)
 		return
 	}
+	if len(parts) == 3 && parts[1] == "name" && parts[2] == "generate" {
+		p.handleGenerateConversationName(w, r, conversationID)
+		return
+	}
 	if len(parts) != 1 {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 
 	switch r.Method {
+	case http.MethodGet:
+		p.handleGetConversation(w, r, conversationID)
 	case http.MethodPatch:
 		p.handlePatchConversation(w, r, conversationID)
 	case http.MethodDelete:
@@ -72,6 +78,28 @@ func (p *Platform) handleConversationSub(w http.ResponseWriter, r *http.Request)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 	}
+}
+
+func (p *Platform) handleGetConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
+		return
+	}
+	user, ok := p.resolveUser(w, r, true)
+	if !ok {
+		return
+	}
+	sessions := p.sessionsOrReload()
+	if sessions == nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	s := p.findOwnedConversation(sessions, user, conversationID)
+	if s == nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeOK(w, http.StatusOK, toConversationView(s))
 }
 
 func (p *Platform) handlePatchConversation(w http.ResponseWriter, r *http.Request, conversationID string) {

@@ -553,6 +553,54 @@ func TestMgmt_CronWithScheduler(t *testing.T) {
 	}
 }
 
+func TestMgmt_CronList_SessionKeyScope(t *testing.T) {
+	mgmt, ts, e := testManagementServer(t, "tok")
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := NewCronScheduler(store)
+	cs.RegisterEngine("test-project", e)
+	mgmt.SetCronScheduler(cs)
+
+	for _, j := range []*CronJob{
+		{ID: "j-a", Project: "test-project", SessionKey: "chat-api:default_channel:conv_a", CronExpr: "0 6 * * *", Prompt: "a", Enabled: true},
+		{ID: "j-b", Project: "test-project", SessionKey: "chat-api:team/backend:conv_b", CronExpr: "0 7 * * *", Prompt: "b", Enabled: true},
+	} {
+		if err := store.Add(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := mgmtGet(t, ts.URL+"/api/v1/cron?session_key=chat-api:default_channel:conv_a", "tok")
+	if !r.OK {
+		t.Fatalf("cron list failed: %s", r.Error)
+	}
+	var scoped struct {
+		Jobs []CronJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(r.Data, &scoped); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(scoped.Jobs) != 1 || scoped.Jobs[0].ID != "j-a" {
+		t.Fatalf("scoped jobs = %+v, want only j-a", scoped.Jobs)
+	}
+
+	rAll := mgmtGet(t, ts.URL+"/api/v1/cron?all=true", "tok")
+	if !rAll.OK {
+		t.Fatalf("cron all list failed: %s", rAll.Error)
+	}
+	var all struct {
+		Jobs []CronJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(rAll.Data, &all); err != nil {
+		t.Fatalf("unmarshal all: %v", err)
+	}
+	if len(all.Jobs) != 2 {
+		t.Fatalf("all jobs = %d, want 2", len(all.Jobs))
+	}
+}
+
 func TestMgmt_CronExecByID(t *testing.T) {
 	mgmt, ts, e := testManagementServer(t, "tok")
 	store, err := NewCronStore(t.TempDir())

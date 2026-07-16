@@ -206,6 +206,9 @@ type Message struct {
 	// the agent prompt when project inject_context allowlist permits them.
 	// Never persisted on Session / History.
 	AgentContext AgentContext
+	// SkipHistory marks internal prompts whose input and response must not be
+	// persisted in the user-visible session history.
+	SkipHistory bool
 }
 
 // EventType distinguishes different kinds of agent output.

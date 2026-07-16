@@ -15,9 +15,11 @@ import (
 )
 
 const (
-	defaultListenAddr = ":8030"
-	defaultPath       = "/v1/"
-	defaultTimeout    = 30 * time.Minute
+	defaultListenAddr             = ":8030"
+	defaultPath                   = "/v1/"
+	defaultTimeout                = 30 * time.Minute
+	autoGenerateNameModeHeuristic = "heuristic"
+	autoGenerateNameModeAI        = "ai"
 )
 
 // Platform exposes a Dify-like HTTP + SSE API for custom apps and BFFs.
@@ -35,6 +37,7 @@ type Platform struct {
 	ssePingInterval           time.Duration
 	busyPolicy                string
 	includeAnswerInMessageEnd bool
+	autoGenerateNameMode      string
 	projectName               string
 	sessionStorePath          string
 	dataDir                   string
@@ -125,11 +128,15 @@ func New(opts map[string]any) (core.Platform, error) {
 		ssePingInterval:           ssePingInterval,
 		busyPolicy:                busyPolicy,
 		includeAnswerInMessageEnd: boolOption(opts, "include_answer_in_message_end", false),
+		autoGenerateNameMode:      strings.ToLower(stringOption(opts, "auto_generate_name_mode", autoGenerateNameModeHeuristic)),
 		projectName:               stringOption(opts, "cc_project", ""),
 		pending:                   newPendingStore(maxRuns, runTTL),
 		dataDir:                   stringOption(opts, "cc_data_dir", ""),
 		multiWorkspaceBaseDir:     multiWorkspaceBaseDirFromOpts(opts),
 		debugUI:                   boolOption(opts, "debug_ui", false),
+	}
+	if p.autoGenerateNameMode != autoGenerateNameModeHeuristic && p.autoGenerateNameMode != autoGenerateNameModeAI {
+		return nil, errors.New("chat-api: auto_generate_name_mode must be heuristic or ai")
 	}
 	p.sessionStorePath = sessionStorePathFromOpts(opts)
 	return p, nil

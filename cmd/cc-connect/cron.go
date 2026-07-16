@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -205,7 +206,8 @@ func runCronAdd(args []string) {
 }
 
 func runCronList(args []string) {
-	var project, dataDir string
+	var project, sessionKey, dataDir string
+	var all bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--project", "-p":
@@ -213,6 +215,13 @@ func runCronList(args []string) {
 				i++
 				project = args[i]
 			}
+		case "--session-key", "--session", "-s":
+			if i+1 < len(args) {
+				i++
+				sessionKey = args[i]
+			}
+		case "--all":
+			all = true
 		case "--data-dir":
 			if i+1 < len(args) {
 				i++
@@ -224,6 +233,9 @@ func runCronList(args []string) {
 	if project == "" {
 		project = os.Getenv("CC_PROJECT")
 	}
+	if sessionKey == "" {
+		sessionKey = os.Getenv("CC_SESSION_KEY")
+	}
 
 	sockPath := resolveSocketPath(dataDir)
 	if _, err := os.Stat(sockPath); os.IsNotExist(err) {
@@ -231,10 +243,7 @@ func runCronList(args []string) {
 		os.Exit(1)
 	}
 
-	url := "/cron/list"
-	if project != "" {
-		url += "?project=" + project
-	}
+	url := buildCronListURL(project, sessionKey, all)
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -292,6 +301,24 @@ func runCronList(args []string) {
 		}
 		fmt.Printf("  %s %s  %s  %s\n", enabled, id, expr, display)
 	}
+}
+
+func buildCronListURL(project, sessionKey string, all bool) string {
+	v := url.Values{}
+	if sessionKey != "" && !all {
+		v.Set("session_key", sessionKey)
+	}
+	if all {
+		v.Set("all", "true")
+	}
+	if project != "" {
+		v.Set("project", project)
+	}
+	u := "/cron/list"
+	if q := v.Encode(); q != "" {
+		u += "?" + q
+	}
+	return u
 }
 
 func runCronExec(args []string) {
@@ -604,7 +631,7 @@ func printCronUsage() {
 
 Commands:
   add       Create a new scheduled task
-  list      List all scheduled tasks
+  list      List scheduled tasks (--session-key for scope, --all for global)
   exec <id> Trigger a scheduled task immediately
   edit      Edit a scheduled task field
   info <id> [field]  Show detailed info of a scheduled task

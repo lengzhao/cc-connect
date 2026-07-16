@@ -1332,6 +1332,7 @@ app_secret = "your-feishu-app-secret"
 # cors_origins = ["https://app.example.com"]
 # request_timeout = "30m"            # alias: timeout
 # busy_policy = "queue"                # queue | reject
+# auto_generate_name_mode = "heuristic" # heuristic | ai; controls auto_generate_name
 # include_answer_in_message_end = false
 # max_runs = 1000                      # Max concurrent SSE runs in memory
 # run_ttl = "2h"                       # TTL for pending run records

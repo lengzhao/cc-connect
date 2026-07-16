@@ -493,6 +493,54 @@ func TestHandleCronExec_ProjectMissingIsBadRequest(t *testing.T) {
 	}
 }
 
+func TestHandleCronList_SessionKeyScope(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler := NewCronScheduler(store)
+	for _, j := range []*CronJob{
+		{ID: "j-a", Project: "test", SessionKey: "chat-api:default_channel:conv_a", CronExpr: "0 6 * * *", Prompt: "a", Enabled: true},
+		{ID: "j-b", Project: "test", SessionKey: "chat-api:team/backend:conv_b", CronExpr: "0 7 * * *", Prompt: "b", Enabled: true},
+	} {
+		if err := store.Add(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	api := &APIServer{cron: scheduler}
+
+	req := httptest.NewRequest(http.MethodGet, "/cron/list?session_key=chat-api:default_channel:conv_a", nil)
+	rec := httptest.NewRecorder()
+	api.handleCronList(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var jobs []CronJob
+	if err := json.Unmarshal(rec.Body.Bytes(), &jobs); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].ID != "j-a" {
+		t.Fatalf("scoped list = %+v, want only j-a", jobs)
+	}
+
+	reqAll := httptest.NewRequest(http.MethodGet, "/cron/list?all=true", nil)
+	recAll := httptest.NewRecorder()
+	api.handleCronList(recAll, reqAll)
+	if recAll.Code != http.StatusOK {
+		t.Fatalf("all status = %d, body=%s", recAll.Code, recAll.Body.String())
+	}
+	var allJobs []CronJob
+	if err := json.Unmarshal(recAll.Body.Bytes(), &allJobs); err != nil {
+		t.Fatalf("unmarshal all: %v", err)
+	}
+	if len(allJobs) != 2 {
+		t.Fatalf("all list = %d jobs, want 2", len(allJobs))
+	}
+}
+
 func TestSendBodyLimit_DefaultAndOverride(t *testing.T) {
 	// Zero-value APIServer (no SetMaxAttachmentSize call) falls back to the
 	// default and sizes the body for one base64-expanded attachment + envelope.

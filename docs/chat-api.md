@@ -15,6 +15,8 @@
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/conversations` | List |
+| `GET` | `/conversations/{id}` | Conversation detail |
+| `POST` | `/conversations/{id}/name/generate` | Generate name asynchronously |
 | `PATCH` | `/conversations/{id}` | Rename |
 | `DELETE` | `/conversations/{id}` | Delete |
 | `GET` | `/conversations/{id}/messages` | History |
@@ -29,6 +31,7 @@
 - Auth: `Authorization: Bearer <api_token>` (required in production)
 - User: `X-Chat-API-User` on writes; query or header on list/delete
 - Optional `X-Chat-API-Channel` on send for multi-workspace `work_dir` binding (omit → `default_channel`; cancel/respond reuse run channel)
+- `auto_generate_name` applies to newly created conversations; `auto_generate_name_mode` defaults to `heuristic` and may be set to `ai`
 - `message_id`: `{conversation_id}:{turn_index}`
 - Client disconnect does not stop the agent; use cancel endpoint to abort
 
@@ -51,6 +54,7 @@ listen_addr = ":8030"
 path = "/v1/"
 api_token = "your-service-token"
 busy_policy = "queue"
+auto_generate_name_mode = "heuristic"
 interaction_timeout = "10m"
 sse_ping_interval = "15s"
 ```

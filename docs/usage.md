@@ -833,7 +833,8 @@ Example:
 
 ```bash
 cc-connect cron add --cron "0 6 * * *" --prompt "Summarize GitHub trending" --desc "Daily Trending"
-cc-connect cron list
+cc-connect cron list --session-key "chat-api:default_channel:conv_xxx"   # current session scope
+cc-connect cron list --all                                                # all jobs
 cc-connect cron edit <job-id> <field> <value>   # e.g. cron_expr, prompt, enabled, mute, timeout_mins
 cc-connect cron exec <job-id>
 cc-connect cron del <job-id>
@@ -988,6 +989,7 @@ type = "claudecode"
 
 - Channel name `#project-a` → auto-binds to `base_dir/project-a/`
 - Each channel has isolated sessions and agent state
+- Cron jobs are scoped by `session_key`; `/cron` and `cc-connect cron list --session-key` show only the current context
 
 ---
 

@@ -746,7 +746,8 @@ cc-connect send --tts "你好"
 
 ```bash
 cc-connect cron add --cron "0 6 * * *" --prompt "总结 GitHub trending" --desc "每日趋势"
-cc-connect cron list
+cc-connect cron list --session-key "chat-api:default_channel:conv_xxx"   # 当前会话
+cc-connect cron list --all                                                # 全部任务
 cc-connect cron edit <job-id> <field> <value>   # 可改 cron_expr / prompt / enabled / mute / timeout_mins 等
 cc-connect cron exec <job-id>
 cc-connect cron del <job-id>
@@ -901,6 +902,7 @@ type = "claudecode"
 
 - 频道名 `#project-a` → 自动绑定 `base_dir/project-a/`
 - 每个频道有独立的会话和 Agent 状态
+- 定时任务按 `session_key` 隔离；`/cron` 与 `cc-connect cron list --session-key` 仅显示当前上下文任务
 
 ---
 
