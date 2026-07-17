@@ -387,6 +387,22 @@ func TestSession_GetName(t *testing.T) {
 	}
 }
 
+func TestSession_SetNameIfDefault(t *testing.T) {
+	s := &Session{Name: "default"}
+	if !s.SetNameIfDefault("generated") {
+		t.Fatal("SetNameIfDefault should update default session name")
+	}
+	if got := s.GetName(); got != "generated" {
+		t.Fatalf("name = %q, want generated", got)
+	}
+	if s.SetNameIfDefault("late-generated") {
+		t.Fatal("SetNameIfDefault should not overwrite non-default name")
+	}
+	if got := s.GetName(); got != "generated" {
+		t.Fatalf("name = %q, want generated", got)
+	}
+}
+
 func TestSessionManager_InvalidateForAgent(t *testing.T) {
 	sm := NewSessionManager("")
 
@@ -1151,4 +1167,3 @@ func TestKnownAgentSessionIDs_ResetAllSessionsBug(t *testing.T) {
 		t.Fatalf("filterOwnedSessions returned %d, want 3", len(filtered))
 	}
 }
-

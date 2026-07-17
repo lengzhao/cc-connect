@@ -151,6 +151,10 @@ func New(opts map[string]any) (core.Platform, error) {
 	if p.nameProviderType != "openai" && p.nameProviderType != "openai-compatible" && p.nameProviderType != "claude" {
 		return nil, errors.New("chat-api: name_provider_type must be openai, openai-compatible, or claude")
 	}
+	if p.autoGenerateNameMode == autoGenerateNameModeAI && p.nameModel != "" && p.nameProviderAPIKey == "" {
+		slog.Warn("chat-api: name_model configured but provider credentials are unavailable; name generation will fall back to heuristic",
+			"name_model", p.nameModel)
+	}
 	p.sessionStorePath = sessionStorePathFromOpts(opts)
 	return p, nil
 }

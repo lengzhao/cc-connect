@@ -45,12 +45,12 @@
 
 - name 持久化在 `core.Session.Name`。
 - AI name 生成优先使用 `name_model` 直接调用 OpenAI-compatible Chat Completions；API key 和 base_url 从项目 provider 注入，避免占用主 Agent。
-- 显式 `/name/generate` 未配置 `name_model` 时兼容回退到 Engine handler，并使用 `Message.SkipHistory` 避免内部 prompt 与回复写入用户可见 history；自动 name 不会并发占用主 Agent，失败后回退 query 截断。
+- 显式 `/name/generate` 与自动 name 都不调用 Engine handler / 主 Agent。未配置独立 provider 或 provider 失败时，异步回退到 query / history 截断 name。
 - name 生成使用独立请求，不占用聊天 SSE run。
 - 默认 `auto_generate_name_mode = "heuristic"`，不改变现有部署体验。
 - `name_provider` 可选择项目 Agent provider，`name_model` 选择独立低成本模型；独立 name 请求超时固定为 30 秒。
 - `name_provider_type` 默认 `openai`，支持 `openai`、`openai-compatible` 和 `claude`。Claude 使用 `/v1/messages` 协议。
-- 如果 AI name 在会话处理结束前仍未生成，后台任务失败后回退到首条 query 截断 name。
+- 如果 AI name 失败或 provider 未配置，后台任务回退到首条 query / history 截断 name。
 - 新会话首条 input 少于 8 个字符时固定跳过 AI 请求并直接使用 query name。
 
 ## Docs / migration

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -75,19 +74,9 @@ func TestGenerateConversationNameAsync(t *testing.T) {
 	s.AddUserHistory("explain this code", "owner", "Owner")
 	s.AddHistory("assistant", "This code implements a parser.")
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	handlerCalled := make(chan struct{}, 1)
 	p.setHandler(func(_ core.Platform, msg *core.Message) {
-		defer wg.Done()
-		rc, ok := msg.ReplyCtx.(*nameReplyContext)
-		if !ok {
-			t.Errorf("reply ctx = %T, want *nameReplyContext", msg.ReplyCtx)
-			return
-		}
-		if !msg.SkipHistory {
-			t.Error("expected SkipHistory on name generation message")
-		}
-		_ = p.Reply(t.Context(), rc, "Code parser walkthrough")
+		handlerCalled <- struct{}{}
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/conversations/"+s.ID+"/name/generate", strings.NewReader(`{"force":false}`))
@@ -99,18 +88,22 @@ func TestGenerateConversationNameAsync(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
-	wg.Wait()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if s.GetName() == "Code parser walkthrough" {
+		if s.GetName() == "explain this code" {
 			if got := len(s.GetHistory(0)); got != 2 {
 				t.Fatalf("history length = %d, want 2 after name generation", got)
+			}
+			select {
+			case <-handlerCalled:
+				t.Fatal("name generation must not call Agent handler")
+			default:
 			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("name = %q, want generated title", s.GetName())
+	t.Fatalf("name = %q, want heuristic title", s.GetName())
 }
 
 func TestGenerateConversationNameUsesDedicatedModel(t *testing.T) {
@@ -161,6 +154,45 @@ func TestGenerateConversationNameUsesDedicatedModel(t *testing.T) {
 	if s.GetName() != "轻量代码会话" || gotModel != "cheap-model" {
 		t.Fatalf("name = %q, model = %q", s.GetName(), gotModel)
 	}
+}
+
+func TestGenerateConversationNameFallsBackToHeuristicWhenProviderFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "provider unavailable", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	p := newTestPlatform(t, map[string]any{
+		"token":                  "secret",
+		"name_provider_api_key":  "provider-key",
+		"name_provider_base_url": server.URL,
+		"name_model":             "cheap-model",
+	})
+	sm := bindTestSessions(t, p)
+	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
+	if err != nil {
+		t.Fatalf("NewSessionWithID: %v", err)
+	}
+	s.AddUserHistory("explain failing provider", "owner", "Owner")
+	s.AddHistory("assistant", "world")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/conversations/"+s.ID+"/name/generate", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "owner")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.GetName() == "explain failing provider" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("name = %q, want heuristic title", s.GetName())
 }
 
 func TestGenerateConversationNameUsesClaudeMessagesAPI(t *testing.T) {

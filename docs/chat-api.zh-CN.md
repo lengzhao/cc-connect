@@ -1,6 +1,6 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.1.1**（2026-07-14）  
+> 版本：**v1.2.0**（2026-07-16）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
 > 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md)
@@ -319,7 +319,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 - 拼接 `text_delta` 得完整回复；`tool_call` / `tool_result` 单独渲染，勿并入正文
 - 断开 SSE **不**停止 agent，内容仍写入 history
 - `message_queued` 后勿立即重开 SSE；等上轮结束或轮询 history
-- 收到 `permission_request` / `question_request` 时弹出确认窗口；用 `expires_at` 倒计时；通过 §4.7 回传结果，**不要**把确认结果当普通 `chat-messages`
+- 收到 `permission_request` / `question_request` 时弹出确认窗口；用 `expires_at` 倒计时；通过 §4.9 回传结果，**不要**把确认结果当普通 `chat-messages`
 - `ping` 为保活事件，客户端可忽略
 - 同一 run 若出现新的确认，会先发 `interaction_superseded`；旧 `interaction_id` 不可再 respond
 - AskUserQuestion 超时后当前阻塞 turn 会取消；后续用户输入应重新 `POST /chat-messages`，作为普通对话
@@ -341,7 +341,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 
 ### 3.5 用户确认窗口
 
-Agent 在工具权限或 AskUserQuestion 时，SSE 中插入结构化交互事件。两类确认都保持原 SSE **打开**，App 弹窗后调用 §4.7 回传；确认后同一 SSE 继续 `text_delta` → `message_end`。
+Agent 在工具权限或 AskUserQuestion 时，SSE 中插入结构化交互事件。两类确认都保持原 SSE **打开**，App 弹窗后调用 §4.9 回传；确认后同一 SSE 继续 `text_delta` → `message_end`。
 
 同一时刻每个 run **最多一个**未决 interaction。若同 turn 再次弹出确认，会先发 `interaction_superseded`，再发新的 `permission_request` / `question_request`。
 
@@ -383,12 +383,71 @@ data: {
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
-| `interaction_id` | 本次交互 ID（回传时必填） |
-| `expires_at` | Unix 秒；过期后前端应禁用按钮（服务端以 interaction 状态为准） |
-| `multi_select` | 仅 `question_request`：`true` 允许多选（用 `option_ids`），`false` 单选（一键 `option_id`）；缺省按 `false` 处理 |
-| `actions` | 可选按钮；`id` 为公共 ID（权限：`allow`/`deny`/`allow_all`；问答：`0:1`），与 §4.7 的 `decision` / `option_id` 对齐 |
+#### `question_request` 数据结构
+
+`question_request` 是 AskUserQuestion 的公共 SSE 表示。`@logs/select2.json` 和
+`@logs/input3.json` 都属于这一类事件快照，字段含义如下：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `interaction_id` | string | 是 | 本次交互 ID；回传时放入 URL |
+| `run_id` | string | 是 | 所属轮次 ID |
+| `message_id` | string | 是 | 所属消息 ID |
+| `prompt` | string | 是 | 问题文案，可包含 Markdown 和选项说明 |
+| `expires_at` | integer | 是 | Unix 秒时间戳；仅用于客户端倒计时，服务端状态才是最终依据 |
+| `multi_select` | boolean | 是 | `false` 单选，`true` 多选 |
+| `actions` | array | 否 | 可点击选项；没有结构化选项时为空或省略 |
+
+`actions` 数组元素结构：
+
+```json
+{
+  "id": "0:1",
+  "label": "选项1"
+}
+```
+
+其中：
+
+- `id` 是公共选项 ID，应原样用于 §4.9 的 `option_id` 或 `option_ids`；
+- `label` 是客户端展示文本；
+- 当前协议没有 `description`、`input_type`、`placeholder`、`multiline`、
+  `required` 等字段。
+
+例如，`select2.json` 可以抽象为：
+
+```json
+{
+  "prompt": "请选择一个选项？",
+  "multi_select": false,
+  "actions": [
+    {"id": "0:1", "label": "选项1"},
+    {"id": "0:2", "label": "选项2"},
+    {"id": "0:3", "label": "选项3"}
+  ]
+}
+```
+
+`input3.json` 的四个 `actions` 仍然只是四个按钮选项；例如“单行输入”
+只是按钮的 `label`，并不表示服务端已经声明了一个单行输入控件。
+
+#### 输入框支持边界
+
+当前协议**不支持在 `question_request` 中明确声明输入框类型**。也就是说，
+不能通过事件指定“单行输入”“多行输入”“带占位提示”或其他自定义输入控件。
+
+但客户端可以自行在收到 `question_request` 后展示输入框，并使用
+`POST /runs/{run_id}/interactions/{interaction_id}/respond` 回传：
+
+```json
+{"answer": "用户输入的自由文本"}
+```
+
+`answer` 与 `option_id` / `option_ids` / `decision` 互斥，四者必须且只能填写一种。服务端
+不会校验输入框是单行还是多行，也不会接收或保存 placeholder 等控件元数据。
+
+`actions[].id` 是公共 ID，问答选项应原样回传为 `option_id` 或
+`option_ids`；权限事件的 `actions[].id` 则对应 §4.9 的 `decision` 值。
 
 **超时**（`interaction_timeout`，默认 `10m`，且不超过当前 run 剩余 `request_timeout`）
 
@@ -528,8 +587,10 @@ Accept: text/event-stream
 
 | `busy_policy` | 行为 |
 |---------------|------|
-| `queue`（默认） | 入队；SSE 返回 `message_queued` 后关闭 |
+| `queue`（默认） | **同一** `conversation_id` 忙时入队；SSE 返回 `message_queued` 后关闭 |
 | `reject` | `409`，`error`: `conversation busy` |
+
+不同 `conversation_id`（含省略时隐式新建）互不阻塞。`message_queued` 只表示该会话自己忙，不是按 user 排队。
 
 ### 4.8 取消轮次
 
@@ -623,6 +684,7 @@ interaction_timeout = "10m"
 sse_ping_interval = "15s"
 busy_policy = "queue"
 auto_generate_name_mode = "heuristic"
+# name_provider = ""              # 可选；为空使用项目 Agent provider
 # name_provider_type = ""          # 留空默认 openai；也可使用 openai-compatible / claude
 # name_model = "gpt-4o-mini"       # 独立低成本 name 模型
 include_answer_in_message_end = false
@@ -656,7 +718,7 @@ task_id = "X-Task-ID"
 | `auto_generate_name_mode` | `heuristic` | `heuristic` 使用首条 query 截断；`ai` 在收到 input 后异步生成 name，失败则回退 query 截断 |
 | `name_provider_type` | `openai` | 独立 name 模型协议类型；支持 `openai` / `openai-compatible` / `claude` |
 | `name_provider` | 当前 Agent provider | `ai` 模式使用的 provider 名称；API key / base_url 复用项目 Agent provider |
-| `name_model` | 空 | `ai` 模式使用的独立低成本模型；为空时兼容回退到 Agent |
+| `name_model` | 空 | `ai` 模式独立低成本模型。未配置独立 provider 时异步回退 query / history 截断，不调用主 Agent |
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
 | `max_runs` | `1000` | 内存 pending run 上限 |
 | `run_ttl` | `2h` | run 记录 TTL |

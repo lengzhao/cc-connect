@@ -9,8 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 	"unicode/utf8"
 
 	"github.com/chenhg5/cc-connect/core"
@@ -25,34 +23,6 @@ const (
 func (p *Platform) shouldGenerateAIName(query string) bool {
 	return p.autoGenerateNameMode == autoGenerateNameModeAI &&
 		utf8.RuneCountInString(query) >= nameMinInputRunes
-}
-
-type nameReplyContext struct {
-	done    chan struct{}
-	once    sync.Once
-	mu      sync.Mutex
-	content string
-}
-
-type nameGeneration struct {
-	done chan string
-}
-
-func newNameReplyContext() *nameReplyContext {
-	return &nameReplyContext{done: make(chan struct{})}
-}
-
-func (c *nameReplyContext) setContent(content string) {
-	c.mu.Lock()
-	c.content = content
-	c.mu.Unlock()
-	c.once.Do(func() { close(c.done) })
-}
-
-func (c *nameReplyContext) getContent() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.content
 }
 
 func (p *Platform) handleGenerateConversationName(w http.ResponseWriter, r *http.Request, conversationID string) {
@@ -87,7 +57,7 @@ func (p *Platform) handleGenerateConversationName(w http.ResponseWriter, r *http
 		return
 	}
 	runID := newNameRunID()
-	p.startNameGeneration(runID, user, session, sessions, body.Force, "")
+	p.startManualNameGeneration(runID, session, sessions, body.Force)
 	writeOK(w, http.StatusAccepted, map[string]string{"name_run_id": runID, "status": "running"})
 }
 
@@ -95,8 +65,21 @@ func newNameRunID() string {
 	return nameRunPrefix + newRunID()[len("run_"):]
 }
 
-func (p *Platform) startNameGeneration(runID, user string, session *core.Session, sessions *core.SessionManager, force bool, query string, agentFallback ...bool) *nameGeneration {
-	job := &nameGeneration{done: make(chan string, 1)}
+func (p *Platform) startAutoNameGeneration(runID string, session *core.Session, sessions *core.SessionManager, query string) {
+	if p.shouldGenerateAIName(query) && p.startProviderNameGeneration(runID, session, sessions, false, query) {
+		return
+	}
+	p.startHeuristicNameGeneration(session, sessions, false, query)
+}
+
+func (p *Platform) startManualNameGeneration(runID string, session *core.Session, sessions *core.SessionManager, force bool) {
+	if p.startProviderNameGeneration(runID, session, sessions, force, "") {
+		return
+	}
+	p.startHeuristicNameGeneration(session, sessions, force, "")
+}
+
+func (p *Platform) startProviderNameGeneration(runID string, session *core.Session, sessions *core.SessionManager, force bool, query string) bool {
 	if p.nameModel != "" && p.nameProviderAPIKey != "" {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), defaultNameRequestTimeout)
@@ -104,70 +87,49 @@ func (p *Platform) startNameGeneration(runID, user string, session *core.Session
 			name, err := p.generateNameWithProvider(ctx, buildNamePrompt(session.GetHistory(0), query))
 			if err != nil {
 				slog.Warn("chat-api: name generation failed", "run_id", runID, "error", err)
-				job.done <- ""
+				applyGeneratedName(session, sessions, heuristicNameSeed(session, query), force)
 				return
 			}
-			if name != "" && (force || session.GetName() == "default") {
-				session.SetName(name)
-				sessions.Save()
+			if strings.TrimSpace(name) == "" {
+				applyGeneratedName(session, sessions, heuristicNameSeed(session, query), force)
+				return
 			}
-			job.done <- name
+			applyGeneratedName(session, sessions, name, force)
 		}()
-		return job
+		return true
 	}
-	if len(agentFallback) > 0 && !agentFallback[0] {
-		job.done <- ""
-		return job
-	}
-	handler := p.getHandler()
-	if handler == nil {
-		job.done <- ""
-		return job
-	}
-	channelKey := p.channelKeyForMessage("")
-	engineKey := engineSessionKey(channelKey, session.ID)
-	sessions.BindActiveSession(engineKey, session.ID)
-	replyCtx := newNameReplyContext()
-	prompt := buildNamePrompt(session.GetHistory(0), query)
-	msg := &core.Message{
-		SessionKey:  engineKey,
-		Platform:    p.Name(),
-		MessageID:   runID,
-		ChannelID:   channelKey,
-		ChannelKey:  channelKey,
-		UserID:      user,
-		UserName:    user,
-		Content:     prompt,
-		ReplyCtx:    replyCtx,
-		SkipHistory: true,
-	}
-	go func() {
-		handler(p, msg)
-		select {
-		case <-replyCtx.done:
-		case <-time.After(30 * time.Second):
-			replyCtx.setContent("")
-		}
-		name := sanitizeGeneratedName(replyCtx.getContent())
-		if name != "" && (force || session.GetName() == "default") {
-			session.SetName(name)
-			sessions.Save()
-		}
-		job.done <- name
-	}()
-	return job
+	return false
 }
 
-func (p *Platform) fallbackAutoName(job *nameGeneration, session *core.Session, query string) {
-	if job != nil {
-		<-job.done
+func (p *Platform) startHeuristicNameGeneration(session *core.Session, sessions *core.SessionManager, force bool, query string) {
+	go func() {
+		applyGeneratedName(session, sessions, heuristicNameSeed(session, query), force)
+	}()
+}
+
+func heuristicNameSeed(session *core.Session, query string) string {
+	if strings.TrimSpace(query) != "" {
+		return autoNameFromQuery(query)
 	}
-	if session.GetName() == "default" {
-		session.SetName(autoNameFromQuery(query))
-		if sessions := p.sessionsOrReload(); sessions != nil {
-			sessions.Save()
+	for _, entry := range session.GetHistory(0) {
+		if entry.Role == "user" && strings.TrimSpace(entry.Content) != "" {
+			return autoNameFromQuery(entry.Content)
 		}
 	}
+	return ""
+}
+
+func applyGeneratedName(session *core.Session, sessions *core.SessionManager, name string, force bool) {
+	if strings.TrimSpace(name) == "" {
+		return
+	}
+	if !force && !session.SetNameIfDefault(name) {
+		return
+	}
+	if force {
+		session.SetName(name)
+	}
+	sessions.Save()
 }
 
 func (p *Platform) generateNameWithProvider(ctx context.Context, prompt string) (string, error) {
@@ -313,12 +275,4 @@ func sanitizeGeneratedName(name string) string {
 	name = strings.TrimPrefix(name, "名称：")
 	name = strings.TrimPrefix(name, "名称:")
 	return truncateRunes(name, autoNameMaxRunes)
-}
-
-func (p *Platform) replyName(ctx *nameReplyContext, content string) error {
-	if ctx == nil {
-		return fmt.Errorf("chat-api: nil name reply context")
-	}
-	ctx.setContent(content)
-	return nil
 }
