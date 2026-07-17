@@ -446,9 +446,14 @@ func TestChatMessagesImplicitCreate(t *testing.T) {
 	if !isOpaqueConversationID(sessions[0].ID) {
 		t.Fatalf("conversation id = %q, want opaque conv_*", sessions[0].ID)
 	}
-	if sessions[0].GetName() != "first message" {
-		t.Fatalf("name = %q, want truncated query", sessions[0].GetName())
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if sessions[0].GetName() == "first message" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	t.Fatalf("name = %q, want truncated query", sessions[0].GetName())
 }
 
 func TestChatMessagesHistoryReadableByConversationID(t *testing.T) {
