@@ -202,6 +202,7 @@ type DisplayConfig struct {
 	HistoryMaxLen        *int    `toml:"history_max_len"`        // max chars per /history entry; 0 = no truncation; default 1000
 	ShowContextIndicator *bool   `toml:"show_context_indicator"` // whether [ctx: ~N%] suffix is shown; default true
 	ReplyFooter          *bool   `toml:"reply_footer"`           // whether Codex-like footer is shown; default true
+	HideAgentFooter      *bool   `toml:"hide_agent_footer"`      // strip agent-emitted model/token footer lines; default false
 }
 
 // StreamPreviewConfig controls real-time streaming preview in IM.
@@ -486,6 +487,9 @@ type ProjectConfig struct {
 	// the current session has been inactive for the specified number of minutes.
 	// 0 or nil disables the behavior.
 	ResetOnIdleMins *int `toml:"reset_on_idle_mins,omitempty"`
+	// AgentSessionIdleTimeoutMins 在指定分钟数后关闭空闲的 live agent 进程，
+	// 同时保留已保存的 session ID，便于下一条消息继续恢复。0 或 nil 表示禁用。
+	AgentSessionIdleTimeoutMins *int `toml:"agent_session_idle_timeout_mins,omitempty"`
 	// RunAsUser, when set, causes the agent command for this project to be
 	// spawned under a different Unix user via `sudo -n -iu <user> --`. This
 	// provides OS-level file-system isolation from the supervisor user who
@@ -819,7 +823,7 @@ func projectQuietEffective(cfg *Config, proj *ProjectConfig) bool {
 //  1. project-level [projects.display].<field> (highest precedence)
 //  2. global [display].<field>
 //  3. mode-derived default (compact/quiet → false, full → true)
-func EffectiveDisplay(cfg *Config, proj *ProjectConfig) (mode string, thinkingMessages, toolMessages bool, thinkingMaxLen, toolMaxLen int, showContextIndicator, replyFooter bool) {
+func EffectiveDisplay(cfg *Config, proj *ProjectConfig) (mode string, thinkingMessages, toolMessages bool, thinkingMaxLen, toolMaxLen int, showContextIndicator, replyFooter, hideAgentFooter bool) {
 	var projDisp *DisplayConfig
 	if proj != nil {
 		projDisp = proj.Display
@@ -916,6 +920,12 @@ func EffectiveDisplay(cfg *Config, proj *ProjectConfig) (mode string, thinkingMe
 	} else {
 		replyFooter = true
 	}
+
+	hideAgentFooter = pickBool(
+		getProjBool(func(d *DisplayConfig) *bool { return d.HideAgentFooter }),
+		cfg.Display.HideAgentFooter,
+		false,
+	)
 
 	return
 }
@@ -1043,6 +1053,9 @@ func (c *Config) validateInternal(permissive bool) error {
 		}
 		if proj.ResetOnIdleMins != nil && *proj.ResetOnIdleMins < 0 {
 			return fmt.Errorf("config: %s.reset_on_idle_mins must be >= 0", prefix)
+		}
+		if proj.AgentSessionIdleTimeoutMins != nil && *proj.AgentSessionIdleTimeoutMins < 0 {
+			return fmt.Errorf("config: %s.agent_session_idle_timeout_mins must be >= 0", prefix)
 		}
 		if err := validateRunAsUser(prefix, proj.RunAsUser); err != nil {
 			return err
@@ -2521,6 +2534,303 @@ func SaveWeixinPlatformCredentials(opts WeixinCredentialUpdateOptions) (*WeixinC
 	}
 
 	return &WeixinCredentialUpdateResult{
+		ProjectName:      opts.ProjectName,
+		ProjectIndex:     projectIdx,
+		PlatformAbsIndex: absIdx,
+		AllowFrom:        allowFrom,
+	}, nil
+}
+
+func firstYuanbaoPlatformIndex(platforms []PlatformConfig) int {
+	for i := range platforms {
+		t := strings.ToLower(strings.TrimSpace(platforms[i].Type))
+		if t == "yuanbao" {
+			return i
+		}
+	}
+	return -1
+}
+
+// EnsureProjectWithYuanbaoOptions controls project auto-provisioning for Yuanbao setup.
+type EnsureProjectWithYuanbaoOptions struct {
+	ProjectName      string
+	CloneFromProject string
+	WorkDir          string
+	AgentType        string
+}
+
+// EnsureProjectWithYuanbaoResult describes whether project provisioning created a new project or platform block.
+type EnsureProjectWithYuanbaoResult struct {
+	Created          bool
+	AddedPlatform    bool
+	ProjectIndex     int
+	PlatformAbsIndex int
+}
+
+// EnsureProjectWithYuanbaoPlatform ensures the target project exists and has a yuanbao platform entry.
+func EnsureProjectWithYuanbaoPlatform(opts EnsureProjectWithYuanbaoOptions) (*EnsureProjectWithYuanbaoResult, error) {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	if ConfigPath == "" {
+		return nil, fmt.Errorf("config path not set")
+	}
+	projectName := strings.TrimSpace(opts.ProjectName)
+	if projectName == "" {
+		return nil, fmt.Errorf("project name is required")
+	}
+
+	data, err := os.ReadFile(ConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	raw := string(data)
+	cfg := &Config{}
+	if err := toml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Name != projectName {
+			continue
+		}
+		platformIdx := firstYuanbaoPlatformIndex(cfg.Projects[i].Platforms)
+		added := false
+		if platformIdx < 0 {
+			lines, hadTrailing := splitConfigLines(raw)
+			spans := buildRawProjectSpans(lines)
+			if i >= len(spans) {
+				return nil, fmt.Errorf("project %q located in parsed config but not raw file", projectName)
+			}
+			insertAt := spans[i].end + 1
+			block := make([]string, 0, 7)
+			if insertAt > 0 && strings.TrimSpace(lines[insertAt-1]) != "" {
+				block = append(block, "")
+			}
+			block = append(block, "[[projects.platforms]]")
+			block = append(block, `type = "yuanbao"`)
+			block = append(block, "")
+			block = append(block, "[projects.platforms.options]")
+			if insertAt < len(lines) && strings.TrimSpace(lines[insertAt]) != "" {
+				block = append(block, "")
+			}
+			lines = insertLines(lines, insertAt, block)
+			if err := writeRawConfig(joinConfigLines(lines, hadTrailing)); err != nil {
+				return nil, err
+			}
+			platformIdx = len(cfg.Projects[i].Platforms)
+			added = true
+		}
+		return &EnsureProjectWithYuanbaoResult{
+			Created:          false,
+			AddedPlatform:    added,
+			ProjectIndex:     i,
+			PlatformAbsIndex: platformIdx,
+		}, nil
+	}
+
+	proj := ProjectConfig{
+		Name:      projectName,
+		Agent:     pickAgentTemplateForNewProject(cfg, EnsureProjectWithFeishuOptions{CloneFromProject: opts.CloneFromProject, WorkDir: opts.WorkDir, AgentType: opts.AgentType}),
+		Platforms: []PlatformConfig{{Type: "yuanbao", Options: map[string]any{}}},
+	}
+	if proj.Agent.Type == "" {
+		proj.Agent.Type = "codex"
+	}
+	if proj.Agent.Options == nil {
+		proj.Agent.Options = map[string]any{}
+	}
+	workDir := strings.TrimSpace(opts.WorkDir)
+	if workDir != "" {
+		proj.Agent.Options["work_dir"] = workDir
+	}
+
+	lines, hadTrailing := splitConfigLines(raw)
+	if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) != "" {
+		lines = append(lines, "")
+	}
+	lines = append(lines, "[[projects]]")
+	lines = append(lines, fmt.Sprintf("name = %s", quoteTomlString(proj.Name)))
+	lines = append(lines, "")
+	lines = append(lines, "[projects.agent]")
+	lines = append(lines, fmt.Sprintf("type = %s", quoteTomlString(proj.Agent.Type)))
+	lines = append(lines, "")
+	lines = append(lines, "[projects.agent.options]")
+	if wd, ok := proj.Agent.Options["work_dir"].(string); ok && strings.TrimSpace(wd) != "" {
+		lines = append(lines, fmt.Sprintf("work_dir = %s", quoteTomlString(wd)))
+	}
+	if mode, ok := proj.Agent.Options["mode"].(string); ok && strings.TrimSpace(mode) != "" {
+		lines = append(lines, fmt.Sprintf("mode = %s", quoteTomlString(mode)))
+	}
+	lines = append(lines, "")
+	lines = append(lines, "[[projects.platforms]]")
+	lines = append(lines, `type = "yuanbao"`)
+	lines = append(lines, "")
+	lines = append(lines, "[projects.platforms.options]")
+	if err := writeRawConfig(joinConfigLines(lines, hadTrailing)); err != nil {
+		return nil, err
+	}
+
+	return &EnsureProjectWithYuanbaoResult{
+		Created:          true,
+		AddedPlatform:    false,
+		ProjectIndex:     len(cfg.Projects),
+		PlatformAbsIndex: 0,
+	}, nil
+}
+
+// YuanbaoCredentialUpdateOptions updates credentials for a project's Yuanbao platform.
+type YuanbaoCredentialUpdateOptions struct {
+	ProjectName   string
+	PlatformIndex int    // 1-based index among yuanbao platforms; 0 = first
+	BotToken      string // "app_key:app_secret"; required
+	APIDomain     string // optional; empty = do not change
+	WSURL         string // optional; empty = do not change
+	RouteEnv      string // optional; empty = do not change
+	AllowFrom     string // optional; empty = do not change
+}
+
+// YuanbaoCredentialUpdateResult describes where credentials were written.
+type YuanbaoCredentialUpdateResult struct {
+	ProjectName      string
+	ProjectIndex     int
+	PlatformAbsIndex int
+	AllowFrom        string
+}
+
+// SaveYuanbaoPlatformCredentials updates bot_token (and optional fields)
+// for a project's Yuanbao platform.
+func SaveYuanbaoPlatformCredentials(opts YuanbaoCredentialUpdateOptions) (*YuanbaoCredentialUpdateResult, error) {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	if ConfigPath == "" {
+		return nil, fmt.Errorf("config path not set")
+	}
+	if strings.TrimSpace(opts.ProjectName) == "" {
+		return nil, fmt.Errorf("project name is required")
+	}
+	botToken := strings.TrimSpace(opts.BotToken)
+	idx := strings.Index(botToken, ":")
+	if botToken == "" || idx <= 0 || idx >= len(botToken)-1 {
+		return nil, fmt.Errorf("bot_token is required (format: app_key:app_secret)")
+	}
+	if opts.PlatformIndex < 0 {
+		return nil, fmt.Errorf("platform index must be >= 0")
+	}
+
+	data, err := os.ReadFile(ConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+	raw := string(data)
+	cfg := &Config{}
+	if err := toml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	projectIdx := -1
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Name == opts.ProjectName {
+			projectIdx = i
+			break
+		}
+	}
+	if projectIdx < 0 {
+		return nil, fmt.Errorf("project %q not found", opts.ProjectName)
+	}
+
+	proj := &cfg.Projects[projectIdx]
+	candidates := make([]int, 0, len(proj.Platforms))
+	for i := range proj.Platforms {
+		t := strings.ToLower(strings.TrimSpace(proj.Platforms[i].Type))
+		if t == "yuanbao" {
+			candidates = append(candidates, i)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("project %q has no yuanbao platform", opts.ProjectName)
+	}
+
+	targetPos := 0
+	if opts.PlatformIndex > 0 {
+		targetPos = opts.PlatformIndex - 1
+	}
+	if targetPos < 0 || targetPos >= len(candidates) {
+		return nil, fmt.Errorf(
+			"platform index %d out of range: project %q has %d yuanbao platform(s)",
+			opts.PlatformIndex, opts.ProjectName, len(candidates),
+		)
+	}
+
+	absIdx := candidates[targetPos]
+	platform := &proj.Platforms[absIdx]
+	if platform.Options == nil {
+		platform.Options = map[string]any{}
+	}
+
+	platform.Options["bot_token"] = botToken
+
+	allowFrom := strings.TrimSpace(stringOption(platform.Options["allow_from"]))
+	if v := strings.TrimSpace(opts.AllowFrom); v != "" {
+		allowFrom = v
+		platform.Options["allow_from"] = v
+	}
+
+	lines, hadTrailing := splitConfigLines(raw)
+	spans := buildRawProjectSpans(lines)
+	if projectIdx >= len(spans) {
+		return nil, fmt.Errorf("project %q located in parsed config but not raw file", opts.ProjectName)
+	}
+	if absIdx >= len(spans[projectIdx].platforms) {
+		return nil, fmt.Errorf("yuanbao platform located in parsed config but not raw file")
+	}
+
+	reloadSpan := func() rawPlatformSpan {
+		spans = buildRawProjectSpans(lines)
+		return spans[projectIdx].platforms[absIdx]
+	}
+	span := reloadSpan()
+
+	if span.optionsStart < 0 {
+		insertAt := span.end + 1
+		block := make([]string, 0, 4)
+		if insertAt > 0 && strings.TrimSpace(lines[insertAt-1]) != "" {
+			block = append(block, "")
+		}
+		block = append(block, "[projects.platforms.options]")
+		if insertAt < len(lines) && strings.TrimSpace(lines[insertAt]) != "" {
+			block = append(block, "")
+		}
+		lines = insertLines(lines, insertAt, block)
+		span = reloadSpan()
+	}
+
+	lines = upsertTomlStringKey(lines, span.optionsStart+1, span.optionsEnd, "bot_token", botToken)
+	span = reloadSpan()
+
+	if v := strings.TrimSpace(opts.APIDomain); v != "" {
+		lines = upsertTomlStringKey(lines, span.optionsStart+1, span.optionsEnd, "api_domain", v)
+		span = reloadSpan()
+	}
+	if v := strings.TrimSpace(opts.WSURL); v != "" {
+		lines = upsertTomlStringKey(lines, span.optionsStart+1, span.optionsEnd, "ws_url", v)
+		span = reloadSpan()
+	}
+	if v := strings.TrimSpace(opts.RouteEnv); v != "" {
+		lines = upsertTomlStringKey(lines, span.optionsStart+1, span.optionsEnd, "route_env", v)
+		span = reloadSpan()
+	}
+	if v := strings.TrimSpace(opts.AllowFrom); v != "" {
+		lines = upsertTomlStringKey(lines, span.optionsStart+1, span.optionsEnd, "allow_from", v)
+		span = reloadSpan()
+	}
+
+	if err := writeRawConfig(joinConfigLines(lines, hadTrailing)); err != nil {
+		return nil, err
+	}
+
+	return &YuanbaoCredentialUpdateResult{
 		ProjectName:      opts.ProjectName,
 		ProjectIndex:     projectIdx,
 		PlatformAbsIndex: absIdx,

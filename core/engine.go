@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -310,6 +311,7 @@ type DisplayCfg struct {
 	ToolMaxLen       int // max runes for tool use preview; 0 = no truncation
 	ToolMessages     bool
 	HistoryMaxLen    *int // max runes for /history entries; nil = default, 0 = no truncation
+	HideAgentFooter  bool // strip model/token footer lines emitted as agent text
 }
 
 // InstantReplyCfg controls the immediate confirmation reply sent when a message
@@ -381,19 +383,23 @@ type Engine struct {
 	userRoles    *UserRoleManager // nil = legacy mode (no per-user policies)
 	userRolesMu  sync.RWMutex     // protects userRoles, disabledCmds, and adminFrom
 
-	rateLimiter       *RateLimiter
-	outgoingRL        *OutgoingRateLimiter
-	streamPreview     StreamPreviewCfg
-	instantReply      InstantReplyCfg
-	references        ReferenceRenderCfg
-	relayManager      *RelayManager
-	eventIdleTimeout  time.Duration
-	maxTurnTime       time.Duration // absolute wall-clock cap per turn (0 = disabled)
-	maxQueuedMessages int
-	dirHistory        *DirHistory
-	baseWorkDir       string
-	projectEnv        []string
-	projectState      *ProjectStateStore
+	rateLimiter      *RateLimiter
+	outgoingRL       *OutgoingRateLimiter
+	streamPreview    StreamPreviewCfg
+	instantReply     InstantReplyCfg
+	references       ReferenceRenderCfg
+	relayManager     *RelayManager
+	eventIdleTimeout time.Duration
+	maxTurnTime      time.Duration // absolute wall-clock cap per turn (0 = disabled)
+	// agentSessionIdleTimeoutNanos 在单轮正常结束后关闭空闲的 live agent 进程，
+	// 同时保留已保存的 session ID，便于下次继续恢复。
+	agentSessionIdleTimeoutNanos atomic.Int64
+	agentSessionIdleSeq          atomic.Uint64
+	maxQueuedMessages            int
+	dirHistory                   *DirHistory
+	baseWorkDir                  string
+	projectEnv                   []string
+	projectState                 *ProjectStateStore
 
 	// Auto-compress settings
 	autoCompressEnabled   bool
@@ -530,6 +536,10 @@ type interactiveState struct {
 	// to confirm it has exited before starting a new foreground turn.
 	unsolicitedCancel context.CancelFunc // nil when no reader is running
 	unsolicitedDone   chan struct{}      // closed when the reader goroutine exits
+
+	// agentSessionIdleCancel 取消当前会话的 idle 关闭计时器。
+	agentSessionIdleCancel context.CancelFunc
+	agentSessionIdleToken  uint64
 
 	// eventsNeedResync is true when buffered events should be drained before
 	// the next turn (e.g. after an abnormal exit). Defaults to true (safe);
@@ -930,6 +940,29 @@ func (e *Engine) SetResetOnIdle(d time.Duration) {
 		return
 	}
 	e.resetOnIdle = d
+}
+
+// SetAgentSessionIdleTimeout 配置单轮正常结束后的 live agent 空闲关闭时间。
+// 小于等于 0 表示禁用。
+func (e *Engine) SetAgentSessionIdleTimeout(d time.Duration) {
+	if d <= 0 {
+		e.agentSessionIdleTimeoutNanos.Store(0)
+		e.cancelAllAgentSessionIdleCloses()
+		return
+	}
+	e.agentSessionIdleTimeoutNanos.Store(int64(d))
+}
+
+func (e *Engine) cancelAllAgentSessionIdleCloses() {
+	e.interactiveMu.Lock()
+	states := make([]*interactiveState, 0, len(e.interactiveStates))
+	for _, state := range e.interactiveStates {
+		states = append(states, state)
+	}
+	e.interactiveMu.Unlock()
+	for _, state := range states {
+		e.cancelAgentSessionIdleClose(state)
+	}
 }
 
 // SetShowContextIndicator controls whether the reply footer's first line
@@ -3736,6 +3769,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgFailedToStartAgentSession))
 		return
 	}
+	e.cancelAgentSessionIdleClose(state)
 
 	if workspaceDir != "" && e.workspacePool != nil {
 		ws := e.workspacePool.GetOrCreate(workspaceDir)
@@ -3831,6 +3865,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	state.mu.Unlock()
 	if alive {
 		e.startUnsolicitedReader(state, session, sessions, interactiveKey, workspaceDir)
+		e.scheduleAgentSessionIdleClose(interactiveKey, state)
 	}
 }
 
@@ -4207,6 +4242,10 @@ func (e *Engine) cleanupInteractiveState(sessionKey string, expected ...*interac
 		state.mu.Lock()
 		agentSession = state.agentSession
 		state.agentSession = nil
+		if state.agentSessionIdleCancel != nil {
+			state.agentSessionIdleCancel()
+			state.agentSessionIdleCancel = nil
+		}
 		state.mu.Unlock()
 	}
 	e.interactiveMu.Unlock()
@@ -4249,6 +4288,111 @@ func (e *Engine) cleanupInteractiveState(sessionKey string, expected ...*interac
 		return
 	}
 	delete(e.interactiveStates, sessionKey)
+	e.interactiveMu.Unlock()
+}
+
+func (e *Engine) cancelAgentSessionIdleClose(state *interactiveState) {
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	cancel := state.agentSessionIdleCancel
+	state.agentSessionIdleCancel = nil
+	state.agentSessionIdleToken = 0
+	state.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (e *Engine) scheduleAgentSessionIdleClose(sessionKey string, state *interactiveState) {
+	if state == nil {
+		return
+	}
+	timeout := time.Duration(e.agentSessionIdleTimeoutNanos.Load())
+	if timeout <= 0 {
+		return
+	}
+
+	e.cancelAgentSessionIdleClose(state)
+	ctx, cancel := context.WithCancel(e.ctx)
+	token := e.agentSessionIdleSeq.Add(1)
+	state.mu.Lock()
+	if state.stopped ||
+		state.agentSession == nil ||
+		!state.agentSession.Alive() ||
+		state.eventsNeedResync ||
+		state.pending != nil ||
+		len(state.pendingMessages) > 0 {
+		state.mu.Unlock()
+		cancel()
+		return
+	}
+	state.agentSessionIdleCancel = cancel
+	state.agentSessionIdleToken = token
+	state.mu.Unlock()
+
+	go func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+
+		e.cleanupInteractiveStateForIdleToken(sessionKey, state, token, timeout)
+	}()
+}
+
+func (e *Engine) cleanupInteractiveStateForIdleToken(sessionKey string, expected *interactiveState, token uint64, timeout time.Duration) {
+	e.interactiveMu.Lock()
+	state, ok := e.interactiveStates[sessionKey]
+	if !ok || state == nil || state != expected {
+		e.interactiveMu.Unlock()
+		return
+	}
+
+	var agentSession AgentSession
+	state.mu.Lock()
+	if state.agentSessionIdleToken != token ||
+		state.agentSession == nil ||
+		!state.agentSession.Alive() ||
+		state.stopped ||
+		state.eventsNeedResync ||
+		state.pending != nil ||
+		len(state.pendingMessages) > 0 {
+		state.mu.Unlock()
+		e.interactiveMu.Unlock()
+		return
+	}
+	agentSession = state.agentSession
+	state.agentSession = nil
+	state.agentSessionIdleCancel = nil
+	state.agentSessionIdleToken = 0
+	state.mu.Unlock()
+	e.interactiveMu.Unlock()
+
+	slog.Info("agent session idle timeout: closing live agent session",
+		"session_key", sessionKey, "timeout", timeout)
+	e.stopUnsolicitedReader(state)
+	state.markStopped()
+
+	state.mu.Lock()
+	pending := state.pending
+	state.pending = nil
+	state.mu.Unlock()
+	if pending != nil {
+		pending.resolve()
+	}
+	e.notifyDroppedQueuedMessages(state, fmt.Errorf("session reset"))
+
+	e.closeAgentSessionWithTimeout(sessionKey, agentSession)
+
+	e.interactiveMu.Lock()
+	if currentState, currentOk := e.interactiveStates[sessionKey]; currentOk && currentState == expected {
+		delete(e.interactiveStates, sessionKey)
+	}
 	e.interactiveMu.Unlock()
 }
 
@@ -5129,7 +5273,11 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 
 		case EventText:
-			if event.Content != "" && !isEllipsisOnly(event.Content) {
+			content := event.Content
+			if e.display.HideAgentFooter {
+				content = stripAgentFooterLines(content)
+			}
+			if content != "" && !isEllipsisOnly(content) {
 				// Pre-compute silentHold transition including this chunk so the
 				// rich-card path doesn't leak a preview that gets recalled at
 				// end-of-stream when the text resolves to bare NO_REPLY (Lark
@@ -5137,19 +5285,19 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				// paths share this single transition; couldBeSilentPrefix is
 				// monotonically decreasing as segments grow, so the transition
 				// is held → released at most once per segment.
-				peekSegment := strings.Join(textParts[segmentStart:], "") + event.Content
+				peekSegment := strings.Join(textParts[segmentStart:], "") + content
 				prevHold := silentHold
 				silentHold = couldBeSilentPrefix(peekSegment)
 				releasedNow := prevHold && !silentHold
 
 				handledByStreamCard := false
 				if streamCard != nil && !streamCard.Failed() {
-					textParts = append(textParts, event.Content) // always accumulate for history
+					textParts = append(textParts, content) // always accumulate for history
 					if !silentHold {
 						if releasedNow {
 							cardAnswerText.WriteString(peekSegment)
 						} else {
-							cardAnswerText.WriteString(event.Content)
+							cardAnswerText.WriteString(content)
 						}
 						_ = streamCard.Update(e.ctx, buildCardContent(cardThinkingText, cardToolCalls, cardAnswerText.String()))
 					}
@@ -5173,8 +5321,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 							sp.setStatus(CardStatusWorking)
 						}
 					}
-					textParts = append(textParts, event.Content)
-					partialText += event.Content
+					textParts = append(textParts, content)
+					partialText += content
 					if hasRichCard {
 						if !silentHold {
 							// Lazy creation: if we held during the first text events and
@@ -5235,7 +5383,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 							if releasedNow {
 								sp.appendText(peekSegment) // flush all held chunks at once
 							} else {
-								sp.appendText(event.Content)
+								sp.appendText(content)
 							}
 						}
 					}
@@ -5256,7 +5404,18 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 
 		case EventPermissionRequest:
-			isAskQuestion := event.ToolName == "AskUserQuestion" && len(event.Questions) > 0
+			// extension_select is a Pi extension UI request routed via the
+			// AskUserQuestion rich-card path. The pi session adapter populates
+			// event.Questions so it renders as a button card (same UX as Claude
+			// Code's AskUserQuestion).
+			//
+			// extension_confirm is intentionally NOT in this list: extensions
+			// use ctx.ui.confirm() to ask the user for permission on a tool
+			// call (e.g. permission-gate on Bash), and the engine must render
+			// it as a regular permission request (Allow/Deny) so the UX
+			// matches other agents. See forwardConfirm in agent/pi/session.go.
+			isAskQuestion := (event.ToolName == "AskUserQuestion" ||
+				event.ToolName == "extension_select") && len(event.Questions) > 0
 
 			state.mu.Lock()
 			autoApprove := state.approveAll
@@ -5329,6 +5488,15 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			<-pending.Resolved
 			slog.Info("permission resolved", "request_id", event.RequestID)
 
+			// The stream preview was frozen+detached when this permission
+			// request was emitted, so any subsequent EventText in this turn
+			// would otherwise be buffered until EventResult and sent as a
+			// single bulk message (regression fixed by
+			// fix/stream-preview-after-permission). unfreeze() restores the
+			// preview so the post-resolution output opens a fresh streaming
+			// card and continues to update incrementally.
+			sp.unfreeze()
+
 			// Restart idle timer after permission is resolved
 			if idleTimer != nil {
 				idleTimer.Reset(e.eventIdleTimeout)
@@ -5376,6 +5544,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			state.mu.Unlock()
 
 			fullResponse := event.Content
+			if e.display.HideAgentFooter {
+				fullResponse = stripAgentFooterLines(fullResponse)
+			}
 			// When tool progress is hidden, segmentStart stays 0 and textParts
 			// contains ALL text across tool boundaries. Prefer the full accumulated
 			// text over event.Content which only contains the last assistant segment.
@@ -5515,16 +5686,32 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			// --- StreamingCard path ---
 			if streamCard != nil && !streamCard.Failed() {
 				sp.finish("", "") // cleanup preview (should be no-op if card was active)
-				// Build final card content with full response
-				finalContent := buildCardContent(cardThinkingText, cardToolCalls, fullResponse)
+				// Silent reply: never render the NO_REPLY marker into the card.
+				// cardAnswerText holds only the text streamed BEFORE the marker
+				// (empty for a bare NO_REPLY, since silentHold suppresses card
+				// writes while the segment is still a NO_REPLY prefix). Finalize
+				// with that instead of fullResponse so the card resolves to Done
+				// without leaking the marker, and skip the fallback send that
+				// would otherwise post the suppressed marker verbatim.
+				cardBody := fullResponse
+				if isSilent {
+					cardBody = strings.TrimRight(cardAnswerText.String(), " \t\r\n")
+				}
+				finalContent := buildCardContent(cardThinkingText, cardToolCalls, cardBody)
 				if err := streamCard.Finalize(e.ctx, finalContent); err != nil {
 					slog.Error("streaming card finalize failed, sending fallback", "error", err)
-					// Fallback: send the response as a normal message
-					for _, chunk := range splitMessage(fullResponse, maxPlatformMessageLen) {
-						if err := sendWorkspaceWithError(p, replyCtx, chunk); err != nil {
-							return
+					// Fallback: send the response as a normal message — but never
+					// for a silent reply, which has no deliverable content.
+					if !isSilent {
+						for _, chunk := range splitMessage(fullResponse, maxPlatformMessageLen) {
+							if err := sendWorkspaceWithError(p, replyCtx, chunk); err != nil {
+								return
+							}
 						}
 					}
+				}
+				if isSilent {
+					slog.Info("silent reply suppressed", "session", session.ID)
 				}
 			} else if isSilent {
 				// Silent reply: drop any in-flight preview and skip all send paths.
@@ -16750,6 +16937,31 @@ func contextIndicatorText(inputTokens int) string {
 // Used to strip such markers from delivered text — the ctx indicator is now
 // rendered exclusively in the reply footer.
 var ctxSelfReportRe = regexp.MustCompile(`(?m)\n?\[ctx: ~\d+%\]`)
+
+// agentFooterLineRe matches standalone agent-emitted status footer lines such as:
+// *claude-opus-4-8[1m] · out 788 · in 442 cw 0 cr 395.1k · ctx 40%*
+// The line must contain all three metrics so ordinary prose is left untouched.
+var agentFooterLineRe = regexp.MustCompile(`^[ \t]*\*?[A-Za-z0-9][^\n]*\s+·\s+out\s+[0-9][0-9A-Za-z.]*\b[^\n]*\bin\s+[0-9][0-9A-Za-z.]*\b[^\n]*\bctx\s+[0-9]+(?:\.[0-9]+)?%[^\n]*\*?[ \t]*$`)
+
+func stripAgentFooterLines(text string) string {
+	if text == "" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	kept := lines[:0]
+	removed := false
+	for _, line := range lines {
+		if agentFooterLineRe.MatchString(line) {
+			removed = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !removed {
+		return text
+	}
+	return strings.TrimRight(strings.Join(kept, "\n"), "\n ")
+}
 
 // silentReplyRe matches a bare NO_REPLY marker (case-insensitive, optional surrounding whitespace).
 // When the agent emits exactly this as its full response, the platform send is suppressed

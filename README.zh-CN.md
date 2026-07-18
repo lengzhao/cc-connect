@@ -47,15 +47,32 @@
 <details open>
 <summary>赞助商</summary>
 
-[![MiniMax](assets/banners/minimax-zh.png)](https://platform.minimaxi.com/subscribe/token-plan?code=HAvthxk1tT&source=link)
+[![Kimi](assets/sponsors/kimi-banner-zh.png)](https://www.kimi.com/code/?aff=cc-connect)
 
-MiniMax M3 突破 Coding 与 Agentic AI 前沿，基于 MiniMax Sparse Attention 支持 1M 超长上下文，并从零原生支持多模态。在 SWE-Bench Pro (59.0)、Terminal Bench 2.1 (66.0)、VIBE V2 (60.1)、SVG-Bench (63.7)、KernelBench Hard (28.8)、BrowseComp (83.5)、GDPval rubrics (74.7)、Banker ToolBench (76.1)、MCP Atlas (74.2)、OSWorld-verified (70.0) 等多项基准中领先业界。Mini 价格 Max 性能，Token Plan 助你 Build / Learn / Ship。
+感谢 [Kimi](https://www.kimi.com/code/?aff=cc-connect) 赞助本项目！[Kimi K2.7 Code](https://platform.kimi.com/docs/guide/kimi-k2-7-code-quickstart) 是 Moonshot AI 推出的编程专用开源智能体模型，在真实长程编程与复杂软件工程工作流中显著提升端到端任务成功率，同时优化推理效率，相比 K2.6 平均减少约 30% 的推理 Token 消耗。
 
-[点击此处](https://platform.minimaxi.com/subscribe/token-plan?code=HAvthxk1tT&source=link)享 MiniMax Token Plan 专属 88 折优惠 + cc-connect 用户专属代金券！
+在 cc-connect 中，你可以直接接入 Kimi CLI，将运行在本地电脑上的 Kimi 连接到飞书、钉钉、Telegram、Slack、Discord、企业微信等即时通讯工具。无论身在何处，都能通过消息继续处理本地项目，让 Kimi 协助阅读和修改代码、排查问题、执行命令与自动化任务。
+
+cc-connect 已支持 Kimi CLI。立即体验高性价比的 [Kimi Code 订阅](https://www.kimi.com/code/?aff=cc-connect)，或前往 Kimi 开放平台（[中文站](https://platform.kimi.com/?aff=cc-connect)｜[Global](https://platform.kimi.ai/?aff=cc-connect)）使用 API。
 
 ---
 
 <table>
+<tr>
+<td width="150"><a href="https://apinebula.com/UrO0q1"><img src="assets/sponsors/apinebula.png" alt="APINEBULA" width="120"></a></td>
+<td>感谢 APINEBULA 赞助本项目！APINEBULA 是银河录像局旗下的企业级 AI 聚合平台，背靠大平台资源，面向开发者、团队与企业用户提供稳定、高性价比的大模型 API 接入服务。平台聚合 Claude、GPT、Gemini等主流满血模型，一个接口，接入全球顶尖AI大模型，各大模型价格低至 1 折起，支持企业级高并发、正式合同、对公打款与开票服务，适合 AI 编程、Agent 开发、业务系统集成等多种场景！使用此链接注册并在充值时填写"ccconnect"优惠码可享九折优惠！</td>
+</tr>
+
+<tr>
+<td width="150"><a href="https://s.qiniu.com/aUbueu"><img src="assets/sponsors/qiniu.png" alt="七牛云 Qiniu Cloud" width="120"></a></td>
+<td>感谢 <a href="https://s.qiniu.com/aUbueu">七牛云 AI</a> 赞助本项目！七牛云（02567.HK）旗下企业级 MaaS 平台，一站式调用全球 150+ 主流模型，兼容全球主流模型厂商协议，覆盖文本、图像、音频、视频、文件处理等全模态处理能力，服务超过 169 万企业及开发者用户。专属福利：企业用户免费领 1200万 Token，邀请好友最高得百亿 Token。</td>
+</tr>
+
+<tr>
+<td width="150"><a href="https://api.fenno.ai/register?redirect=/purchase?tab=subscription%26group=16&aff=C7KG6WBS7CQJ"><img src="assets/sponsors/fenno.png" alt="Fenno.ai" width="120"></a></td>
+<td>感谢 Fenno.ai 赞助本项目！Fenno.ai 是一家稳定、高效的 API 中转服务商，目前主要提供 Codex 中转服务，兼容 OpenAI 及 Anthropic 协议，可灵活接入 Codex、Claude Code、OpenCode 等主流编程工具，可稳定支撑千亿 Token/日的企业级调用需求，支持国内及海外主体公对公结算、开票。Fenno.ai 为 CC-Connect 的用户提供了专属福利：通过 <a href="https://api.fenno.ai/register?redirect=/purchase?tab=subscription%26group=16&aff=C7KG6WBS7CQJ">此链接</a> 即可订阅 9.9 元/150 刀额度的超值 Coding Plan，邀请好友最高可享 20% 奖励，多邀多得！</td>
+</tr>
+
 <tr>
 <td width="150"><a href="https://aigocode.com/invite/CYY3C85C"><img src="assets/sponsors/aigocode.png" alt="AIGoCode" width="120"></a></td>
 <td>感谢 AIGoCode 对本项目的赞助！AIGoCode 是集 Claude Code、Codex、最新 Gemini 模型于一体的一站式平台，提供稳定高效、高性价比的 AI 编码服务。灵活订阅方案、零封号风险、无需 VPN 直连、响应速度极快。通过 <a href="https://aigocode.com/invite/CYY3C85C">此链接</a> 注册，首充额外获得 10% 赠送额度！</td>
@@ -77,6 +94,11 @@ MiniMax M3 突破 Coding 与 Agentic AI 前沿，基于 MiniMax Sparse Attention
 </tr>
 
 <tr>
+<td width="150"><a href="https://visioncoder.cn"><img src="assets/sponsors/visioncoder.png" alt="VisionCoder" width="120"></a></td>
+<td>感谢 VisionCoder 对本项目的支持。<a href="https://visioncoder.cn">VisionCoder 开发平台</a> 是一个可靠高效的 API 中继服务提供商，提供 Claude Code、Codex、Gemini 等主流 AI 模型，帮助开发者和团队更轻松地集成 AI 功能，提升工作效率。此外，VisionCoder 还提供 <strong>Claude Max 200</strong> 与 <strong>GPT Pro 200</strong> <strong>高级成品号</strong>的独家售卖渠道，助力体验全网顶配 AI 的算力与体验。</td>
+</tr>
+
+<tr>
 <td width="150"><a href="https://runapi.co/register?aff=4BXa"><img src="assets/sponsors/runapi.jpg" alt="RunAPI" width="120"></a></td>
 <td>感谢 RunAPI 对本项目的赞助！RunAPI 是高效稳定的API OpenRouter平替平台，一个 API Key 即可访问 OpenAI、Claude、Gemini、DeepSeek、Grok 等 150+ 主流模型，低至 1 折，极其稳定，可以无缝兼容 Claude Code、OpenClaw 等工具。RunAPI 为 cc-connect的用户提供专属福利：注册联系管理员即可领取￥7的免费额度</td>
 </tr>
@@ -89,6 +111,11 @@ MiniMax M3 突破 Coding 与 Agentic AI 前沿，基于 MiniMax Sparse Attention
 <tr>
 <td width="150"><a href="https://unity2.ai/register?source=ccconnect"><img src="assets/sponsors/unity2ai.png" alt="Unity2.ai" width="120"></a></td>
 <td>感谢 Unity2.ai 赞助了本项目！Unity2.ai 是面向个人开发者、团队和企业的高性能 AI 模型 API 中转平台，长期服务国内头部企业，日均承载超 300 亿 token 调用，支持 5000 RPM 级高并发。支持余额计费、首充赠额、组合订阅、企业开票和专属对接。通过 <a href="https://unity2.ai/register?source=ccconnect">此链接</a> 注册可领取 $2 余额，加入官方群再送 $10 余额，最高可领 $12 免费额度。</td>
+</tr>
+
+<tr>
+<td width="150"><a href="https://ergouapi.com/r/gh-cc-connect"><img src="assets/sponsors/ergou.png" alt="二狗 API" width="120"></a></td>
+<td>感谢 二狗 API (Ergou API) 赞助本项目!接入二狗,稳如老狗。二狗 API 中转站,全站 0.1x~0.2x 超低倍率,提供 Claude/GPT/Gemini 等多个国内外 100% 纯血大模型接口,顶级 IPLC 线路 + 住宅双 ISP 冗余,确保全国范围稳定低延迟访问。欢迎各位开发者、工作室 <a href="https://ergouapi.com/r/gh-cc-connect">注册使用</a>。</td>
 </tr>
 
 <tr>
@@ -125,11 +152,6 @@ MiniMax M3 突破 Coding 与 Agentic AI 前沿，基于 MiniMax Sparse Attention
 <tr>
 <td width="150"><a href="https://dragoncode.codes/register?ref=23ZELCPX"><img src="assets/sponsors/dragoncode.png" alt="DragonCode" width="120"></a></td>
 <td>感谢 DragonCode 对本项目的支持。DragonCode 为 cc-connect 用户准备了专属福利：通过 <a href="https://dragoncode.codes/register?ref=23ZELCPX">此链接</a> 注册即可开始体验。</td>
-</tr>
-
-<tr>
-<td width="150"><a href="https://coder.visioncoder.cn"><img src="assets/sponsors/visioncoder.png" alt="VisionCoder" width="120"></a></td>
-<td>感谢 VisionCoder 对本项目的支持。<a href="https://coder.visioncoder.cn">VisionCoder 开发平台</a> 是一个可靠高效的 API 中继服务提供商，提供 Claude Code、Codex、Gemini 等主流 AI 模型，帮助开发者和团队更轻松地集成 AI 功能，提升工作效率。VisionCoder 还为我们的用户提供 <a href="https://coder.visioncoder.cn">Token Plan</a> 限时活动：购买 1 个月，赠送 1 个月。</td>
 </tr>
 
 
