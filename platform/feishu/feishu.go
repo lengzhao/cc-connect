@@ -112,6 +112,11 @@ type replyContext struct {
 	sessionKey string
 }
 
+type feishuUserInfo struct {
+	name  string
+	email string
+}
+
 type Platform struct {
 	mu                         sync.RWMutex
 	platformName               string
@@ -133,6 +138,7 @@ type Platform struct {
 	// noReplyToTrigger: when true, send via Create instead of Im.Message.Reply (no quote to the user's message).
 	noReplyToTrigger bool
 	resolveMentions  bool
+	includeUserEmail bool // include Contact API email in Message.UserEmail when available
 	client           *lark.Client
 	replayClient     *lark.Client
 	replayClientMu   sync.Mutex
@@ -144,7 +150,7 @@ type Platform struct {
 	botOpenID        string
 	peerBots         map[string]string // app_id -> friendly alias, for quoted-reply attribution
 	mentionMap       map[string]string // agent name -> open_id (for outbound @ resolution)
-	userNameCache    sync.Map          // open_id -> display name
+	userNameCache    sync.Map          // open_id -> feishuUserInfo
 	chatNameCache    sync.Map          // chat_id -> chat name
 	chatMemberCache  sync.Map          // chatID -> *chatMemberEntry
 	recalledMu       sync.Mutex
@@ -240,6 +246,7 @@ type imageBatchEntry struct {
 	sessionKey   string
 	userID       string
 	userName     string
+	userEmail    string
 	chatName     string
 	rctx         replyContext
 	quoted       quotedMessage
@@ -311,6 +318,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	shareSessionInChannel, _ := opts["share_session_in_channel"].(bool)
 	threadIsolation, _ := opts["thread_isolation"].(bool)
 	resolveMentionsOpt, _ := opts["resolve_mentions"].(bool)
+	includeUserEmail, _ := opts["include_user_email"].(bool)
 	noReplyToTrigger := false
 	if v, ok := opts["reply_to_trigger"].(bool); ok && !v {
 		noReplyToTrigger = true
@@ -402,6 +410,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		shareSessionInChannel:      shareSessionInChannel,
 		threadIsolation:            threadIsolation,
 		resolveMentions:            resolveMentionsOpt,
+		includeUserEmail:           includeUserEmail,
 		noReplyToTrigger:           noReplyToTrigger,
 		client:                     lark.NewClient(appID, appSecret, clientOpts...),
 		replayClient:               newFeishuReplayClient(appID, appSecret, domain),
@@ -784,12 +793,14 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 		}
 
 		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
+		userName, userEmail := p.resolveUserNameAndEmail(userID)
 		h := p.getHandler()
 		go h(p.dispatchPlatform(), &core.Message{
 			SessionKey:           sessionKey,
 			Platform:             p.platformName,
 			UserID:               userID,
-			UserName:             p.resolveUserName(userID),
+			UserName:             userName,
+			UserEmail:            userEmail,
 			ChatName:             p.resolveChatName(chatID),
 			Content:              responseText,
 			ReplyCtx:             rctx,
@@ -817,12 +828,14 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 	// askq: — AskUserQuestion option selected, forward as user message
 	if strings.HasPrefix(actionVal, "askq:") {
 		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
+		userName, userEmail := p.resolveUserNameAndEmail(userID)
 		h := p.getHandler()
 		go h(p.dispatchPlatform(), &core.Message{
 			SessionKey: sessionKey,
 			Platform:   p.platformName,
 			UserID:     userID,
-			UserName:   p.resolveUserName(userID),
+			UserName:   userName,
+			UserEmail:  userEmail,
 			ChatName:   p.resolveChatName(chatID),
 			Content:    actionVal,
 			ReplyCtx:   rctx,
@@ -853,12 +866,14 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 
 		slog.Info(p.tag()+": card action dispatched as command", "cmd", cmdText, "user", userID)
 
+		userName, userEmail := p.resolveUserNameAndEmail(userID)
 		h := p.getHandler()
 		go h(p.dispatchPlatform(), &core.Message{
 			SessionKey: sessionKey,
 			Platform:   p.platformName,
 			UserID:     userID,
-			UserName:   p.resolveUserName(userID),
+			UserName:   userName,
+			UserEmail:  userEmail,
 			ChatName:   p.resolveChatName(chatID),
 			Content:    cmdText,
 			ReplyCtx:   rctx,
@@ -1219,7 +1234,7 @@ func (p *Platform) dispatchImageBatchEntry(entry *imageBatchEntry) {
 	p.dispatchCoreMessage(&core.Message{
 		SessionKey: entry.sessionKey, Platform: p.platformName,
 		MessageID: canonicalID,
-		UserID:    entry.userID, UserName: entry.userName, ChatName: entry.chatName,
+		UserID:    entry.userID, UserName: entry.userName, UserEmail: entry.userEmail, ChatName: entry.chatName,
 		Content:           "",
 		ExtraContent:      entry.quoted.text,
 		Images:            append(entry.quoted.images, entry.images...),
@@ -1417,10 +1432,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 	}
 
 	// Resolve user and chat names asynchronously so SDK dispatcher is not blocked.
-	userName := ""
-	if userID != "" {
-		userName = p.resolveUserName(userID)
-	}
+	userName, userEmail := p.resolveUserNameAndEmail(userID)
 	chatName := p.resolveChatName(chatID)
 
 	// If this message is a reply to another message, fetch the quoted content
@@ -1454,7 +1466,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 		p.dispatchCoreMessage(&core.Message{
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
-			UserID:    userID, UserName: userName, ChatName: chatName,
+			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Content: text, ExtraContent: quoted.text, Images: quoted.images, ReplyCtx: rctx,
 			UserMessageTimeMs: createTimeMs,
 		})
@@ -1487,6 +1499,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 				sessionKey:   sessionKey,
 				userID:       userID,
 				userName:     userName,
+				userEmail:    userEmail,
 				chatName:     chatName,
 				rctx:         rctx,
 				images:       []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
@@ -1499,7 +1512,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 		p.dispatchCoreMessage(&core.Message{
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
-			UserID:    userID, UserName: userName, ChatName: chatName,
+			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Content:           "",
 			ExtraContent:      quoted.text,
 			Images:            append(quoted.images, core.ImageAttachment{MimeType: mimeType, Data: imgData}),
@@ -1528,7 +1541,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 		p.dispatchCoreMessage(&core.Message{
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
-			UserID:    userID, UserName: userName, ChatName: chatName,
+			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Audio: &core.AudioAttachment{
 				MimeType: "audio/opus",
 				Data:     audioData,
@@ -1548,7 +1561,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 		p.dispatchCoreMessage(&core.Message{
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
-			UserID:    userID, UserName: userName, ChatName: chatName,
+			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Content: text, ExtraContent: quoted.text, Images: append(quoted.images, images...),
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
@@ -1577,7 +1590,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 		p.dispatchCoreMessage(&core.Message{
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
-			UserID:    userID, UserName: userName, ChatName: chatName,
+			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Files: []core.FileAttachment{{
 				MimeType: mimeType,
 				Data:     fileData,
@@ -1596,7 +1609,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 		coreMsg := &core.Message{
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
-			UserID:    userID, UserName: userName, ChatName: chatName,
+			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Content:           text,
 			Images:            images,
 			Files:             files,
@@ -1620,7 +1633,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			p.dispatchCoreMessage(&core.Message{
 				SessionKey: sessionKey, Platform: p.platformName,
 				MessageID: messageID,
-				UserID:    userID, UserName: userName, ChatName: chatName,
+				UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 				Content: "[sticker]", ExtraContent: quoted.text, ReplyCtx: rctx,
 				UserMessageTimeMs: createTimeMs,
 			})
@@ -1629,7 +1642,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 		p.dispatchCoreMessage(&core.Message{
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
-			UserID:    userID, UserName: userName, ChatName: chatName,
+			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Images:            []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
@@ -1666,7 +1679,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 		p.dispatchCoreMessage(&core.Message{
 			SessionKey: sessionKey, Platform: p.platformName,
 			MessageID: messageID,
-			UserID:    userID, UserName: userName, ChatName: chatName,
+			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Content: text, ExtraContent: quoted.text, Images: images, ReplyCtx: rctx,
 			UserMessageTimeMs: createTimeMs,
 		})
@@ -1678,11 +1691,40 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 
 // resolveUserName fetches a user's display name via the Contact API, with caching.
 func (p *Platform) resolveUserName(openID string) string {
+	name, _ := p.cachedUserInfo(openID)
+	return name
+}
+
+func (p *Platform) resolveUserNameAndEmail(openID string) (string, string) {
+	name, email := p.cachedUserInfo(openID)
+	if !p.includeUserEmail {
+		email = ""
+	}
+	return name, email
+}
+
+func feishuUserEmailFromContact(user *larkcontact.User) string {
+	if user == nil {
+		return ""
+	}
+	if user.Email != nil {
+		if email := strings.TrimSpace(*user.Email); email != "" {
+			return email
+		}
+	}
+	if user.EnterpriseEmail != nil {
+		return strings.TrimSpace(*user.EnterpriseEmail)
+	}
+	return ""
+}
+
+func (p *Platform) cachedUserInfo(openID string) (name, email string) {
 	if !isValidFeishuLookupID(openID) {
-		return openID
+		return openID, ""
 	}
 	if cached, ok := p.userNameCache.Load(openID); ok {
-		return cached.(string)
+		info := cached.(feishuUserInfo)
+		return info.name, info.email
 	}
 	resp, err := p.client.Contact.User.Get(context.Background(),
 		larkcontact.NewGetUserReqBuilder().
@@ -1690,16 +1732,21 @@ func (p *Platform) resolveUserName(openID string) string {
 			UserIdType("open_id").
 			Build())
 	if err != nil {
-		slog.Debug(p.tag()+": resolve user name failed", "open_id", openID, "error", err)
-		return openID
+		slog.Debug(p.tag()+": resolve user info failed", "open_id", openID, "error", err)
+		return openID, ""
 	}
-	if !resp.Success() || resp.Data == nil || resp.Data.User == nil || resp.Data.User.Name == nil {
-		slog.Debug(p.tag()+": resolve user name: no data", "open_id", openID, "code", resp.Code)
-		return openID
+	if !resp.Success() || resp.Data == nil || resp.Data.User == nil {
+		slog.Debug(p.tag()+": resolve user info: no data", "open_id", openID, "code", resp.Code)
+		return openID, ""
 	}
-	name := *resp.Data.User.Name
-	p.userNameCache.Store(openID, name)
-	return name
+	user := resp.Data.User
+	name = openID
+	if user.Name != nil && strings.TrimSpace(*user.Name) != "" {
+		name = strings.TrimSpace(*user.Name)
+	}
+	email = feishuUserEmailFromContact(user)
+	p.userNameCache.Store(openID, feishuUserInfo{name: name, email: email})
+	return name, email
 }
 
 func userIDFromEvent(id *larkim.UserId) string {
@@ -4878,7 +4925,7 @@ func (p *Platform) onBotMenu(event *larkapplication.P2BotMenuV6) error {
 		content = "/" + content
 	}
 
-	userName := p.resolveUserName(userID)
+	userName, userEmail := p.resolveUserNameAndEmail(userID)
 	sessionKey := p.platformName + ":" + userID + ":" + userID
 
 	p.getHandler()(p.dispatchPlatform(), &core.Message{
@@ -4887,6 +4934,7 @@ func (p *Platform) onBotMenu(event *larkapplication.P2BotMenuV6) error {
 		Content:    content,
 		UserID:     userID,
 		UserName:   userName,
+		UserEmail:  userEmail,
 		ReplyCtx:   replyContext{chatID: userID, sessionKey: sessionKey},
 	})
 	return nil

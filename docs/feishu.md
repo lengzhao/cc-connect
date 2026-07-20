@@ -154,6 +154,7 @@ app_secret = "QhkMpxxxxxxxxxxxxxxxxxxxx"
 | 权限名称 | 权限标识 | 用途 |
 |---------|---------|------|
 | 获取与更新用户基本信息 | `contact:user.base:readonly` | 获取用户信息 |
+| 获取用户邮箱信息 | `contact:user.email:readonly` | 可选：配合 `include_user_email = true` 向 Agent / hooks 注入发送者邮箱 |
 | 获取群组中用户@机器人消息 | `im:message.group_at_msg:readonly` | 接收群消息 |
 | 读取用户发给机器人的单聊消息 | `im:message.p2p_msg:readonly` | 接收私聊消息 |
 | 获取群组中所有消息（敏感权限） | `im:message.group_msg` | 读取群消息内容 |
@@ -429,6 +430,39 @@ BOT-B 机器人会收到飞书 @ 事件并被触发。
 - `@name` 必须与 `mention_map` 的 key 完全一致（区分大小写）。
 - 飞书机器人的 `open_id` 是**应用级别**的，与群聊无关；同一个机器人在不同群的 `open_id` 一致。
 - 被 @ 的机器人需要在**目标群里**，且该群已开启机器人能力，否则飞书不会派发 @ 事件。
+
+---
+
+## 发送者邮箱注入（`include_user_email`）
+
+与 Slack 类似，可在项目级 `inject_sender = true` 时，把发送者邮箱注入 Agent prompt（`sender_email="..."`），并通过 hooks 的 `CC_HOOK_USER_EMAIL` 暴露给 cc-connect 插件。
+
+默认关闭。开启方式：
+
+```toml
+[projects]
+inject_sender = true
+
+[projects.platforms.options]
+include_user_email = true
+```
+
+### 权限与数据范围
+
+除 `contact:user.base:readonly` 外，还需申请 **`contact:user.email:readonly`**（获取用户邮箱信息）。若个人邮箱为空，会尝试使用 `enterprise_email`（企业邮箱，需租户开通飞书邮箱服务）。
+
+目标用户必须在应用的**通讯录权限范围**内，否则 Contact API 不会返回邮箱；cc-connect 会省略 `sender_email` 并继续正常处理消息。
+
+### 示例
+
+开启后 Agent 收到的消息前缀类似：
+
+```text
+[cc-connect sender_id=ou_xxx sender_name="张三" sender_email="zhangsan@example.com" platform=feishu chat_id=oc_xxx]
+用户消息
+```
+
+若飞书未返回邮箱，行为与 Slack 一致：不注入 `sender_email`，不影响对话。
 
 ---
 

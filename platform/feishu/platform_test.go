@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/chenhg5/cc-connect/core"
 	callback "github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
+	larkcontact "github.com/larksuite/oapi-sdk-go/v3/service/contact/v3"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
@@ -922,6 +925,71 @@ func TestResolveUserNameSkipsInvalidLookupID(t *testing.T) {
 		if got := p.resolveUserName(id); got != id {
 			t.Fatalf("resolveUserName(%q) = %q, want unchanged", id, got)
 		}
+	}
+}
+
+func TestFeishuUserEmailFromContact(t *testing.T) {
+	email := "alice@example.com"
+	enterprise := "alice@corp.com"
+	if got := feishuUserEmailFromContact(&larkcontact.User{Email: &email}); got != email {
+		t.Fatalf("personal email = %q, want %q", got, email)
+	}
+	if got := feishuUserEmailFromContact(&larkcontact.User{EnterpriseEmail: &enterprise}); got != enterprise {
+		t.Fatalf("enterprise fallback = %q, want %q", got, enterprise)
+	}
+	blank := "   "
+	if got := feishuUserEmailFromContact(&larkcontact.User{Email: &blank, EnterpriseEmail: &enterprise}); got != enterprise {
+		t.Fatalf("blank personal should fall back to enterprise, got %q", got)
+	}
+}
+
+func TestResolveUserNameAndEmail(t *testing.T) {
+	const openID = "ou_alice"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/open-apis/auth/v3/tenant_access_token/internal":
+			writeJSON(t, w, map[string]any{
+				"code":                0,
+				"msg":                 "success",
+				"expire":              7200,
+				"tenant_access_token": "tenant-token",
+			})
+		case strings.HasPrefix(r.URL.Path, "/open-apis/contact/v3/users/"):
+			writeJSON(t, w, map[string]any{
+				"code": 0,
+				"msg":  "success",
+				"data": map[string]any{
+					"user": map[string]any{
+						"name":  "Alice",
+						"email": "alice@example.com",
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	p := &Platform{
+		platformName:     "feishu",
+		includeUserEmail: true,
+		client: lark.NewClient("cli_test", "secret",
+			lark.WithOpenBaseUrl(srv.URL),
+			lark.WithHttpClient(srv.Client()),
+		),
+	}
+
+	name, email := p.resolveUserNameAndEmail(openID)
+	if name != "Alice" || email != "alice@example.com" {
+		t.Fatalf("resolveUserNameAndEmail = (%q, %q), want (Alice, alice@example.com)", name, email)
+	}
+
+	p.includeUserEmail = false
+	_, emailDisabled := p.resolveUserNameAndEmail(openID)
+	if emailDisabled != "" {
+		t.Fatalf("email should be omitted when include_user_email=false, got %q", emailDisabled)
 	}
 }
 

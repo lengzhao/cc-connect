@@ -1054,6 +1054,8 @@ app_secret = "your-feishu-app-secret"
 #                              # 启用飞书交互式卡片（默认 true）；设为 false 时强制回退纯文本回复
 # allow_from = "*"          # Allowed user open_ids, comma-separated; "*" = all (default). Use /whoami to get your open_id.
 #                              # 允许的用户 open_id，逗号分隔；"*" 表示所有（默认）。发送 /whoami 获取你的 open_id。
+# include_user_email = false  # Include sender email in inject_sender / hooks when Contact API returns it; requires contact:user.email:readonly
+#                              # 在 inject_sender / hooks 中注入发送者邮箱（Contact API 有返回时）；需 contact:user.email:readonly 权限
 # allow_chat = "*"          # Allowed group chat_ids, comma-separated; "*" = all (default). Find chat_id in group settings.
 #                           # 允许的群聊 chat_id，逗号分隔；"*" 表示所有（默认）。在群设置中查看 chat_id。
 # group_only = false        # If true, only respond to group chat messages; ignore private (P2P) messages (default: false)
@@ -1115,6 +1117,7 @@ app_secret = "your-feishu-app-secret"
 # encrypt_key = ""               # Event encrypt key (optional) / 事件加密密钥（可选）
 # enable_feishu_card = true
 # allow_from = "*"
+# include_user_email = false  # Same as Feishu; requires contact:user.email:readonly on Lark app
 # reaction_emoji = "OnIt"
 # done_emoji = "none"
 # progress_style = "legacy"  # legacy | compact | card
