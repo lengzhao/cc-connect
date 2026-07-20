@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.2.0**（2026-07-16）<br>
+> 版本：**v1.2.1**（2026-07-21）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
 
 ## 1. 概述
 
@@ -269,6 +269,30 @@ Agent 收到类似前缀（需开启 `inject_context`）：
 - 已映射 header 会加入 CORS `Access-Control-Allow-Headers`。
 
 详见 [Agent Context Injection 设计](./plans/2026-07-15-agent-context-injection-design.md)。
+
+### 3.3.2 Forward headers（HTTP header → Hooks）
+
+与 a2a 一致：通过 `forward_headers` 白名单将入站 HTTP header 暴露给 cc-connect hooks（`headers` / `CC_HOOK_HEADERS_JSON`），**不**写入 Agent prompt。
+
+```toml
+forward_headers = ["X-Tenant-Id", "X-Trace-Id"]
+```
+
+请求示例：
+
+```http
+X-Tenant-Id: acme
+X-Trace-Id: trace-42
+```
+
+注意：
+
+- 与 body `metadata`（→ hook `ctx`）互补；与 `agent_context_headers`（→ Agent）正交，同一 header 可同时配置两边。
+- `Authorization` / `Cookie` / `Proxy-Authorization` / `Set-Cookie` / `WWW-Authenticate` / `Proxy-Authenticate` 即使列入白名单也会被过滤。
+- 白名单 header 会加入 CORS `Access-Control-Allow-Headers`。
+- 仅 `POST /chat-messages` 采集；cancel / interaction respond 不采集。
+
+详见 [forward_headers 设计](./plans/2026-07-21-chat-api-forward-headers-design.md)。
 
 **SSE 响应**（`Accept: text/event-stream`、`*/*` 或省略）
 
@@ -690,6 +714,7 @@ auto_generate_name_mode = "heuristic"
 include_answer_in_message_end = false
 max_runs = 1000
 run_ttl = "2h"
+# forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # hooks-only; not agent prompt
 
 # Optional embedded debug console (same origin): http://127.0.0.1:8030/debug/
 # debug_ui = true
@@ -709,6 +734,7 @@ task_id = "X-Task-ID"
 | `user_name_header` | `X-Chat-API-User-Name` | 可选显示名 header |
 | `channel_header` | `X-Chat-API-Channel` | 可选工作区 channel header |
 | `agent_context_headers` | 空 | 字段 → HTTP header 映射，写入 `Message.AgentContext` |
+| `forward_headers` | 空 | 白名单 HTTP header → hooks（`headers` / `CC_HOOK_HEADERS_JSON`），不进 Agent；敏感头始终拦截 |
 | `debug_ui` | `false` | 为 `true` 时提供同源调试页 `/debug/`（不鉴权打开页面；调 API 仍需 token） |
 | `cors_origins` | 空 | CORS 允许来源 |
 | `request_timeout` / `timeout` | `30m` | SSE 等待上限 |
@@ -731,6 +757,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.2.1 | 2026-07-21 | 新增 `forward_headers`：白名单入站 header 仅进 hooks（对齐 a2a） |
 | v1.2.0 | 2026-07-16 | 新增会话详情、异步 Name 生成及 `auto_generate_name_mode` |
 | v1.1.2 | 2026-07-15 | 合并确认窗口与 `tool_call`/`tool_result` SSE、debug UI |
 | v1.1.1 | 2026-07-14 | 确认窗口硬化：公共 `decision`/`option_id(s)`、SSE actions 公共 id、`ping`、`interaction_superseded`、结构化超时错误 |

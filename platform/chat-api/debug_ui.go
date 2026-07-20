@@ -56,6 +56,7 @@ func (p *Platform) registerDebugUI(mux *http.ServeMux) {
 				"user_header":           p.userHeader,
 				"channel_header":        p.channelHeader,
 				"agent_context_headers": p.agentContextHeaders,
+				"forward_headers":       p.forwardHeaders,
 			})
 		default:
 			http.NotFound(w, r)

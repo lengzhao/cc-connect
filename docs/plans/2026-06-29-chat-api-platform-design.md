@@ -110,7 +110,7 @@ Pagination: unified `cursor` + `next_cursor` + `has_more`.
 | Dispatch + queue | `Engine.handleMessage` |
 | Attachments | `core.Message` fields |
 | Streaming | `platform/a2a` StreamingCard + pendingStore |
-| Hooks | `HookContextProvider` |
+| Hooks | `HookContextProvider` (`metadata` → ctx; `forward_headers` → headers) |
 | HTTP auth / CORS | Bridge / Management middleware patterns |
 
 ### Build in `platform/chat-api`
@@ -127,6 +127,7 @@ Pagination: unified `cursor` + `next_cursor` + `has_more`.
 | Item | Behavior |
 |------|----------|
 | Conversation / message `metadata` | Not in API responses; hooks-only on send |
+| `forward_headers` | Whitelisted inbound HTTP headers → hooks only (`CC_HOOK_HEADERS_JSON`); never agent prompt; sensitive headers blocked |
 | Historical attachments | Not replayed |
 | `auto_generate_name` | Truncate first `query` (32 runes), no LLM |
 | Blocking JSON | BFF aggregates SSE or wait for v1.1 |

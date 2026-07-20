@@ -279,6 +279,12 @@ func TestCodexPromptPreamble_EmptyIsNoop(t *testing.T) {
 }
 
 func TestGetModelAndReasoningEffort_FromRuntimeConfigWhenUnset(t *testing.T) {
+	// Full `go test ./...` can starve this RPC under load; keep production
+	// timeout low but give the fake app-server enough headroom in tests.
+	prevTimeout := codexRuntimeConfigTimeout
+	codexRuntimeConfigTimeout = 10 * time.Second
+	t.Cleanup(func() { codexRuntimeConfigTimeout = prevTimeout })
+
 	workDir := t.TempDir()
 	binDir := filepath.Join(workDir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {

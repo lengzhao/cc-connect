@@ -54,6 +54,7 @@ func (p *Platform) setCORS(w http.ResponseWriter, r *http.Request) {
 				p.userHeader, p.userNameHeader, p.channelHeader,
 			}
 			allowHeaders = append(allowHeaders, p.agentContextHeaders.headerNames()...)
+			allowHeaders = append(allowHeaders, p.forwardHeaders...)
 			w.Header().Set("Access-Control-Allow-Headers", strings.Join(allowHeaders, ", "))
 			return
 		}

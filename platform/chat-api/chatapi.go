@@ -33,6 +33,7 @@ type Platform struct {
 	userNameHeader            string
 	channelHeader             string
 	agentContextHeaders       agentContextHeaderMap
+	forwardHeaders            []string
 	corsOrigins               []string
 	requestTimeout            time.Duration
 	interactionTimeout        time.Duration
@@ -114,6 +115,7 @@ func New(opts map[string]any) (core.Platform, error) {
 	if err != nil {
 		return nil, err
 	}
+	forwardHeaders := normalizeForwardHeaderNames(stringSliceOption(opts, "forward_headers"))
 
 	busyPolicy := strings.ToLower(stringOption(opts, "busy_policy", busyPolicyQueue))
 	if busyPolicy != busyPolicyQueue && busyPolicy != busyPolicyReject {
@@ -128,6 +130,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		userNameHeader:            userNameHeader,
 		channelHeader:             channelHeader,
 		agentContextHeaders:       agentContextHeaders,
+		forwardHeaders:            forwardHeaders,
 		corsOrigins:               stringSliceOption(opts, "cors_origins"),
 		requestTimeout:            timeout,
 		interactionTimeout:        interactionTimeout,

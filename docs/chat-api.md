@@ -1,8 +1,9 @@
 # chat-api Platform — API v1
 
-> Version: **v1.1.2** (2026-07-15)  
+> Version: **v1.2.1** (2026-07-21)  
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
-> Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)
+> Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
+> Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)
 
 ## Overview
 
@@ -61,6 +62,7 @@ name_model = "gpt-4o-mini"
 name_provider_type = "openai" # openai | openai-compatible | claude
 interaction_timeout = "10m"
 sse_ping_interval = "15s"
+# forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # hooks only (CC_HOOK_HEADERS_JSON); not agent prompt
 ```
 
 See [chat-api.zh-CN.md](./chat-api.zh-CN.md) for full field reference and examples.

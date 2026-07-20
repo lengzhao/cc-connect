@@ -47,7 +47,8 @@ type replyContext struct {
 	conversationID string
 	messageID      string
 	metadata       map[string]any
-	interactionAck bool // Reply is an interaction acknowledgment; do not end the turn
+	headers        map[string]string // whitelisted inbound HTTP headers (hooks only, not agent prompt)
+	interactionAck bool              // Reply is an interaction acknowledgment; do not end the turn
 	interactionID  string
 }
 
@@ -159,6 +160,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		conversationID: session.ID,
 		messageID:      msgID,
 		metadata:       body.Metadata,
+		headers:        collectForwardedHeaders(p.forwardHeaders, r),
 	}
 
 	if err := sse.Event("message", map[string]string{
@@ -422,14 +424,25 @@ func (p *Platform) OnProcessingEnd(_ context.Context, replyCtx any, _ core.Proce
 	return nil
 }
 
+// HookContext returns whitelisted inbound headers and body metadata for this
+// turn. Values are delivered only to cc-connect hooks, not to the agent prompt.
 func (p *Platform) HookContext(replyCtx any) core.HookContext {
 	rc, ok := replyCtx.(*replyContext)
-	if !ok || rc == nil || len(rc.metadata) == 0 {
+	if !ok || rc == nil {
 		return core.HookContext{}
 	}
-	out := core.HookContext{Context: make(map[string]any, len(rc.metadata))}
-	for k, v := range rc.metadata {
-		out.Context[k] = v
+	out := core.HookContext{}
+	if len(rc.headers) > 0 {
+		out.Headers = make(map[string]string, len(rc.headers))
+		for k, v := range rc.headers {
+			out.Headers[k] = v
+		}
+	}
+	if len(rc.metadata) > 0 {
+		out.Context = make(map[string]any, len(rc.metadata))
+		for k, v := range rc.metadata {
+			out.Context[k] = v
+		}
 	}
 	return out
 }

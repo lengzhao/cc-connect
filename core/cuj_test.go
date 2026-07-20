@@ -229,6 +229,7 @@ func newCUJEnv(t *testing.T) *cujEnv {
 	agent := &cujAgent{}
 	storePath := dir + "/sessions.json"
 	e := NewEngine("test", agent, []Platform{plat}, storePath, LangEnglish)
+	t.Cleanup(func() { _ = e.Stop() })
 	return &cujEnv{
 		t:       t,
 		engine:  e,
@@ -1126,6 +1127,7 @@ func TestCUJ_A3_ImageReachesAgent(t *testing.T) {
 	agent := &cujAgent{}
 	dir := t.TempDir()
 	e := NewEngine("test", agent, []Platform{plat}, dir+"/sessions.json", LangEnglish)
+	t.Cleanup(func() { _ = e.Stop() })
 
 	msg := &Message{
 		SessionKey: "test:img", Platform: "test", MessageID: "img1",
@@ -1136,13 +1138,15 @@ func TestCUJ_A3_ImageReachesAgent(t *testing.T) {
 	}
 	e.ReceiveMessage(plat, msg)
 
+	// Wait for the turn to finish (not just session spawn). Returning early
+	// races TempDir cleanup against SessionManager.Save / AtomicWriteFile.
 	deadline := time.After(2 * time.Second)
 	for {
 		agent.mu.Lock()
 		n := len(agent.sessions)
 		agent.mu.Unlock()
-		if n > 0 {
-			break
+		if n > 0 && len(plat.getSent()) > 0 {
+			return
 		}
 		select {
 		case <-deadline:
@@ -1161,6 +1165,7 @@ func TestCUJ_A4_VoiceMessageWithoutSTTSurfacesClearMessage(t *testing.T) {
 	agent := &cujAgent{}
 	dir := t.TempDir()
 	e := NewEngine("test", agent, []Platform{plat}, dir+"/sessions.json", LangEnglish)
+	t.Cleanup(func() { _ = e.Stop() })
 
 	msg := &Message{
 		SessionKey: "test:voice", Platform: "test", MessageID: "v1",
@@ -1190,6 +1195,7 @@ func TestCUJ_A5_FileReachesAgent(t *testing.T) {
 	agent := &cujAgent{}
 	dir := t.TempDir()
 	e := NewEngine("test", agent, []Platform{plat}, dir+"/sessions.json", LangEnglish)
+	t.Cleanup(func() { _ = e.Stop() })
 
 	msg := &Message{
 		SessionKey: "test:file", Platform: "test", MessageID: "f1",
@@ -1200,12 +1206,13 @@ func TestCUJ_A5_FileReachesAgent(t *testing.T) {
 	}
 	e.ReceiveMessage(plat, msg)
 
+	// Wait for turn completion to avoid TempDir cleanup racing session Save.
 	deadline := time.After(2 * time.Second)
 	for {
 		agent.mu.Lock()
 		n := len(agent.sessions)
 		agent.mu.Unlock()
-		if n > 0 {
+		if n > 0 && len(plat.getSent()) > 0 {
 			return
 		}
 		select {

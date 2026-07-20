@@ -429,7 +429,7 @@ level = "info" # debug, info, warn, error
 #   CC_HOOK_PLATFORM        — platform name, e.g. slack, a2a / 平台名称，如 slack、a2a
 #   CC_HOOK_CHANNEL_NAME    — human-readable channel/chat name when available / 可用时为频道或会话名称
 #   CC_HOOK_CTX_JSON        — dynamic platform context JSON, e.g. A2A metadata / 动态平台上下文 JSON，如 A2A metadata
-#   CC_HOOK_HEADERS_JSON    — whitelisted inbound headers JSON, e.g. A2A forward_headers / 白名单入站 header JSON，如 A2A forward_headers
+#   CC_HOOK_HEADERS_JSON    — whitelisted inbound headers JSON, e.g. A2A / chat-api forward_headers / 白名单入站 header JSON，如 A2A / chat-api forward_headers
 # These CC_HOOK_* variables are also injected into [[commands]].exec as command.executed,
 # and the same event is emitted to matching [[hooks]] rules.
 # 这些 CC_HOOK_* 变量同样会以 command.executed 事件注入到 [[commands]].exec，
@@ -1368,6 +1368,14 @@ app_secret = "your-feishu-app-secret"
 # inject_context allowlists the same fields). Body metadata stays hooks-only.
 # 将 HTTP header 映射到 Message.AgentContext（需配合项目 inject_context 白名单才会进入 Agent）。
 # body metadata 仍仅进 hooks，不进 Agent。
+#
+# Whitelist inbound HTTP headers for cc-connect hooks only (not agent prompt).
+# Same semantics as A2A forward_headers: HTTP hook JSON "headers", command hooks CC_HOOK_HEADERS_JSON.
+# Authorization/Cookie/Proxy-Authorization/Set-Cookie/WWW-Authenticate/Proxy-Authenticate are always blocked.
+# Names are also added to CORS Access-Control-Allow-Headers.
+# 白名单入站 HTTP 头，仅暴露给 cc-connect hooks（不写入 Agent 提示词）；语义与 A2A forward_headers 一致。
+# 敏感头即使配置也会被过滤；白名单名会加入 CORS Allow-Headers。
+# forward_headers = ["X-Tenant-Id", "X-Trace-Id", "X-AgentHub-Run-Id"]
 #
 # [projects.platforms.options.agent_context_headers]
 # language = "X-Language"
