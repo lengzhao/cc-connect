@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 )
 
@@ -47,9 +48,9 @@ type TurnStreamEvent struct {
 	Tool     TurnToolCall // Upsert / Result (Result fills Tool.Result)
 }
 
-// turnStreamEmitter owns streaming-card turn state and dual-writes:
-//   - always markdown via StreamingCard.Update (Phase 1; DingTalk/Slack forever)
-//   - optional typed events when the card implements StructuredStreamingCard
+// turnStreamEmitter owns streaming-card turn state and writes:
+//   - typed events when the card implements StructuredStreamingCard
+//   - markdown via StreamingCard.Update otherwise (DingTalk/Slack)
 type turnStreamEmitter struct {
 	card     StreamingCard
 	structed StructuredStreamingCard // nil if card does not implement
@@ -120,16 +121,26 @@ func (e *turnStreamEmitter) emitMarkdownUpdate(ctx context.Context) {
 	if e == nil || e.card == nil || e.card.Failed() {
 		return
 	}
-	// Phase 1 dual-write: always push markdown so DingTalk/Slack/chat-api
-	// parsers keep working. Phase 2 may skip this when structed != nil.
-	_ = e.card.Update(ctx, buildCardContent(e.thinking, e.cardTools(), e.answer.String()))
+	// Structured consumers already received typed events; skip redundant
+	// markdown Update (chat-api ignores it after the first event anyway).
+	if e.structed != nil {
+		return
+	}
+	if err := e.card.Update(ctx, buildCardContent(e.thinking, e.cardTools(), e.answer.String())); err != nil {
+		slog.Warn("streaming card update failed", "error", err)
+	}
 }
 
 func (e *turnStreamEmitter) emitEvent(ctx context.Context, ev TurnStreamEvent) {
 	if e == nil || e.structed == nil {
 		return
 	}
-	_ = e.structed.OnTurnStreamEvent(ctx, ev)
+	if err := e.structed.OnTurnStreamEvent(ctx, ev); err != nil {
+		slog.Warn("structured streaming event failed",
+			"kind", int(ev.Kind),
+			"error", err,
+		)
+	}
 }
 
 func (e *turnStreamEmitter) OnThinking(ctx context.Context, text string) {
@@ -171,8 +182,8 @@ func (e *turnStreamEmitter) OnToolResult(ctx context.Context, index int, name st
 		}
 	}
 	e.emitEvent(ctx, TurnStreamEvent{Kind: TurnStreamToolResult, Tool: tc})
-	// Markdown layout does not include tool results today; still refresh so
-	// dual-write stays consistent if buildCardContent gains result fields later.
+	// Markdown layout does not include tool results; skip Update unless a
+	// markdown-only card needs a refresh (no-op content-wise today).
 	e.emitMarkdownUpdate(ctx)
 }
 

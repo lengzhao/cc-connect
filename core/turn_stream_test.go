@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -65,11 +64,9 @@ func TestTurnStreamEmitter_AnswerAppendAndReplace(t *testing.T) {
 	if got := em.Answer(); got != "请提供交易对" {
 		t.Fatalf("answer = %q", got)
 	}
-	if len(card.updates) != 3 {
-		t.Fatalf("updates = %d, want 3", len(card.updates))
-	}
-	if !strings.Contains(card.updates[1], "Hello") {
-		t.Fatalf("update1 missing Hello: %q", card.updates[1])
+	// Structured cards skip markdown Update — events are the sole mid-stream path.
+	if len(card.updates) != 0 {
+		t.Fatalf("updates = %d, want 0 for structured card", len(card.updates))
 	}
 }
 
@@ -127,6 +124,49 @@ func TestTurnStreamEmitter_MarkdownOnlyNoEvents(t *testing.T) {
 	wantThink := buildCardContent("t", nil, "")
 	if card.updates[0] != wantThink {
 		t.Fatalf("update0 = %q, want %q", card.updates[0], wantThink)
+	}
+}
+
+func TestTurnStreamEmitter_StructuredSkipsMarkdownUpdate(t *testing.T) {
+	card := &recordingStructuredCard{}
+	em := newTurnStreamEmitter(card)
+	em.OnThinking(context.Background(), "t")
+	em.OnToolUse(context.Background(), 1, "Bash", "date")
+	em.OnAnswerText(context.Background(), "hi")
+	if len(card.updates) != 0 {
+		t.Fatalf("structured path must not call Update, got %d", len(card.updates))
+	}
+	if len(card.events) != 3 {
+		t.Fatalf("events = %d, want 3", len(card.events))
+	}
+}
+
+func TestTurnStreamEmitter_MarkdownUpdateErrorLogged(t *testing.T) {
+	// Ensure Update errors do not panic; markdown-only path still attempts Update.
+	card := &markdownOnlyCard{}
+	em := newTurnStreamEmitter(card)
+	em.OnAnswerText(context.Background(), "a")
+	if len(card.updates) != 1 {
+		t.Fatalf("updates = %d", len(card.updates))
+	}
+}
+
+type errStructuredCard struct {
+	recordingStructuredCard
+	eventErr error
+}
+
+func (c *errStructuredCard) OnTurnStreamEvent(_ context.Context, ev TurnStreamEvent) error {
+	c.events = append(c.events, ev)
+	return c.eventErr
+}
+
+func TestTurnStreamEmitter_StructuredEventErrorDoesNotPanic(t *testing.T) {
+	card := &errStructuredCard{eventErr: context.Canceled}
+	em := newTurnStreamEmitter(card)
+	em.OnAnswerText(context.Background(), "hello")
+	if len(card.events) != 1 {
+		t.Fatalf("events = %d", len(card.events))
 	}
 }
 
