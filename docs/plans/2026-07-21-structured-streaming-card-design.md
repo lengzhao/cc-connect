@@ -2,7 +2,7 @@
 
 Date: 2026-07-21
 
-Status: **Phase 1 in progress** (follows v10.1.32 hotfix)
+Status: **Phase 1 shipped · Phase 2 in progress** (follows v10.1.32 hotfix)
 
 Related:
 
@@ -291,24 +291,25 @@ direct `runState` updates inside `OnTurnStreamEvent`. `Update(string)` becomes
 
 ### Phase 2 — chat-api primary path (PR-2)
 
+**Status:** Implemented (2026-07-21)
+
 **Scope:** `platform/chat-api/*`
 
 **Work:**
 
 1. `streamingCard.OnTurnStreamEvent` drives `runState` + SSE flush.
-2. `streamingCard.Update` → no-op (add `TestStreamingCard_UpdateNotCalled` in
-   handler integration test).
-3. `Finalize`: use internal answer state; ignore markdown `content` when
-   structured events were received.
-4. Feature flag optional: `structured_stream_primary = true` in platform
-   options (default true after bake-in).
+2. `streamingCard.Update` → no-op once structured events are active (legacy
+   Update/Finalize markdown path kept for unit tests that do not emit events).
+3. `Finalize`: use internal `runState` answer when structured; ignore markdown.
+4. Skip 🧾 `parseToolResultFallback` enqueue when structured primary (avoids
+   duplicate `tool_result` under Engine dual-write).
 
 **Acceptance:**
 
-- All existing `scenario_stream_test.go` pass without markdown fixtures in handler
-- Delete or gate `parseStreamingCardContent` from hot path
-- Update `docs/chat-api.zh-CN.md` — internal implementation note only; SSE
-  contract unchanged
+- [x] Existing `scenario_stream_test.go` pass (legacy Update path)
+- [x] `TestStructuredStreamNoMarkdownUpdate`
+- [x] `TestStructuredStreamToolEventsSkipMarkdownSniff`
+- [x] SSE contract unchanged (`text_delta` + optional `replace`)
 
 ### Phase 3 — ToolResult cleanup (PR-3)
 

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -393,6 +394,11 @@ func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
 		return nil
 	}
 	if tr, ok := parseToolResultFallback(content); ok {
+		// Phase 2: Engine dual-writes structured ToolResult events; skip 🧾 sniff
+		// when this run already consumes StructuredStreamingCard to avoid duplicates.
+		if run := p.pending.get(rc.runID); run != nil && run.usesStructuredStream() {
+			return nil
+		}
 		if !p.pending.enqueueToolResult(rc.runID, tr) {
 			return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
 		}
@@ -470,12 +476,51 @@ func (c *streamingCard) runID() string {
 	return c.rc.runID
 }
 
+// OnTurnStreamEvent implements core.StructuredStreamingCard. Primary path for
+// Engine dual-write / Phase 2: typed events drive SSE without Markdown parsing.
+func (c *streamingCard) OnTurnStreamEvent(_ context.Context, ev core.TurnStreamEvent) error {
+	id := c.runID()
+	run := c.platform.pending.get(id)
+	if run == nil {
+		return fmt.Errorf("chat-api: run %q is not pending", id)
+	}
+	switch ev.Kind {
+	case core.TurnStreamThinkingReplace:
+		run.setThinking(ev.Thinking)
+	case core.TurnStreamAnswerAppend:
+		run.appendAnswer(ev.Answer)
+	case core.TurnStreamAnswerReplace:
+		run.replaceAnswer(ev.Answer)
+	case core.TurnStreamToolUpsert:
+		run.upsertStructuredTool(strconv.Itoa(ev.Tool.Index), ev.Tool.Name, ev.Tool.Input)
+	case core.TurnStreamToolResult:
+		res := streamToolResult{Name: ev.Tool.Name}
+		if ev.Tool.Result != nil {
+			res.Output = ev.Tool.Result.Output
+			res.Status = ev.Tool.Result.Status
+			res.ExitCode = ev.Tool.Result.ExitCode
+			res.Success = ev.Tool.Result.Success
+			if res.Name == "" {
+				res.Name = ev.Tool.Name
+			}
+		}
+		run.enqueueStructuredToolResult(res)
+	default:
+		slog.Debug("chat-api: ignoring unknown turn stream event", "kind", int(ev.Kind), "run_id", id)
+	}
+	return nil
+}
+
 func (c *streamingCard) Update(_ context.Context, content string) error {
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
-	c.lastSent = content
 	id := c.runID()
+	// Phase 2: once structured events are active, ignore markdown dual-write.
+	if run := c.platform.pending.get(id); run != nil && run.usesStructuredStream() {
+		return nil
+	}
+	c.lastSent = content
 	if !c.platform.pending.setStreamContent(id, content) {
 		return fmt.Errorf("chat-api: run %q is not pending", id)
 	}
@@ -483,17 +528,28 @@ func (c *streamingCard) Update(_ context.Context, content string) error {
 }
 
 func (c *streamingCard) Finalize(_ context.Context, content string) error {
+	id := c.runID()
+	run := c.platform.pending.get(id)
+	if run != nil && run.usesStructuredStream() {
+		// Prefer answer already streamed via TurnStreamEvent; Engine Finalize may
+		// still pass markdown which we deliberately ignore.
+		answer := run.finalAnswer("")
+		if !c.platform.pending.finish(id, pendingResult{answer: answer}) {
+			return fmt.Errorf("chat-api: run %q is not pending", id)
+		}
+		return nil
+	}
+
 	raw := c.lastSent
 	if strings.TrimSpace(content) != "" {
 		raw = content
 		c.lastSent = raw
 	}
-	id := c.runID()
 	thinking, answer := parseStreamingCardContent(raw)
 	if strings.TrimSpace(raw) != "" {
 		// Skip the redundant re-set when the final card matches what Update
 		// already streamed — avoids emitting an extra terminal delta frame.
-		if run := c.platform.pending.get(id); run == nil || !run.contentUnchanged(thinking, answer) {
+		if run == nil || !run.contentUnchanged(thinking, answer) {
 			if !c.platform.pending.setStreamContent(id, raw) {
 				return fmt.Errorf("chat-api: run %q is not pending", id)
 			}
@@ -509,6 +565,9 @@ func (c *streamingCard) Finalize(_ context.Context, content string) error {
 func (c *streamingCard) Failed() bool {
 	return false
 }
+
+var _ core.StreamingCard = (*streamingCard)(nil)
+var _ core.StructuredStreamingCard = (*streamingCard)(nil)
 
 type replyKind int
 

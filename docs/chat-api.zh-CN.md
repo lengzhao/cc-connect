@@ -762,7 +762,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
-| v1.2.2 | 2026-07-21 | SSE `text_delta`/`thinking_delta` 支持可选 `replace`；流式卡片解析不再因答案内 `---` 截断 |
+| v1.2.2 | 2026-07-21 | SSE `text_delta`/`thinking_delta` 支持可选 `replace`；流式卡片解析不再因答案内 `---` 截断；Engine 双写 `StructuredStreamingCard` 事件后 chat-api 优先走结构化路径 |
 | v1.2.1 | 2026-07-21 | 新增 `forward_headers`：白名单入站 header 仅进 hooks（对齐 a2a） |
 | v1.2.0 | 2026-07-16 | 新增会话详情、异步 Name 生成及 `auto_generate_name_mode` |
 | v1.1.2 | 2026-07-15 | 合并确认窗口与 `tool_call`/`tool_result` SSE、debug UI |

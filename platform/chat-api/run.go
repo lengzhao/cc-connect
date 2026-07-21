@@ -78,6 +78,7 @@ type runState struct {
 	toolResultMatchIndex int
 	finalized            bool
 	streamingCardCreated bool
+	structuredPrimary    bool // true after first TurnStreamEvent; skip markdown re-parse
 	sse                  *sseWriter
 	detached             bool
 	pendingEvents        []pendingSSEEvent
@@ -177,6 +178,55 @@ func (r *runState) contentUnchanged(thinking, answer string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.latestThinking == thinking && r.answerText == answer
+}
+
+func (r *runState) usesStructuredStream() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.structuredPrimary
+}
+
+func (r *runState) setThinking(text string) {
+	r.mu.Lock()
+	r.structuredPrimary = true
+	r.latestThinking = text
+	r.mu.Unlock()
+	r.signal()
+}
+
+func (r *runState) appendAnswer(suffix string) {
+	if suffix == "" {
+		return
+	}
+	r.mu.Lock()
+	r.structuredPrimary = true
+	r.answerText += suffix
+	r.mu.Unlock()
+	r.signal()
+}
+
+func (r *runState) replaceAnswer(full string) {
+	r.mu.Lock()
+	r.structuredPrimary = true
+	r.answerText = full
+	r.mu.Unlock()
+	r.signal()
+}
+
+func (r *runState) upsertStructuredTool(id, name, input string) {
+	r.mu.Lock()
+	r.structuredPrimary = true
+	r.mergeToolCallsLocked([]streamToolCall{{ID: id, Name: name, Input: input}})
+	r.mu.Unlock()
+	r.signal()
+}
+
+func (r *runState) enqueueStructuredToolResult(res streamToolResult) {
+	r.mu.Lock()
+	r.structuredPrimary = true
+	r.pendingToolResults = append(r.pendingToolResults, res)
+	r.mu.Unlock()
+	r.signal()
 }
 
 func (r *runState) signal() {
