@@ -1,13 +1,15 @@
 ﻿# Changelog
 
-## Unreleased
+## v10.1.33 (2026-07-21)
 
 ### Fixed
-- **chat-api**: SSE stream no longer truncates answers that contain markdown `---` horizontal rules, and non-prefix answer revisions emit `replace:true` so append-style clients do not duplicate progress lines. See `docs/plans/2026-07-21-chat-api-stream-answer-parse-design.md`.
+- **chat-api**: SSE stream no longer truncates answers that contain markdown `---` horizontal rules, and non-prefix answer revisions emit `replace:true` so append-style clients do not duplicate progress lines. See `docs/plans/2026-07-21-chat-api-stream-answer-parse-design.md`. (also in v10.1.32)
 
 ### Changed
-- **chat-api / core**: Streaming turns dual-write typed `TurnStreamEvent`s via optional `StructuredStreamingCard`. chat-api prefers structured events for SSE; Engine no longer `Reply`s 🧾 tool-result markdown to structured consumers. See `docs/plans/2026-07-21-structured-streaming-card-design.md`.
+- **chat-api / core**: Streaming turns emit typed `TurnStreamEvent`s via optional `StructuredStreamingCard`. chat-api prefers structured events for SSE; Engine no longer `Reply`s 🧾 tool-result markdown to structured consumers. See `docs/plans/2026-07-21-structured-streaming-card-design.md`.
 - **a2a**: Implements `StructuredStreamingCard` so task artifacts stream answer (or thinking) text only, not Engine markdown cards with thinking/tool markers.
+
+## Unreleased
 
 ### Added
 - **Feishu/Lark: sender email injection** via new `include_user_email` platform option (default off). When enabled with project `inject_sender = true`, Contact API email is populated on `Message.UserEmail` for agent prompt `sender_email=...` and hook `CC_HOOK_USER_EMAIL`, matching Slack behavior. Falls back to `enterprise_email` when personal email is empty; requires `contact:user.email:readonly` and user within app contact scope.
