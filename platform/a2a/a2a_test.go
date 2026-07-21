@@ -1117,6 +1117,136 @@ func TestStreamingCardUpdateStreamsArtifactFinalizeCompletes(t *testing.T) {
 	}
 }
 
+func TestStreamingCardStructuredEventsPushAnswerNotMarkdown(t *testing.T) {
+	p := &Platform{pending: newPendingStore(defaultMaxTasks, defaultTaskTTL)}
+	waiter, ok := p.pending.create("task-struct")
+	if !ok {
+		t.Fatal("create returned false")
+	}
+	ctx := context.Background()
+	card, err := p.CreateStreamingCard(ctx, replyContext{taskID: "task-struct"})
+	if err != nil {
+		t.Fatalf("CreateStreamingCard() error = %v", err)
+	}
+	ssc, ok := card.(core.StructuredStreamingCard)
+	if !ok {
+		t.Fatal("streamingCard must implement StructuredStreamingCard")
+	}
+
+	_ = ssc.OnTurnStreamEvent(ctx, core.TurnStreamEvent{
+		Kind: core.TurnStreamThinkingReplace, Thinking: "planning",
+	})
+	select {
+	case artifact := <-waiter.artifacts:
+		if artifact.content != "planning" {
+			t.Fatalf("thinking artifact = %q", artifact.content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for thinking artifact")
+	}
+
+	_ = ssc.OnTurnStreamEvent(ctx, core.TurnStreamEvent{
+		Kind: core.TurnStreamAnswerAppend, Answer: "Hel",
+	})
+	_ = ssc.OnTurnStreamEvent(ctx, core.TurnStreamEvent{
+		Kind: core.TurnStreamAnswerAppend, Answer: "lo",
+	})
+	// Dual-write markdown must be ignored once structured.
+	badCard := "💭 **Thinking**\n\nplanning\n\n---\n\n---\n\nHello\n\n---\n\ntruncated"
+	if err := card.Update(ctx, badCard); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	select {
+	case artifact := <-waiter.artifacts:
+		if artifact.content != "Hel" {
+			t.Fatalf("first answer artifact = %q, want Hel", artifact.content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Hel")
+	}
+	select {
+	case artifact := <-waiter.artifacts:
+		if artifact.content != "Hello" {
+			t.Fatalf("second answer artifact = %q, want Hello", artifact.content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Hello")
+	}
+	select {
+	case artifact := <-waiter.artifacts:
+		t.Fatalf("unexpected artifact after ignored Update: %+v", artifact)
+	default:
+	}
+
+	if err := card.Finalize(ctx, badCard); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+	select {
+	case artifact := <-waiter.artifacts:
+		if artifact.content != "Hello" || !artifact.lastChunk {
+			t.Fatalf("final artifact = %+v, want Hello lastChunk", artifact)
+		}
+		if strings.Contains(artifact.content, "Thinking") || strings.Contains(artifact.content, "---") {
+			t.Fatalf("markdown leaked into artifact: %q", artifact.content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for finalize artifact")
+	}
+	select {
+	case result := <-waiter.done:
+		if result.state != a2a.TaskStateCompleted {
+			t.Fatalf("state = %s", result.state)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for done")
+	}
+}
+
+func TestStreamingCardStructuredIgnoresToolEventsForArtifact(t *testing.T) {
+	p := &Platform{pending: newPendingStore(defaultMaxTasks, defaultTaskTTL)}
+	waiter, ok := p.pending.create("task-tools")
+	if !ok {
+		t.Fatal("create returned false")
+	}
+	ctx := context.Background()
+	card, _ := p.CreateStreamingCard(ctx, replyContext{taskID: "task-tools"})
+	ssc := card.(core.StructuredStreamingCard)
+	_ = ssc.OnTurnStreamEvent(ctx, core.TurnStreamEvent{
+		Kind: core.TurnStreamToolUpsert,
+		Tool: core.TurnToolCall{Index: 1, Name: "Bash", Input: "date"},
+	})
+	select {
+	case artifact := <-waiter.artifacts:
+		t.Fatalf("tool upsert should not push artifact, got %+v", artifact)
+	default:
+	}
+	_ = ssc.OnTurnStreamEvent(ctx, core.TurnStreamEvent{
+		Kind: core.TurnStreamAnswerAppend, Answer: "done",
+	})
+	select {
+	case artifact := <-waiter.artifacts:
+		if artifact.content != "done" {
+			t.Fatalf("artifact = %q", artifact.content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+	_ = card.Finalize(ctx, "")
+	select {
+	case artifact := <-waiter.artifacts:
+		if artifact.content != "done" || !artifact.lastChunk {
+			t.Fatalf("final = %+v", artifact)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out finalize artifact")
+	}
+	select {
+	case <-waiter.done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out done")
+	}
+}
+
 func TestToCoreMessageUsesA2AContextAsSessionKey(t *testing.T) {
 	p := &Platform{}
 	msg, err := p.toCoreMessage(&a2asrv.ExecutorContext{

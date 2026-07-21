@@ -44,12 +44,16 @@ sequenceDiagram
   A2A->>Engine: handler(platform, *core.Message)
   Engine->>Agent: Send(prompt, files)
   Agent-->>Engine: EventText / EventResult
-  Engine->>A2A: StreamingCard.Update(progress)
-  Engine->>A2A: StreamingCard.Finalize(final text)
+  Engine->>A2A: StructuredStreamingCard.OnTurnStreamEvent (answer text)
+  Engine->>A2A: StreamingCard.Finalize (final answer artifact)
   A2A-->>SDK: Artifact text part
   A2A-->>SDK: Task completed
   SDK-->>Client: A2A task result
 ```
+
+`platform/a2a` implements `core.StructuredStreamingCard`: mid-turn progress is
+answer (or thinking) text only — not the Engine markdown card with `💭` / `🔧`
+markers. Legacy `Update(string)` remains for unit tests that do not emit typed events.
 
 ## Configuration
 

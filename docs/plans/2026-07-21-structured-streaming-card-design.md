@@ -263,7 +263,7 @@ direct `runState` updates inside `OnTurnStreamEvent`. `Update(string)` becomes
 | chat-api | Implement `StructuredStreamingCard` (dual path) | Switch primary path; deprecate parser | Remove parser + tool sniff |
 | dingtalk | No change | No change | No change |
 | slack | No change | No change | No change |
-| a2a | No change | Optional: typed artifact later | No change |
+| a2a | No change | Implements `StructuredStreamingCard`; artifact = answer/thinking text | No 🧾 path |
 
 ## Phased rollout
 

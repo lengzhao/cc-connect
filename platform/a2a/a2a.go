@@ -650,10 +650,18 @@ type streamingCard struct {
 	taskID     string
 	artifactID sdka2a.ArtifactID
 	lastSent   string
+	structured bool
+	thinking   string
+	answer     string
 }
 
 func (c *streamingCard) Update(_ context.Context, content string) error {
 	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	// Engine skips markdown Update for StructuredStreamingCard; keep legacy
+	// path for tests / non-structured callers that only use Update.
+	if c.structured {
 		return nil
 	}
 	c.lastSent = content
@@ -663,9 +671,65 @@ func (c *streamingCard) Update(_ context.Context, content string) error {
 	return nil
 }
 
+// OnTurnStreamEvent implements core.StructuredStreamingCard. Streams answer
+// text (and thinking as interim progress) into a single A2A artifact, without
+// the Engine markdown card layout (thinking/tool markers).
+func (c *streamingCard) OnTurnStreamEvent(_ context.Context, ev core.TurnStreamEvent) error {
+	c.structured = true
+	switch ev.Kind {
+	case core.TurnStreamThinkingReplace:
+		c.thinking = ev.Thinking
+	case core.TurnStreamAnswerAppend:
+		c.answer += ev.Answer
+	case core.TurnStreamAnswerReplace:
+		c.answer = ev.Answer
+	case core.TurnStreamToolUpsert, core.TurnStreamToolResult:
+		// Tools stay out of the A2A text artifact; clients can add dedicated
+		// parts later if needed.
+		return nil
+	default:
+		slog.Debug("a2a: ignoring unknown turn stream event", "kind", int(ev.Kind), "task_id", c.taskID)
+		return nil
+	}
+	return c.publishProgress(false)
+}
+
+func (c *streamingCard) publishProgress(lastChunk bool) error {
+	text := strings.TrimSpace(c.answer)
+	if text == "" {
+		text = strings.TrimSpace(c.thinking)
+	}
+	if text == "" {
+		return nil
+	}
+	c.lastSent = text
+	if !c.platform.pushArtifactUpdate(c.taskID, c.artifactID, text, lastChunk) {
+		return fmt.Errorf("a2a: task %q is not pending", c.taskID)
+	}
+	return nil
+}
+
 func (c *streamingCard) Finalize(_ context.Context, content string) error {
-	if strings.TrimSpace(content) != "" {
-		_ = c.platform.pushArtifactUpdate(c.taskID, c.artifactID, content, true)
+	final := strings.TrimSpace(content)
+	if c.structured {
+		// Prefer typed answer; Engine Finalize still passes markdown which we ignore.
+		final = strings.TrimSpace(c.answer)
+		if final == "" {
+			final = strings.TrimSpace(c.thinking)
+		}
+		// Error / edge paths may Finalize with plain user-facing text before any
+		// answer event; use content only when it does not look like a card dump.
+		if final == "" && strings.TrimSpace(content) != "" &&
+			!strings.Contains(content, "💭 **Thinking**") &&
+			!strings.Contains(content, "🔧 **Tool #") {
+			final = strings.TrimSpace(content)
+		}
+		c.answer = final
+		if err := c.publishProgress(true); err != nil {
+			return err
+		}
+	} else if final != "" {
+		_ = c.platform.pushArtifactUpdate(c.taskID, c.artifactID, final, true)
 	}
 	if !c.platform.finishTask(c.taskID, pendingResult{state: sdka2a.TaskStateCompleted}) {
 		return fmt.Errorf("a2a: task %q is not pending", c.taskID)
@@ -676,6 +740,9 @@ func (c *streamingCard) Finalize(_ context.Context, content string) error {
 func (c *streamingCard) Failed() bool {
 	return false
 }
+
+var _ core.StreamingCard = (*streamingCard)(nil)
+var _ core.StructuredStreamingCard = (*streamingCard)(nil)
 
 type pendingStore struct {
 	mu    sync.Mutex
