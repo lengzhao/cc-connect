@@ -2,7 +2,7 @@
 
 Date: 2026-07-21
 
-Status: **Phase 1 shipped · Phase 2 in progress** (follows v10.1.32 hotfix)
+Status: **Phase 1–3 implemented** (follows v10.1.32 hotfix)
 
 Related:
 
@@ -313,20 +313,23 @@ direct `runState` updates inside `OnTurnStreamEvent`. `Update(string)` becomes
 
 ### Phase 3 — ToolResult cleanup (PR-3)
 
-**Scope:** `core/engine.go`, `platform/chat-api`
+**Status:** Implemented (2026-07-21)
+
+**Scope:** `core/engine.go`, `platform/chat-api`, tool SSE design doc
 
 **Work:**
 
 1. When `StructuredStreamingCard` active, `EventToolResult` does **not** call
-   `sendRaw(formatToolResultEventFallback)` to platform `Reply`.
-2. Remove `parseToolResultFallback` from chat-api.
-3. Update [Tool SSE design](./2026-07-15-chat-api-tool-sse-design.md) carrier
-   row: structured Engine events, not Reply markdown sniff.
+   `sendRaw(formatToolResultEventFallback)`.
+2. chat-api `Reply` drops 🧾 markdown (never enqueue, never `text_delta`).
+3. Updated [Tool SSE design](./2026-07-15-chat-api-tool-sse-design.md) carrier
+   to Engine `TurnStreamEvent`.
 
 **Acceptance:**
 
-- `TestToolCallAndResultSSENotInTextDelta` green
-- No 🧾 in SSE bodies in integration tests
+- [x] `TestToolCallAndResultSSENotInTextDelta` green (structured events)
+- [x] `TestStructuredStreamToolEventsSkipMarkdownSniff` — single `tool_result`
+- [x] No 🧾 in SSE bodies
 
 ## Testing strategy
 

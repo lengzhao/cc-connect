@@ -5229,8 +5229,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					result = truncateIf(result, e.display.ToolMaxLen)
 				}
 				if result != "" || event.ToolStatus != "" || event.ToolExitCode != nil || event.ToolSuccess != nil {
-					// Phase 1 dual-write: emit structured tool_result for
-					// StructuredStreamingCard consumers; Reply markdown path unchanged.
+					// Emit typed tool_result for StructuredStreamingCard (chat-api).
 					if turnStream != nil && !turnStream.Failed() {
 						turnStream.OnToolResultPending(e.ctx, event.ToolName, TurnToolResult{
 							Output:   result,
@@ -5257,6 +5256,11 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 								slog.Debug("rich card: failed to update tool-result card", "platform", p.Name(), "error", err)
 							}
 						}
+						break
+					}
+					// Structured consumers already received TurnStreamToolResult —
+					// do not also Reply with 🧾 markdown (Phase 3).
+					if turnStream != nil && turnStream.HasStructured() {
 						break
 					}
 					resultMsg := e.formatToolResultEventFallback(event.ToolName, result, event.ToolStatus, event.ToolExitCode, event.ToolSuccess)

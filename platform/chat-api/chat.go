@@ -393,15 +393,9 @@ func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
 		}
 		return nil
 	}
-	if tr, ok := parseToolResultFallback(content); ok {
-		// Phase 2: Engine dual-writes structured ToolResult events; skip 🧾 sniff
-		// when this run already consumes StructuredStreamingCard to avoid duplicates.
-		if run := p.pending.get(rc.runID); run != nil && run.usesStructuredStream() {
-			return nil
-		}
-		if !p.pending.enqueueToolResult(rc.runID, tr) {
-			return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
-		}
+	if isToolResultFallbackMarkdown(content) {
+		// Phase 3: tool_result is carried by StructuredStreamingCard events.
+		// Ignore legacy 🧾 Reply markdown so it never becomes text_delta.
 		return nil
 	}
 	if !p.pending.setStreamContent(rc.runID, content) {

@@ -130,6 +130,15 @@ func TestTurnStreamEmitter_MarkdownOnlyNoEvents(t *testing.T) {
 	}
 }
 
+func TestTurnStreamEmitter_HasStructured(t *testing.T) {
+	if newTurnStreamEmitter(&markdownOnlyCard{}).HasStructured() {
+		t.Fatal("markdown-only card should not report structured")
+	}
+	if !newTurnStreamEmitter(&recordingStructuredCard{}).HasStructured() {
+		t.Fatal("structured card should report HasStructured")
+	}
+}
+
 func TestTurnStreamEmitter_FinalizeSyncsAnswer(t *testing.T) {
 	card := &recordingStructuredCard{}
 	em := newTurnStreamEmitter(card)

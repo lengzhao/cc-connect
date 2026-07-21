@@ -181,16 +181,31 @@ func TestToolCallAndResultSSENotInTextDelta(t *testing.T) {
 			close(done)
 			return
 		}
-		partial := streamThinkingHeader + "need clock" + streamSectionBreak +
-			"🔧 **Tool #1**: `Bash`\n```bash\ndate\n```\n\n" +
-			streamSectionBreak + "我来帮你查看当前时间。"
-		_ = card.Update(context.Background(), partial)
+		ssc := card.(core.StructuredStreamingCard)
+		_ = ssc.OnTurnStreamEvent(context.Background(), core.TurnStreamEvent{
+			Kind:     core.TurnStreamThinkingReplace,
+			Thinking: "need clock",
+		})
+		_ = ssc.OnTurnStreamEvent(context.Background(), core.TurnStreamEvent{
+			Kind: core.TurnStreamToolUpsert,
+			Tool: core.TurnToolCall{Index: 1, Name: "Bash", Input: "date"},
+		})
+		ok := true
+		code := 0
+		_ = ssc.OnTurnStreamEvent(context.Background(), core.TurnStreamEvent{
+			Kind: core.TurnStreamToolResult,
+			Tool: core.TurnToolCall{Index: 1, Name: "Bash", Result: &core.TurnToolResult{
+				Output: "2026年 7月15日", Status: "ok", ExitCode: &code, Success: &ok,
+			}},
+		})
+		// Legacy 🧾 Reply must be dropped (Phase 3), not become text_delta.
 		_ = platform.Reply(context.Background(), msg.ReplyCtx,
 			"🧾 Bash\n🟢 状态: ok\n🔢 退出码: 0\n```text\n2026年 7月15日\n```")
-		final := streamThinkingHeader + "need clock" + streamSectionBreak +
-			"🔧 **Tool #1**: `Bash`\n```bash\ndate\n```\n\n" +
-			streamSectionBreak + "我来帮你查看当前时间。现在是 **2026年7月15日**"
-		_ = card.Finalize(context.Background(), final)
+		_ = ssc.OnTurnStreamEvent(context.Background(), core.TurnStreamEvent{
+			Kind:   core.TurnStreamAnswerAppend,
+			Answer: "我来帮你查看当前时间。现在是 **2026年7月15日**",
+		})
+		_ = card.Finalize(context.Background(), "")
 		close(done)
 	})
 
@@ -212,6 +227,9 @@ func TestToolCallAndResultSSENotInTextDelta(t *testing.T) {
 	}
 	if !strings.Contains(out, `"name":"Bash"`) {
 		t.Fatalf("expected Bash in tool events: %s", out)
+	}
+	if strings.Count(out, "event: tool_result") != 1 {
+		t.Fatalf("expected one tool_result, got: %s", out)
 	}
 	for _, block := range strings.Split(out, "\n\n") {
 		if !strings.Contains(block, "event: text_delta") {

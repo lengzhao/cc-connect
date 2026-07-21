@@ -73,6 +73,11 @@ func (e *turnStreamEmitter) Failed() bool {
 	return e == nil || e.card == nil || e.card.Failed()
 }
 
+// HasStructured reports whether the card implements StructuredStreamingCard.
+func (e *turnStreamEmitter) HasStructured() bool {
+	return e != nil && e.structed != nil
+}
+
 func (e *turnStreamEmitter) Thinking() string {
 	if e == nil {
 		return ""

@@ -149,6 +149,8 @@ func stripCodeFence(s string) string {
 }
 
 // parseToolResultFallback detects Engine formatToolResultEventFallback markdown.
+// Kept for tests and isToolResultFallbackMarkdown; hot path no longer enqueues
+// from Reply (Phase 3 — tool_result comes from TurnStreamEvent).
 func parseToolResultFallback(content string) (streamToolResult, bool) {
 	trimmed := strings.TrimSpace(content)
 	if !strings.HasPrefix(trimmed, toolResultMarker) {
@@ -194,4 +196,11 @@ func parseToolResultFallback(content string) (streamToolResult, bool) {
 		}
 	}
 	return res, true
+}
+
+// isToolResultFallbackMarkdown reports whether content is the Engine 🧾 tool
+// result fallback. Such replies are dropped so they never enter text_delta.
+func isToolResultFallbackMarkdown(content string) bool {
+	_, ok := parseToolResultFallback(content)
+	return ok
 }
