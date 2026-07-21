@@ -1,6 +1,6 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.2.1**（2026-07-21）<br>
+> 版本：**v1.2.2**（2026-07-21）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
 > 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
@@ -312,6 +312,9 @@ data: {"message_id":"s1a2b3c:1","tool_call_id":"1","name":"Bash","status":"ok","
 event: text_delta
 data: {"message_id":"s1a2b3c:1","text":"这段代码实现了……"}
 
+event: text_delta
+data: {"message_id":"s1a2b3c:1","text":"完整终稿……","replace":true}
+
 event: message_end
 data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 ```
@@ -319,10 +322,10 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 | event | `data` | 说明 |
 |-------|--------|------|
 | `message` | `conversation_id`, `message_id`, `run_id` | 轮次开始 |
-| `thinking_delta` | `message_id`, `text` | 推理增量（可选） |
+| `thinking_delta` | `message_id`, `text`, `replace?` | 推理增量（可选）；`replace:true` 表示用全文替换已有缓冲 |
 | `tool_call` | `message_id`, `tool_call_id`, `name`, `input?` | 工具调用（可选） |
 | `tool_result` | `message_id`, `tool_call_id`, `name?`, `status?`, `exit_code?`, `success?`, `output?` | 工具结果（可选） |
-| `text_delta` | `message_id`, `text` | 正文增量（不含工具 markdown） |
+| `text_delta` | `message_id`, `text`, `replace?` | 正文增量（不含工具 markdown）；`replace:true` 时客户端应丢弃已有缓冲并整体替换 |
 | `permission_request` | 见 §3.5 | 工具权限确认窗口 |
 | `question_request` | 见 §3.5 | AskUserQuestion 确认窗口 |
 | `interaction_superseded` | `interaction_id`, `replacement_id`, `run_id`, `message_id` | 同一 run 上新确认替换旧确认 |
@@ -340,7 +343,9 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 
 **客户端注意**
 
-- 拼接 `text_delta` 得完整回复；`tool_call` / `tool_result` 单独渲染，勿并入正文
+- 默认拼接 `text_delta.text`；若帧带 `replace:true`，应 `buf = text`（整体替换），否则进度句被终稿改写时会重复拼接
+- `thinking_delta` 同样支持可选 `replace`
+- `tool_call` / `tool_result` 单独渲染，勿并入正文
 - 断开 SSE **不**停止 agent，内容仍写入 history
 - `message_queued` 后勿立即重开 SSE；等上轮结束或轮询 history
 - 收到 `permission_request` / `question_request` 时弹出确认窗口；用 `expires_at` 倒计时；通过 §4.9 回传结果，**不要**把确认结果当普通 `chat-messages`
@@ -757,6 +762,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.2.2 | 2026-07-21 | SSE `text_delta`/`thinking_delta` 支持可选 `replace`；流式卡片解析不再因答案内 `---` 截断 |
 | v1.2.1 | 2026-07-21 | 新增 `forward_headers`：白名单入站 header 仅进 hooks（对齐 a2a） |
 | v1.2.0 | 2026-07-16 | 新增会话详情、异步 Name 生成及 `auto_generate_name_mode` |
 | v1.1.2 | 2026-07-15 | 合并确认窗口与 `tool_call`/`tool_result` SSE、debug UI |

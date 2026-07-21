@@ -2,6 +2,7 @@ package chatapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -240,35 +241,47 @@ func collectTextDeltas(sseBody string) string {
 				continue
 			}
 			raw := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			const key = `"text":"`
-			i := strings.Index(raw, key)
-			if i < 0 {
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 				continue
 			}
-			rest := raw[i+len(key):]
-			var out strings.Builder
-			for j := 0; j < len(rest); j++ {
-				if rest[j] == '\\' && j+1 < len(rest) {
-					switch rest[j+1] {
-					case 'n':
-						out.WriteByte('\n')
-					case 't':
-						out.WriteByte('\t')
-					case '"', '\\', '/':
-						out.WriteByte(rest[j+1])
-					default:
-						out.WriteByte(rest[j+1])
-					}
-					j++
-					continue
-				}
-				if rest[j] == '"' {
-					break
-				}
-				out.WriteByte(rest[j])
+			text, _ := payload["text"].(string)
+			if replace, _ := payload["replace"].(bool); replace {
+				b.Reset()
 			}
-			b.WriteString(out.String())
+			b.WriteString(text)
 		}
 	}
 	return b.String()
+}
+
+func TestAnswerDeltaReplaceOnNonPrefixChange(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sse, err := newSSEWriter(rec)
+	if err != nil {
+		t.Fatalf("newSSEWriter: %v", err)
+	}
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
+
+	run.setStreamContent("", "正在获取 ETH/USDT 实时行情。")
+	if err := run.flushDelta(); err != nil {
+		t.Fatalf("flush1: %v", err)
+	}
+	run.setStreamContent("", "请提供交易对，我来拉取实时行情并生成策略参数。")
+	if err := run.flushDelta(); err != nil {
+		t.Fatalf("flush2: %v", err)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"replace":true`) {
+		t.Fatalf("expected replace frame, body = %s", body)
+	}
+	joined := collectTextDeltas(body)
+	want := "请提供交易对，我来拉取实时行情并生成策略参数。"
+	if joined != want {
+		t.Fatalf("joined = %q, want %q\nbody=%s", joined, want, body)
+	}
+	if strings.Contains(joined, "正在获取") {
+		t.Fatalf("progress line leaked into answer: %q", joined)
+	}
 }

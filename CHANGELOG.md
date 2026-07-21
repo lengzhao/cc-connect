@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- **chat-api**: SSE stream no longer truncates answers that contain markdown `---` horizontal rules, and non-prefix answer revisions emit `replace:true` so append-style clients do not duplicate progress lines. See `docs/plans/2026-07-21-chat-api-stream-answer-parse-design.md`.
+
 ### Added
 - **Feishu/Lark: sender email injection** via new `include_user_email` platform option (default off). When enabled with project `inject_sender = true`, Contact API email is populated on `Message.UserEmail` for agent prompt `sender_email=...` and hook `CC_HOOK_USER_EMAIL`, matching Slack behavior. Falls back to `enterprise_email` when personal email is empty; requires `contact:user.email:readonly` and user within app contact scope.
 - **`agent_session_idle_timeout_mins`**: new per-project config option that closes an idle live agent process after a clean turn while preserving the cc-connect session and saved agent session ID. The next message starts a new agent process and resumes the same conversation. Set to `0` or leave unset to disable (#1338).

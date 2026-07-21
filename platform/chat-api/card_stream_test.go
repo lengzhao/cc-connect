@@ -48,6 +48,37 @@ func TestParseStreamingCardContent(t *testing.T) {
 			thinking: "plan",
 			answer:   "",
 		},
+		{
+			name: "answer with markdown horizontal rules preserved",
+			content: streamThinkingHeader + "fetch quote" + streamSectionBreak +
+				"---\n\n正在获取 ETH/USDT 实时行情。\n\n---\n\n## 策略\n表格\n\n---\n\n## 风险\n\n需要我进一步细化吗？",
+			thinking: "fetch quote",
+			answer:   "正在获取 ETH/USDT 实时行情。\n\n---\n\n## 策略\n表格\n\n---\n\n## 风险\n\n需要我进一步细化吗？",
+		},
+		{
+			name: "thinking tool and answer with dividers",
+			content: streamThinkingHeader + "need market" + streamSectionBreak +
+				"🔧 **Tool #1**: `Bash`\n```bash\ncurl quote\n```\n\n" +
+				"---\n\n行情摘要\n\n---\n\n执行建议\n\n---\n\n风险提示",
+			thinking: "need market",
+			answer:   "行情摘要\n\n---\n\n执行建议\n\n---\n\n风险提示",
+		},
+		{
+			name: "code fence containing --- line kept in answer",
+			content: streamThinkingHeader + "draft" + streamSectionBreak +
+				"---\n\n```md\nA\n---\nB\n```",
+			thinking: "draft",
+			answer:   "```md\nA\n---\nB\n```",
+		},
+		{
+			name: "multiple tool blocks then answer with dividers",
+			content: "🔧 **Tool #1**: `Bash`\n`one`\n\n" +
+				"🔧 **Tool #2**: `Read`\n`/tmp/a`\n\n" +
+				streamSectionBreak +
+				"step1\n\n---\n\nstep2\n\n---\n\nstep3",
+			thinking: "",
+			answer:   "step1\n\n---\n\nstep2\n\n---\n\nstep3",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

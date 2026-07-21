@@ -1050,7 +1050,8 @@
             } else if (event === "thinking_delta") {
               // Ensure bubble exists first — streamBubble resets thinking when creating a new one.
               const thinkingBubble = streamBubble("thinking", "thinking", "thinking");
-              thinking += data.text || "";
+              if (data.replace) thinking = data.text || "";
+              else thinking += data.text || "";
               thinkingBubble.body.textContent = thinking;
               $("messages").scrollTop = $("messages").scrollHeight;
             } else if (event === "tool_call") {
@@ -1075,7 +1076,8 @@
             } else if (event === "text_delta") {
               // Ensure bubble exists first — streamBubble resets answer when creating a new one.
               const answerBubble = streamBubble("assistant", "assistant", "assistant");
-              answer += data.text || "";
+              if (data.replace) answer = data.text || "";
+              else answer += data.text || "";
               answerBubble.body.textContent = answer;
               $("messages").scrollTop = $("messages").scrollHeight;
             } else if (event === "permission_request" || event === "question_request") {

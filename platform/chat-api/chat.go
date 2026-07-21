@@ -296,11 +296,21 @@ func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 	}
 }
 
-func textDelta(prev, curr string) string {
+// deltaPayload builds an SSE delta payload for a text/thinking stream. When curr
+// extends prev it emits the appended suffix (client appends). When curr is not a
+// continuation of prev — a progress line replaced by the final answer, or any
+// non-prefix revision — it emits the full text with replace=true so an appending
+// client discards what it had and replaces, instead of concatenating a duplicate.
+// Returns ok=false when there is nothing to send.
+func deltaPayload(messageID, prev, curr string) (map[string]any, bool) {
 	if strings.HasPrefix(curr, prev) {
-		return curr[len(prev):]
+		suffix := curr[len(prev):]
+		if suffix == "" {
+			return nil, false
+		}
+		return map[string]any{"message_id": messageID, "text": suffix}, true
 	}
-	return curr
+	return map[string]any{"message_id": messageID, "text": curr, "replace": true}, true
 }
 
 func inputsToCore(inputs []chatInput) ([]core.ImageAttachment, []core.FileAttachment, *core.AudioAttachment, error) {
@@ -479,12 +489,16 @@ func (c *streamingCard) Finalize(_ context.Context, content string) error {
 		c.lastSent = raw
 	}
 	id := c.runID()
+	thinking, answer := parseStreamingCardContent(raw)
 	if strings.TrimSpace(raw) != "" {
-		if !c.platform.pending.setStreamContent(id, raw) {
-			return fmt.Errorf("chat-api: run %q is not pending", id)
+		// Skip the redundant re-set when the final card matches what Update
+		// already streamed — avoids emitting an extra terminal delta frame.
+		if run := c.platform.pending.get(id); run == nil || !run.contentUnchanged(thinking, answer) {
+			if !c.platform.pending.setStreamContent(id, raw) {
+				return fmt.Errorf("chat-api: run %q is not pending", id)
+			}
 		}
 	}
-	_, answer := parseStreamingCardContent(raw)
 	// Never fall back to raw card markdown — that would reintroduce tool blocks.
 	if !c.platform.pending.finish(id, pendingResult{answer: answer}) {
 		return fmt.Errorf("chat-api: run %q is not pending", id)

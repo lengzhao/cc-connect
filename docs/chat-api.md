@@ -1,9 +1,10 @@
 # chat-api Platform — API v1
 
-> Version: **v1.2.1** (2026-07-21)  
+> Version: **v1.2.2** (2026-07-21)  
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
-> Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)
+> Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)  
+> Stream answer parse: [plans/2026-07-21-chat-api-stream-answer-parse-design.md](./plans/2026-07-21-chat-api-stream-answer-parse-design.md)
 
 ## Overview
 
@@ -40,6 +41,8 @@
 ## SSE events
 
 `message`, `thinking_delta`, `tool_call`, `tool_result`, `text_delta`, `permission_request`, `question_request`, `interaction_superseded`, `interaction_ack`, `ping`, `message_end`, `error`, `message_queued`
+
+`text_delta` / `thinking_delta` may include optional `replace: true` (full-text replace instead of append). Clients must handle it or progress lines can duplicate into the answer.
 
 `tool_call` / `tool_result` / interaction events are ephemeral (not written to history). See [Tool SSE design](./plans/2026-07-15-chat-api-tool-sse-design.md) and [Interaction hardening](./plans/2026-07-14-chat-api-interaction-hardening.md).
 

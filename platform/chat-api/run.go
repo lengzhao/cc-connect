@@ -171,6 +171,14 @@ func (r *runState) setStreamContent(thinking, answer string) {
 	r.signal()
 }
 
+// contentUnchanged reports whether the run's current streamed thinking/answer
+// already equal the given values (used by Finalize to skip a redundant re-set).
+func (r *runState) contentUnchanged(thinking, answer string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.latestThinking == thinking && r.answerText == answer
+}
+
 func (r *runState) signal() {
 	select {
 	case r.notify <- struct{}{}:
@@ -271,14 +279,11 @@ func (r *runState) flushThinkingDelta() error {
 	prev := r.sentThinking
 	r.mu.Unlock()
 
-	delta := textDelta(prev, curr)
-	if delta == "" {
+	payload, ok := deltaPayload(messageID, prev, curr)
+	if !ok {
 		return nil
 	}
-	if err := sse.Event("thinking_delta", map[string]string{
-		"message_id": messageID,
-		"text":       delta,
-	}); err != nil {
+	if err := sse.Event("thinking_delta", payload); err != nil {
 		r.detach()
 		return err
 	}
@@ -390,14 +395,11 @@ func (r *runState) flushAnswerDelta() error {
 	prev := r.sentAnswer
 	r.mu.Unlock()
 
-	delta := textDelta(prev, curr)
-	if delta == "" {
+	payload, ok := deltaPayload(messageID, prev, curr)
+	if !ok {
 		return nil
 	}
-	if err := sse.Event("text_delta", map[string]string{
-		"message_id": messageID,
-		"text":       delta,
-	}); err != nil {
+	if err := sse.Event("text_delta", payload); err != nil {
 		r.detach()
 		return err
 	}
