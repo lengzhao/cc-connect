@@ -36,6 +36,7 @@ without changing `core.buildCardContent` or other platforms.
 
 ## Follow-up
 
-Optional `StructuredStreamingCard` in core so chat-api can drop markdown
-re-parsing entirely (see architecture discussion: short-term fix A → Engine
-evolution later).
+Structured StreamingCard in core — see
+[structured-streaming-card-design.md](./2026-07-21-structured-streaming-card-design.md).
+chat-api will drop markdown re-parsing in three PRs (dual-write → primary path →
+tool result cleanup).

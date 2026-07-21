@@ -4809,16 +4809,16 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 	}
 
 	// Streaming card: aggregate entire turn into a single updatable card.
+	// turnStream dual-writes markdown Update + optional StructuredStreamingCard events.
 	var streamCard StreamingCard
-	var cardToolCalls []cardToolEntry  // track tool calls for card content
-	var cardThinkingText string        // latest thinking text
-	var cardAnswerText strings.Builder // accumulated answer text
+	var turnStream *turnStreamEmitter
 
 	if scp, ok := state.platform.(StreamingCardPlatform); ok {
 		if sc, err := scp.CreateStreamingCard(e.ctx, state.replyCtx); err != nil {
 			slog.Warn("streaming card creation failed, falling back to normal messages", "error", err)
 		} else {
 			streamCard = sc
+			turnStream = newTurnStreamEmitter(sc)
 			slog.Info("streaming card created for turn", "session", sessionKey)
 		}
 	}
@@ -5068,9 +5068,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 			if e.display.ThinkingMessages && event.Content != "" {
 				// --- StreamingCard path ---
-				if streamCard != nil && !streamCard.Failed() {
-					cardThinkingText = truncateIf(event.Content, e.display.ThinkingMaxLen)
-					_ = streamCard.Update(e.ctx, buildCardContent(cardThinkingText, cardToolCalls, cardAnswerText.String()))
+				if turnStream != nil && !turnStream.Failed() {
+					turnStream.OnThinking(e.ctx, truncateIf(event.Content, e.display.ThinkingMaxLen))
 					continue // skip original independent message sending
 				}
 				// --- Original path (fallback) ---
@@ -5155,7 +5154,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 			if e.display.ToolMessages {
 				// --- StreamingCard path ---
-				if streamCard != nil && !streamCard.Failed() {
+				if turnStream != nil && !turnStream.Failed() {
 					toolInput := event.ToolInput
 					var formattedInput string
 					if toolInput == "" {
@@ -5173,12 +5172,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 							formattedInput = fmt.Sprintf("`%s`", toolInput)
 						}
 					}
-					cardToolCalls = append(cardToolCalls, cardToolEntry{
-						Index: toolCount,
-						Name:  event.ToolName,
-						Input: formattedInput,
-					})
-					_ = streamCard.Update(e.ctx, buildCardContent(cardThinkingText, cardToolCalls, cardAnswerText.String()))
+					turnStream.OnToolUse(e.ctx, toolCount, event.ToolName, formattedInput)
 					continue // skip original independent message sending
 				}
 				// --- Original path (fallback) ---
@@ -5235,6 +5229,16 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					result = truncateIf(result, e.display.ToolMaxLen)
 				}
 				if result != "" || event.ToolStatus != "" || event.ToolExitCode != nil || event.ToolSuccess != nil {
+					// Phase 1 dual-write: emit structured tool_result for
+					// StructuredStreamingCard consumers; Reply markdown path unchanged.
+					if turnStream != nil && !turnStream.Failed() {
+						turnStream.OnToolResultPending(e.ctx, event.ToolName, TurnToolResult{
+							Output:   result,
+							Status:   event.ToolStatus,
+							ExitCode: event.ToolExitCode,
+							Success:  event.ToolSuccess,
+						})
+					}
 					if hasRichCard {
 						toolSteps = mergeRichToolResult(toolSteps, event, result, e.display.ToolMaxLen)
 						if cardMessageID == nil {
@@ -5291,15 +5295,14 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				releasedNow := prevHold && !silentHold
 
 				handledByStreamCard := false
-				if streamCard != nil && !streamCard.Failed() {
+				if turnStream != nil && !turnStream.Failed() {
 					textParts = append(textParts, content) // always accumulate for history
 					if !silentHold {
 						if releasedNow {
-							cardAnswerText.WriteString(peekSegment)
+							turnStream.OnAnswerText(e.ctx, turnStream.Answer()+peekSegment)
 						} else {
-							cardAnswerText.WriteString(content)
+							turnStream.OnAnswerText(e.ctx, turnStream.Answer()+content)
 						}
-						_ = streamCard.Update(e.ctx, buildCardContent(cardThinkingText, cardToolCalls, cardAnswerText.String()))
 					}
 					handledByStreamCard = true
 				}
@@ -5684,10 +5687,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			replyStart := time.Now()
 
 			// --- StreamingCard path ---
-			if streamCard != nil && !streamCard.Failed() {
+			if turnStream != nil && !turnStream.Failed() {
 				sp.finish("", "") // cleanup preview (should be no-op if card was active)
 				// Silent reply: never render the NO_REPLY marker into the card.
-				// cardAnswerText holds only the text streamed BEFORE the marker
+				// turnStream.Answer holds only the text streamed BEFORE the marker
 				// (empty for a bare NO_REPLY, since silentHold suppresses card
 				// writes while the segment is still a NO_REPLY prefix). Finalize
 				// with that instead of fullResponse so the card resolves to Done
@@ -5695,10 +5698,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				// would otherwise post the suppressed marker verbatim.
 				cardBody := fullResponse
 				if isSilent {
-					cardBody = strings.TrimRight(cardAnswerText.String(), " \t\r\n")
+					cardBody = strings.TrimRight(turnStream.Answer(), " \t\r\n")
 				}
-				finalContent := buildCardContent(cardThinkingText, cardToolCalls, cardBody)
-				if err := streamCard.Finalize(e.ctx, finalContent); err != nil {
+				if err := turnStream.Finalize(e.ctx, cardBody); err != nil {
 					slog.Error("streaming card finalize failed, sending fallback", "error", err)
 					// Fallback: send the response as a normal message — but never
 					// for a silent reply, which has no deliverable content.
@@ -5978,9 +5980,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 				// Reset streaming card state for the next turn
 				streamCard = nil
-				cardToolCalls = nil
-				cardThinkingText = ""
-				cardAnswerText.Reset()
+				turnStream = nil
 
 				// Try to create a new streaming card for the queued turn
 				if scp, ok := queued.platform.(StreamingCardPlatform); ok {
@@ -5988,6 +5988,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 						slog.Warn("streaming card creation failed for queued turn", "error", err)
 					} else {
 						streamCard = sc
+						turnStream = newTurnStreamEmitter(sc)
 					}
 				}
 
@@ -6071,18 +6072,17 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 				// StreamingCard platforms (e.g. chat-api) end the turn via Finalize.
 				// Plain send leaves those transports hanging until request timeout.
-				if streamCard != nil && !streamCard.Failed() {
-					finalContent := buildCardContent(cardThinkingText, cardToolCalls, userMsg)
-					if err := streamCard.Finalize(e.ctx, finalContent); err != nil {
+				if turnStream != nil && !turnStream.Failed() {
+					if err := turnStream.Finalize(e.ctx, userMsg); err != nil {
 						slog.Error("streaming card finalize failed on agent error, sending fallback", "error", err)
 						e.send(p, replyCtx, userMsg)
 					}
 				} else {
 					e.send(p, replyCtx, userMsg)
 				}
-			} else if streamCard != nil && !streamCard.Failed() {
+			} else if turnStream != nil && !turnStream.Failed() {
 				// Close the streaming turn even when Error is nil.
-				if err := streamCard.Finalize(e.ctx, buildCardContent(cardThinkingText, cardToolCalls, "")); err != nil {
+				if err := turnStream.Finalize(e.ctx, ""); err != nil {
 					slog.Error("streaming card finalize failed on empty agent error", "error", err)
 				}
 			}

@@ -753,6 +753,18 @@ type StreamingCard interface {
 	Failed() bool
 }
 
+// StructuredStreamingCard is optional. Platforms that need typed turn streams
+// (e.g. chat-api SSE) implement this so the Engine can emit TurnStreamEvent
+// without requiring Markdown re-parsing. DingTalk/Slack keep Update(string) only.
+//
+// Phase 1 (dual-write): Engine still calls Update(markdown) for all cards and
+// additionally calls OnTurnStreamEvent when this interface is present.
+// Phase 2+: structured-only consumers may no-op Update.
+type StructuredStreamingCard interface {
+	StreamingCard
+	OnTurnStreamEvent(ctx context.Context, ev TurnStreamEvent) error
+}
+
 // StreamingCardPlatform is an optional interface for platforms that support
 // aggregating an entire agent turn into a single updatable card message
 // (e.g. DingTalk AI Card). When the engine detects this interface, it
