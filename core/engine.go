@@ -3548,9 +3548,12 @@ func questionAnswersKey(q UserQuestion) string {
 
 func (e *Engine) finalizeAskQuestion(p Platform, msg *Message, state *interactiveState, pending *pendingPermission, ackQuestion, ackAnswer string) bool {
 	if pending != nil && IsMCPAskTool(pending.ToolName) && e.askUserHub != nil {
-		e.askUserHub.Complete(pending.RequestID, pending.Answers, pending.DisplayAnswers)
+		ok := e.askUserHub.Complete(pending.RequestID, pending.Answers, pending.DisplayAnswers)
 		if ackQuestion != "" {
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", ackQuestion, ackAnswer))
+		}
+		if ok {
+			e.maybeRecordAskUserQuestionHistory(p, msg, pending)
 		}
 		state.mu.Lock()
 		state.pending = nil
@@ -3571,6 +3574,7 @@ func (e *Engine) finalizeAskQuestion(p Platform, msg *Message, state *interactiv
 		if ackQuestion != "" {
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", ackQuestion, ackAnswer))
 		}
+		e.maybeRecordAskUserQuestionHistory(p, msg, pending)
 	}
 
 	state.mu.Lock()
@@ -3578,6 +3582,78 @@ func (e *Engine) finalizeAskQuestion(p Platform, msg *Message, state *interactiv
 	state.mu.Unlock()
 	pending.resolve()
 	return true
+}
+
+// maybeRecordAskUserQuestionHistory appends synthetic assistant/user history
+// turns for platforms that opt in via AskUserQuestionHistoryRecorder.
+func (e *Engine) maybeRecordAskUserQuestionHistory(p Platform, msg *Message, pending *pendingPermission) {
+	if pending == nil || len(pending.Questions) == 0 {
+		return
+	}
+	recorder, ok := p.(AskUserQuestionHistoryRecorder)
+	if !ok || !recorder.RecordAskUserQuestionHistory() {
+		return
+	}
+	if msg == nil || msg.SessionKey == "" || e.sessions == nil {
+		return
+	}
+
+	session := e.sessions.GetOrCreateActive(msg.SessionKey)
+	for i, q := range pending.Questions {
+		text := formatAskQuestionHistoryText(e, q)
+		if text == "" {
+			continue
+		}
+		session.AddHistory("assistant", text)
+		display := ""
+		if pending.DisplayAnswers != nil {
+			display = strings.TrimSpace(pending.DisplayAnswers[i])
+		}
+		if display == "" && pending.Answers != nil {
+			display = strings.TrimSpace(pending.Answers[i])
+		}
+		session.AddUserHistory(display, msg.UserID, msg.UserName)
+	}
+	e.sessions.Save()
+}
+
+// formatAskQuestionHistoryText builds a readable plain-text snapshot of one
+// structured question for session history (labels only, never option values).
+func formatAskQuestionHistoryText(e *Engine, q UserQuestion) string {
+	var b strings.Builder
+	header := strings.TrimSpace(q.Header)
+	question := strings.TrimSpace(q.Question)
+	if header != "" {
+		b.WriteString(header)
+		if question != "" && question != header {
+			b.WriteString("\n\n")
+			b.WriteString(question)
+		}
+	} else if question != "" {
+		b.WriteString(question)
+	}
+	if desc := strings.TrimSpace(q.Description); desc != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(desc)
+	}
+	if len(q.Options) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		for i, opt := range q.Options {
+			label := formatAskOptionLabel(e, opt)
+			if askOptionRecommended(opt) && !strings.Contains(label, "★") {
+				label = "★ " + label
+			}
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(fmt.Sprintf("%d. %s", i+1, label))
+		}
+	}
+	return b.String()
 }
 
 // abortPendingAsk finishes a pending permission/ask without a user answer.

@@ -7602,6 +7602,321 @@ func TestHandlePendingPermission_AskUserQuestion_SingleQuestion(t *testing.T) {
 	state.mu.Unlock()
 }
 
+type stubAskUserHistoryPlatform struct {
+	stubPlatformEngine
+	record bool
+}
+
+func (p *stubAskUserHistoryPlatform) RecordAskUserQuestionHistory() bool { return p.record }
+
+func TestHandlePendingPermission_AskUserQuestion_DefaultPlatform_NoHistory(t *testing.T) {
+	e := newTestEngine()
+	p := &stubPlatformEngine{n: "test"}
+	rec := &recordingAgentSession{}
+	sessionKey := "test:chat:user1"
+	e.sessions.GetOrCreateActive(sessionKey).AddUserHistory("pick a db", "user1", "Alice")
+
+	state := &interactiveState{
+		agentSession: rec,
+		platform:     p,
+		replyCtx:     "ctx",
+		pending: &pendingPermission{
+			RequestID: "req-1",
+			ToolName:  "AskUserQuestion",
+			ToolInput: map[string]any{
+				"questions": []any{map[string]any{"question": "Which?"}},
+			},
+			Questions: []UserQuestion{{
+				Question: "Which database?",
+				Options: []UserQuestionOption{
+					{Label: "工资卡", Value: "acc_001", Tag: "推荐", TagVariant: "recommend"},
+					{Label: "理财卡", Value: "acc_002"},
+				},
+			}},
+			Resolved: make(chan struct{}),
+		},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[sessionKey] = state
+	e.interactiveMu.Unlock()
+
+	if !e.handlePendingPermission(p, &Message{
+		SessionKey: sessionKey,
+		UserID:     "user1",
+		UserName:   "Alice",
+		Content:    "1",
+		ReplyCtx:   "ctx",
+	}, "1", "") {
+		t.Fatal("expected handled")
+	}
+
+	hist := e.sessions.GetOrCreateActive(sessionKey).GetHistory(0)
+	if len(hist) != 1 {
+		t.Fatalf("history len = %d, want 1 (no AskUserQuestion history for default platform)", len(hist))
+	}
+}
+
+func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_WritesLabel(t *testing.T) {
+	e := newTestEngine()
+	p := &stubAskUserHistoryPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}, record: true}
+	rec := &recordingAgentSession{}
+	sessionKey := "test:chat:user1"
+	e.sessions.GetOrCreateActive(sessionKey).AddUserHistory("pick a db", "user1", "Alice")
+
+	state := &interactiveState{
+		agentSession: rec,
+		platform:     p,
+		replyCtx:     "ctx",
+		pending: &pendingPermission{
+			RequestID: "req-1",
+			ToolName:  "AskUserQuestion",
+			ToolInput: map[string]any{
+				"questions": []any{map[string]any{"question": "Which?"}},
+			},
+			Questions: []UserQuestion{{
+				Question:    "Which database?",
+				Description: "Choose carefully",
+				Options: []UserQuestionOption{
+					{Label: "工资卡", Value: "acc_001", Tag: "推荐", TagVariant: "recommend"},
+					{Label: "理财卡", Value: "acc_002"},
+				},
+			}},
+			Resolved: make(chan struct{}),
+		},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[sessionKey] = state
+	e.interactiveMu.Unlock()
+
+	if !e.handlePendingPermission(p, &Message{
+		SessionKey: sessionKey,
+		UserID:     "user1",
+		UserName:   "Alice",
+		Content:    "1",
+		ReplyCtx:   "ctx",
+	}, "1", "") {
+		t.Fatal("expected handled")
+	}
+
+	answers, ok := rec.lastResult.UpdatedInput["answers"].(map[string]any)
+	if !ok {
+		t.Fatal("expected answers in updatedInput")
+	}
+	if answers["Which database?"] != "acc_001" {
+		t.Fatalf("agent answer = %v, want value acc_001", answers["Which database?"])
+	}
+
+	hist := e.sessions.GetOrCreateActive(sessionKey).GetHistory(0)
+	if len(hist) != 3 {
+		t.Fatalf("history len = %d, want 3 (user query + assistant question + user label)", len(hist))
+	}
+	if hist[0].Role != "user" || hist[0].Content != "pick a db" {
+		t.Fatalf("hist[0] = %#v", hist[0])
+	}
+	if hist[1].Role != "assistant" {
+		t.Fatalf("hist[1].Role = %q", hist[1].Role)
+	}
+	if !strings.Contains(hist[1].Content, "Which database?") ||
+		!strings.Contains(hist[1].Content, "Choose carefully") ||
+		!strings.Contains(hist[1].Content, "工资卡") ||
+		strings.Contains(hist[1].Content, "acc_001") {
+		t.Fatalf("assistant history = %q, want readable question without values", hist[1].Content)
+	}
+	if hist[2].Role != "user" || hist[2].Content != "工资卡" {
+		t.Fatalf("hist[2] = %#v, want user display label 工资卡", hist[2])
+	}
+	if hist[2].UserID != "user1" || hist[2].UserName != "Alice" {
+		t.Fatalf("user identity = %#v", hist[2])
+	}
+}
+
+func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_RespondPermissionFail_NoHistory(t *testing.T) {
+	e := newTestEngine()
+	p := &stubAskUserHistoryPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}, record: true}
+	rec := &recordingAgentSession{respondErr: errors.New("agent gone")}
+	sessionKey := "test:chat:user1"
+	e.sessions.GetOrCreateActive(sessionKey).AddUserHistory("pick a db", "user1", "Alice")
+
+	state := &interactiveState{
+		agentSession: rec,
+		platform:     p,
+		replyCtx:     "ctx",
+		pending: &pendingPermission{
+			RequestID: "req-1",
+			ToolName:  "AskUserQuestion",
+			Questions: testQuestions(),
+			Resolved:  make(chan struct{}),
+		},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[sessionKey] = state
+	e.interactiveMu.Unlock()
+
+	if !e.handlePendingPermission(p, &Message{
+		SessionKey: sessionKey,
+		UserID:     "user1",
+		Content:    "2",
+		ReplyCtx:   "ctx",
+	}, "2", "") {
+		t.Fatal("expected handled")
+	}
+
+	hist := e.sessions.GetOrCreateActive(sessionKey).GetHistory(0)
+	if len(hist) != 1 {
+		t.Fatalf("history len = %d, want 1 (no write on RespondPermission failure)", len(hist))
+	}
+}
+
+func TestHandlePendingPermission_MCPAskUser_HistoryRecorder_Writes(t *testing.T) {
+	e := newTestEngine()
+	hub := NewAskUserHub()
+	e.SetAskUserHub(hub)
+	p := &stubAskUserHistoryPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}, record: true}
+	rec := &recordingAgentSession{}
+	sessionKey := "test:chat:user1"
+	e.sessions.GetOrCreateActive(sessionKey).AddUserHistory("connect wallet", "user1", "Alice")
+
+	done := make(chan AskUserResult, 1)
+	reqID := "ask_mcp_hist_1"
+	hub.mu.Lock()
+	hub.pending[reqID] = &askWaiter{sessionKey: "mcp-sess", ch: done}
+	hub.mu.Unlock()
+
+	qs := []UserQuestion{{
+		Question: "Which wallet?",
+		Options: []UserQuestionOption{
+			{Label: "metamask", Value: "mm"},
+			{Label: "imToken", Value: "im"},
+		},
+	}}
+	state := &interactiveState{
+		agentSession: rec,
+		platform:     p,
+		replyCtx:     "ctx",
+		pending: &pendingPermission{
+			RequestID: reqID,
+			ToolName:  ToolCCConnectAskUser,
+			Questions: qs,
+			Resolved:  make(chan struct{}),
+		},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[sessionKey] = state
+	e.interactiveMu.Unlock()
+
+	if !e.handlePendingPermission(p, &Message{
+		SessionKey: sessionKey,
+		UserID:     "user1",
+		UserName:   "Alice",
+		Content:    "1",
+		ReplyCtx:   "ctx",
+	}, "1", "") {
+		t.Fatal("expected handled")
+	}
+	select {
+	case res := <-done:
+		if res.Answers[0] != "mm" || res.DisplayAnswers[0] != "metamask" {
+			t.Fatalf("hub result answers=%v display=%v", res.Answers, res.DisplayAnswers)
+		}
+	default:
+		t.Fatal("expected Hub.Complete")
+	}
+
+	hist := e.sessions.GetOrCreateActive(sessionKey).GetHistory(0)
+	if len(hist) != 3 {
+		t.Fatalf("history len = %d, want 3", len(hist))
+	}
+	if hist[1].Role != "assistant" || !strings.Contains(hist[1].Content, "Which wallet?") {
+		t.Fatalf("hist[1] = %#v", hist[1])
+	}
+	if hist[2].Role != "user" || hist[2].Content != "metamask" {
+		t.Fatalf("hist[2] = %#v, want metamask label", hist[2])
+	}
+}
+
+func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_MultiQuestion(t *testing.T) {
+	e := newTestEngine()
+	p := &stubAskUserHistoryPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}, record: true}
+	rec := &recordingAgentSession{}
+	sessionKey := "test:chat:user1"
+	e.sessions.GetOrCreateActive(sessionKey).AddUserHistory("setup", "user1", "Alice")
+
+	state := &interactiveState{
+		agentSession: rec,
+		platform:     p,
+		replyCtx:     "ctx",
+		pending: &pendingPermission{
+			RequestID: "req-1",
+			ToolName:  "AskUserQuestion",
+			Questions: testMultiQuestions(),
+			Resolved:  make(chan struct{}),
+		},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[sessionKey] = state
+	e.interactiveMu.Unlock()
+
+	if !e.handlePendingPermission(p, &Message{
+		SessionKey: sessionKey, UserID: "user1", Content: "1", ReplyCtx: "ctx",
+	}, "1", "") {
+		t.Fatal("expected first answer handled")
+	}
+	if len(e.sessions.GetOrCreateActive(sessionKey).GetHistory(0)) != 1 {
+		t.Fatal("must not write history until all questions answered")
+	}
+
+	if !e.handlePendingPermission(p, &Message{
+		SessionKey: sessionKey, UserID: "user1", UserName: "Alice", Content: "2", ReplyCtx: "ctx",
+	}, "2", "") {
+		t.Fatal("expected second answer handled")
+	}
+
+	hist := e.sessions.GetOrCreateActive(sessionKey).GetHistory(0)
+	if len(hist) != 5 {
+		t.Fatalf("history len = %d, want 5 (query + 2 Q&A pairs)", len(hist))
+	}
+	if hist[1].Role != "assistant" || !strings.Contains(hist[1].Content, "Which database?") {
+		t.Fatalf("hist[1] = %#v", hist[1])
+	}
+	if hist[2].Role != "user" || hist[2].Content != "PostgreSQL" {
+		t.Fatalf("hist[2] = %#v", hist[2])
+	}
+	if hist[3].Role != "assistant" || !strings.Contains(hist[3].Content, "Which framework?") {
+		t.Fatalf("hist[3] = %#v", hist[3])
+	}
+	if hist[4].Role != "user" || hist[4].Content != "Echo" {
+		t.Fatalf("hist[4] = %#v", hist[4])
+	}
+}
+
+func TestFormatAskQuestionHistoryText(t *testing.T) {
+	e := newTestEngine()
+	got := formatAskQuestionHistoryText(e, UserQuestion{
+		Header:      "选择账户",
+		Question:    "请选择要操作的账户",
+		Description: "已开户账户列表",
+		Options: []UserQuestionOption{
+			{Label: "工资卡 (尾号 1234)", Tag: "推荐", TagVariant: "recommend"},
+			{Label: "理财卡 (尾号 5678)"},
+		},
+	})
+	wantParts := []string{
+		"选择账户",
+		"请选择要操作的账户",
+		"已开户账户列表",
+		"1. ★ 推荐 · 工资卡 (尾号 1234)",
+		"2. 理财卡 (尾号 5678)",
+	}
+	for _, part := range wantParts {
+		if !strings.Contains(got, part) {
+			t.Fatalf("format missing %q in %q", part, got)
+		}
+	}
+	if strings.Contains(got, "acc_") {
+		t.Fatalf("format leaked value: %q", got)
+	}
+}
+
 // MCP-backed asks must Complete the AskUserHub (tool result path), not
 // RespondPermission / control_response.
 func TestHandlePendingPermission_MCPAskUser_CompletesHub(t *testing.T) {

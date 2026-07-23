@@ -190,6 +190,14 @@ func TestPreferAskUserButtons_ChatAPI(t *testing.T) {
 	}
 }
 
+func TestRecordAskUserQuestionHistory_ChatAPI(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	rec, ok := any(p).(core.AskUserQuestionHistoryRecorder)
+	if !ok || !rec.RecordAskUserQuestionHistory() {
+		t.Fatal("chat-api must always record AskUserQuestion history")
+	}
+}
+
 func TestAskQuestionRequestSSEAndRespond(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	bindTestSessions(t, p)

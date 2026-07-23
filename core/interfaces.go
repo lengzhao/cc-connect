@@ -436,6 +436,13 @@ type AskQuestionSender interface {
 	SendAskQuestion(ctx context.Context, replyCtx any, q UserQuestion, qIdx int) error
 }
 
+// AskUserQuestionHistoryRecorder is implemented by platforms that want
+// structured ask-user Q&A persisted as normal session history turns
+// (assistant question text + user display answer) after successful completion.
+type AskUserQuestionHistoryRecorder interface {
+	RecordAskUserQuestionHistory() bool
+}
+
 // CardNavigationHandler is called by platforms to render a card for in-place
 // card updates (e.g. Feishu card.action.trigger callback). The action string
 // uses prefixes like "nav:/model" or "act:/model 3".

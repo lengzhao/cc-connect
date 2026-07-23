@@ -5,6 +5,7 @@
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
 > AskUserQuestion card contract: [plans/2026-07-22-askuserquestion-rich-confirm-design.md](./plans/2026-07-22-askuserquestion-rich-confirm-design.md)
 > Ask User MCP (Claude Code source): [plans/2026-07-23-cc-connect-ask-user-mcp-design.md](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md)
+> AskUserQuestion history: [plans/2026-07-23-chat-api-askuserquestion-history-design.md](./plans/2026-07-23-chat-api-askuserquestion-history-design.md)
 > Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)  
 > Stream answer parse: [plans/2026-07-21-chat-api-stream-answer-parse-design.md](./plans/2026-07-21-chat-api-stream-answer-parse-design.md)  
 > Structured streaming (planned): [plans/2026-07-21-structured-streaming-card-design.md](./plans/2026-07-21-structured-streaming-card-design.md)
@@ -52,6 +53,8 @@
 `tool_call` / `tool_result` / interaction SSE events are ephemeral by default. See [Tool SSE design](./plans/2026-07-15-chat-api-tool-sse-design.md) and [Interaction hardening](./plans/2026-07-14-chat-api-interaction-hardening.md).
 
 `question_request` uses the card contract: envelope (`interaction_id` / `run_id` / `message_id` / `expires_at` / optional `event`) + `card_group` (length 1 from Engine/Claude). Options use `label` / `value` / `description` / `tag`; custom input is `others.custom_input.enabled`. Respond only via `POST /conversations/messages/respond` — questions use `answers[]` (`value` or `custom_input`); permissions use `decision`.
+
+After a successful question respond, chat-api always persists the confirm as normal history turns: readable question text as `assistant`, the user-visible option label (or custom input) as `user`, then the agent’s final reply. `GET …/messages` still returns plain `query`/`answer` pairs. Permission confirms are not written to history.
 
 ## Configuration
 

@@ -115,6 +115,12 @@ func (p *Platform) PreferAskUserButtons() bool {
 	return true
 }
 
+// RecordAskUserQuestionHistory always records structured confirm Q&A as
+// normal session history turns for chat-api clients.
+func (p *Platform) RecordAskUserQuestionHistory() bool {
+	return true
+}
+
 // SendAskQuestion implements core.AskQuestionSender with card_group contract shape.
 func (p *Platform) SendAskQuestion(_ context.Context, replyTo any, q core.UserQuestion, qIdx int) error {
 	rc, ok := replyTo.(*replyContext)
