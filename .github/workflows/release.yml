@@ -3,7 +3,7 @@ name: Personal Release
 on:
   push:
     tags:
-      - 'v10.*'
+      - 'v*'
   workflow_dispatch:
     inputs:
       version:

@@ -9,12 +9,16 @@
 - **chat-api / core**: Streaming turns emit typed `TurnStreamEvent`s via optional `StructuredStreamingCard`. chat-api prefers structured events for SSE; Engine no longer `Reply`s 🧾 tool-result markdown to structured consumers. See `docs/plans/2026-07-21-structured-streaming-card-design.md`.
 - **a2a**: Implements `StructuredStreamingCard` so task artifacts stream answer (or thinking) text only, not Engine markdown cards with thinking/tool markers.
 
-## Unreleased
+## v9.1.0 (2026-07-24)
 
 ### Added
 - **chat-api `client_flow`**: new independent Claude Code MCP tool `cc_connect_client_flow` emits a minimal non-blocking SSE guide (`flow_id`, `type`, `description`, `run_id`, `message_id`) for App-owned flows. Supported types are `connect_account`, `create_task`, and `task_center_approval`; it requires no respond, does not occupy the interaction slot, and can coexist with `question_request`. See `docs/plans/2026-07-23-chat-api-client-flow-design.md`.
-- **Claude Code Ask User MCP**: resident HTTP MCP tool `cc_connect_ask_user` (`mcp__ccconnect__cc_connect_ask_user`) preserves structured ask fields (`event` / `value` / `tag` / `allow_custom_input`) that Claude Code strips from native `AskUserQuestion` `can_use_tool` input. chat-api consumes `core.UserQuestion` into the card-contract `question_request` / `respond` (see card contract entry below). Config: `[projects.agent.options] ask_user_mode = "mcp"|"native"|"hybrid"` (default `mcp`). See `docs/plans/2026-07-23-cc-connect-ask-user-mcp-design.md`.
+- **Claude Code Ask User MCP**: resident HTTP MCP tool `cc_connect_ask_user` (`mcp__ccconnect__cc_connect_ask_user`) preserves structured ask fields (`event` / `value` / `tag` / `allow_custom_input`) that Claude Code strips from native `AskUserQuestion` `can_use_tool` input. chat-api consumes `core.UserQuestion` into the card-contract `question_request` / `respond`. Config: `[projects.agent.options] ask_user_mode = "mcp"|"native"|"hybrid"` (default `mcp`). See `docs/plans/2026-07-23-cc-connect-ask-user-mcp-design.md`.
 - **chat-api AskUserQuestion history**: after a successful `question_request` respond, question text and the user-visible label (or custom input) are always persisted as normal session history turns so `GET /conversations/{id}/messages` can replay them; permission confirms are not recorded. See `docs/plans/2026-07-23-chat-api-askuserquestion-history-design.md`.
+
+## Unreleased
+
+### Added
 - **chat-api card contract**: `question_request` emits envelope + `card_group` (length 1) with `event`, option `tag`, and `others.custom_input`; unified `POST /conversations/messages/respond` accepts `answers[]` for questions and `decision` for permissions (legacy `/runs/.../interactions/.../respond` removed). See `docs/plans/2026-07-22-askuserquestion-rich-confirm-design.md`.
 - **Feishu/Lark: sender email injection** via new `include_user_email` platform option (default off). When enabled with project `inject_sender = true`, Contact API email is populated on `Message.UserEmail` for agent prompt `sender_email=...` and hook `CC_HOOK_USER_EMAIL`, matching Slack behavior. Falls back to `enterprise_email` when personal email is empty; requires `contact:user.email:readonly` and user within app contact scope.
 - **`agent_session_idle_timeout_mins`**: new per-project config option that closes an idle live agent process after a clean turn while preserving the cc-connect session and saved agent session ID. The next message starts a new agent process and resumes the same conversation. Set to `0` or leave unset to disable (#1338).
