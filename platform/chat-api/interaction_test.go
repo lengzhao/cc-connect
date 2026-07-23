@@ -1214,3 +1214,201 @@ func TestNormalizeCardAnswers_CustomInputAndUnknownValue(t *testing.T) {
 		t.Fatalf("unknown value err=%v", err)
 	}
 }
+
+func TestSendClientFlow_EmitsSSEWithoutInteraction(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{})
+	run := newRunState(
+		"run_cf",
+		"user_001",
+		"channel",
+		"session",
+		"conv",
+		"conv:0",
+		nil,
+		time.Now().Add(time.Minute),
+	)
+	if !p.pending.create(run) {
+		t.Fatal("create run")
+	}
+	rc := run.replyContext()
+
+	if err := p.SendClientFlow(context.Background(), rc, "connect_account", "绑定新账户"); err != nil {
+		t.Fatalf("SendClientFlow: %v", err)
+	}
+
+	run.mu.Lock()
+	events := append([]pendingSSEEvent(nil), run.pendingEvents...)
+	ix := run.interaction
+	run.mu.Unlock()
+
+	if ix != nil {
+		t.Fatalf("run.interaction = %#v, want nil", ix)
+	}
+	if len(events) != 1 || events[0].name != "client_flow" {
+		t.Fatalf("events = %#v", events)
+	}
+	payload, ok := events[0].payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T", events[0].payload)
+	}
+	flowID, _ := payload["flow_id"].(string)
+	if !strings.HasPrefix(flowID, "flow_") {
+		t.Fatalf("flow_id = %#v, want flow_ prefix", payload["flow_id"])
+	}
+	wantKeys := map[string]any{
+		"flow_id":     flowID,
+		"type":        "connect_account",
+		"description": "绑定新账户",
+		"run_id":      "run_cf",
+		"message_id":  "conv:0",
+	}
+	if len(payload) != len(wantKeys) {
+		t.Fatalf("payload keys = %#v, want exactly %v", payload, wantKeys)
+	}
+	for k, want := range wantKeys {
+		if payload[k] != want {
+			t.Fatalf("payload[%q] = %#v, want %#v", k, payload[k], want)
+		}
+	}
+	for _, forbidden := range []string{"interaction_id", "expires_at", "actions", "card_group"} {
+		if _, ok := payload[forbidden]; ok {
+			t.Fatalf("payload must not include %s: %#v", forbidden, payload)
+		}
+	}
+}
+
+func TestSendClientFlow_CoexistsWithQuestionRequest(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"interaction_timeout": "1h"})
+	run := newRunState(
+		"run_cf_coexist",
+		"user_001",
+		"channel",
+		"session",
+		"conv",
+		"conv:1",
+		nil,
+		time.Now().Add(time.Minute),
+	)
+	if !p.pending.create(run) {
+		t.Fatal("create run")
+	}
+	rc := run.replyContext()
+
+	q := core.UserQuestion{
+		Question: "请选择账户",
+		Options: []core.UserQuestionOption{
+			{Label: "A", Value: "a"},
+			{Label: "B", Value: "b"},
+		},
+	}
+	if err := p.SendAskQuestion(context.Background(), rc, q, 0); err != nil {
+		t.Fatalf("SendAskQuestion: %v", err)
+	}
+
+	run.mu.Lock()
+	beforeIx := run.interaction
+	run.mu.Unlock()
+	if beforeIx == nil || beforeIx.ID == "" {
+		t.Fatal("expected question interaction after SendAskQuestion")
+	}
+	origID := beforeIx.ID
+	origPtr := beforeIx
+
+	if err := p.SendClientFlow(context.Background(), rc, "  create_task  ", "  创建任务  "); err != nil {
+		t.Fatalf("SendClientFlow: %v", err)
+	}
+
+	run.mu.Lock()
+	events := append([]pendingSSEEvent(nil), run.pendingEvents...)
+	afterIx := run.interaction
+	run.mu.Unlock()
+
+	if afterIx != origPtr {
+		t.Fatalf("interaction object changed: before=%p after=%p", origPtr, afterIx)
+	}
+	if afterIx.ID != origID {
+		t.Fatalf("interaction ID changed: %q -> %q", origID, afterIx.ID)
+	}
+
+	var names []string
+	var flowPayload map[string]any
+	var questionPayload map[string]any
+	for _, e := range events {
+		names = append(names, e.name)
+		payload, _ := e.payload.(map[string]any)
+		switch e.name {
+		case "client_flow":
+			flowPayload = payload
+		case "question_request":
+			questionPayload = payload
+		}
+	}
+	if len(names) != 2 || names[0] != "question_request" || names[1] != "client_flow" {
+		t.Fatalf("event names = %v, want [question_request client_flow]", names)
+	}
+	if questionPayload["interaction_id"] != origID {
+		t.Fatalf("question interaction_id = %#v, want %q", questionPayload["interaction_id"], origID)
+	}
+	if flowPayload["type"] != "create_task" || flowPayload["description"] != "创建任务" {
+		t.Fatalf("client_flow payload = %#v", flowPayload)
+	}
+	if _, ok := flowPayload["interaction_id"]; ok {
+		t.Fatalf("client_flow must not include interaction_id: %#v", flowPayload)
+	}
+}
+
+func TestSendClientFlow_InvalidInput(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{})
+	run := newRunState(
+		"run_cf_invalid",
+		"user_001",
+		"channel",
+		"session",
+		"conv",
+		"conv:2",
+		nil,
+		time.Now().Add(time.Minute),
+	)
+	if !p.pending.create(run) {
+		t.Fatal("create run")
+	}
+	rc := run.replyContext()
+
+	tests := []struct {
+		name        string
+		replyTo     any
+		flowType    string
+		description string
+		wantSubstr  string
+	}{
+		{name: "nil reply", replyTo: nil, flowType: "connect_account", description: "x", wantSubstr: "reply context"},
+		{name: "wrong type", replyTo: "not-rc", flowType: "connect_account", description: "x", wantSubstr: "reply context"},
+		{name: "empty runID", replyTo: &replyContext{}, flowType: "connect_account", description: "x", wantSubstr: "reply context"},
+		{name: "invalid type", replyTo: rc, flowType: "account_bind", description: "x", wantSubstr: "invalid client_flow"},
+		{name: "empty type", replyTo: rc, flowType: "  ", description: "x", wantSubstr: "invalid client_flow"},
+		{name: "empty description", replyTo: rc, flowType: "connect_account", description: "  ", wantSubstr: "invalid client_flow"},
+		{name: "missing pending", replyTo: &replyContext{runID: "missing_run"}, flowType: "connect_account", description: "x", wantSubstr: "not pending"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := p.SendClientFlow(context.Background(), tt.replyTo, tt.flowType, tt.description)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantSubstr) {
+				t.Fatalf("err=%v, want substr %q", err, tt.wantSubstr)
+			}
+		})
+	}
+
+	run.mu.Lock()
+	n := len(run.pendingEvents)
+	ix := run.interaction
+	run.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("invalid calls must not enqueue events, got %d", n)
+	}
+	if ix != nil {
+		t.Fatalf("invalid calls must not set interaction, got %#v", ix)
+	}
+}

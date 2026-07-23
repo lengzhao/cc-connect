@@ -16,6 +16,12 @@ const ToolCCConnectAskUser = "cc_connect_ask_user"
 // MCPQualifiedAskUserTool is the Claude Code MCP tool name for AskUser.
 const MCPQualifiedAskUserTool = "mcp__ccconnect__cc_connect_ask_user"
 
+// ToolCCConnectClientFlow is the canonical MCP tool for non-blocking App flow guides.
+const ToolCCConnectClientFlow = "cc_connect_client_flow"
+
+// MCPQualifiedClientFlowTool is the Claude Code MCP tool name for client_flow.
+const MCPQualifiedClientFlowTool = "mcp__ccconnect__cc_connect_client_flow"
+
 // SessionKeyHeader routes MCP tools/call to the correct agent session.
 const SessionKeyHeader = "X-CC-Session-Key"
 
@@ -54,6 +60,16 @@ func IsMCPAskTool(toolName string) bool {
 	}
 }
 
+// IsMCPClientFlowTool reports whether the tool is the fire-and-forget client_flow MCP.
+func IsMCPClientFlowTool(toolName string) bool {
+	switch toolName {
+	case ToolCCConnectClientFlow, MCPQualifiedClientFlowTool:
+		return true
+	default:
+		return false
+	}
+}
+
 // AskUserResult is the outcome of a Hub-mediated ask.
 type AskUserResult struct {
 	Answers        map[int]string // agent-facing values by question index
@@ -62,7 +78,9 @@ type AskUserResult struct {
 	Message        string
 }
 
-// AskUserEmitter delivers a permission-style ask event into a live session.
+// AskUserEmitter delivers a Hub-mediated event into a live session.
+// Events may be structured asks (permission_request) or non-blocking
+// client_flow guides; Type distinguishes them.
 type AskUserEmitter interface {
 	EmitAskUser(event Event) error
 }
@@ -177,6 +195,44 @@ func (h *AskUserHub) Ask(ctx context.Context, sessionKey string, q UserQuestion)
 	case <-ctx.Done():
 		return AskUserResult{}, ctx.Err()
 	}
+}
+
+// EmitClientFlow fire-and-forget: validates type/description, emits EventClientFlow.
+// Does not wait for App respond. Unknown type or empty description → error.
+func (h *AskUserHub) EmitClientFlow(sessionKey, flowType, description string) error {
+	if h == nil {
+		return fmt.Errorf("askuser hub is nil")
+	}
+	if sessionKey == "" {
+		return fmt.Errorf("session key required")
+	}
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return fmt.Errorf("description required")
+	}
+	flowType = NormalizeAskUserEvent(flowType)
+	if flowType == "" {
+		return fmt.Errorf("invalid type: must be connect_account, create_task, or task_center_approval")
+	}
+
+	evt := Event{
+		Type:      EventClientFlow,
+		ToolName:  ToolCCConnectClientFlow,
+		ToolInput: description,
+		ToolInputRaw: map[string]any{
+			"type":        flowType,
+			"description": description,
+		},
+		RequestID: newAskRequestID(),
+	}
+
+	h.mu.Lock()
+	emitter, ok := h.emitters[sessionKey]
+	h.mu.Unlock()
+	if !ok || emitter == nil {
+		return fmt.Errorf("no ask emitter for session %q", sessionKey)
+	}
+	return emitter.EmitAskUser(evt)
 }
 
 // Complete resolves a pending MCP ask with collected answers.

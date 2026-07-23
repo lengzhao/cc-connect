@@ -2667,6 +2667,21 @@ func TestAgentSystemPrompt_GuidesAskUserQuestionSingleConfirm(t *testing.T) {
 	}
 }
 
+func TestAgentSystemPrompt_MentionsClientFlow(t *testing.T) {
+	prompt := AgentSystemPrompt()
+	for _, want := range []string{
+		"cc_connect_client_flow",
+		"mcp__ccconnect__cc_connect_client_flow",
+		"connect_account",
+		"create_task",
+		"task_center_approval",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("AgentSystemPrompt missing %q", want)
+		}
+	}
+}
+
 func countCardActionValues(card *Card, prefix string) int {
 	count := 0
 	for _, elem := range card.Elements {
@@ -7548,6 +7563,322 @@ func TestProcessInteractiveEvents_AskUserQuestionFromAgent_RendersLegacyPrompt(t
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("processInteractiveEvents did not complete")
+	}
+}
+
+type clientFlowPlatform struct {
+	stubPlatformEngine
+	mu    sync.Mutex
+	flows []struct{ typ, desc string }
+}
+
+func (p *clientFlowPlatform) SendClientFlow(_ context.Context, _ any, flowType, description string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.flows = append(p.flows, struct{ typ, desc string }{flowType, description})
+	return nil
+}
+
+func (p *clientFlowPlatform) getFlows() []struct{ typ, desc string } {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]struct{ typ, desc string }, len(p.flows))
+	copy(out, p.flows)
+	return out
+}
+
+func TestProcessInteractiveEvents_ClientFlow_DoesNotBlock(t *testing.T) {
+	p := &clientFlowPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	sess := newQueuingSession("client-flow-ok")
+	e := NewEngine("test", &controllableAgent{nextSession: sess}, []Platform{p}, "", LangEnglish)
+
+	key := "test:clientflow:u1"
+	session := e.sessions.GetOrCreateActive(key)
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx-sse",
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	sendDone := make(chan error, 1)
+	sendDone <- nil
+
+	done := make(chan struct{})
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "m-cf", time.Now(), nil, sendDone, "ctx-sse")
+		close(done)
+	}()
+
+	sess.events <- Event{
+		Type:      EventClientFlow,
+		ToolName:  ToolCCConnectClientFlow,
+		ToolInput: "", // prefer ToolInput; empty falls back to ToolInputRaw["description"]
+		ToolInputRaw: map[string]any{
+			"type":        "  connect_account  ",
+			"description": "  请绑定账户  ",
+		},
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if len(p.getFlows()) > 0 {
+			break
+		}
+		state.mu.Lock()
+		pending := state.pending
+		state.mu.Unlock()
+		if pending != nil {
+			t.Fatal("client_flow must not create pendingPermission")
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for SendClientFlow")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	state.mu.Lock()
+	if state.pending != nil {
+		t.Fatal("expected no pending permission after client_flow")
+	}
+	state.mu.Unlock()
+
+	sess.events <- Event{Type: EventResult, Content: "done", Done: true}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processInteractiveEvents did not complete after client_flow")
+	}
+
+	flows := p.getFlows()
+	if len(flows) != 1 {
+		t.Fatalf("SendClientFlow calls = %d, want 1; flows=%v", len(flows), flows)
+	}
+	if flows[0].typ != AskEventConnectAccount || flows[0].desc != "请绑定账户" {
+		t.Fatalf("SendClientFlow got typ=%q desc=%q", flows[0].typ, flows[0].desc)
+	}
+}
+
+func TestProcessInteractiveEvents_ClientFlow_UnsupportedPlatform(t *testing.T) {
+	p := &stubPlatformEngine{n: "plain"}
+	sess := newQueuingSession("client-flow-plain")
+	e := NewEngine("test", &controllableAgent{nextSession: sess}, []Platform{p}, "", LangEnglish)
+
+	key := "test:clientflow:plain"
+	session := e.sessions.GetOrCreateActive(key)
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx",
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	sendDone := make(chan error, 1)
+	sendDone <- nil
+
+	done := make(chan struct{})
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "m-cf-plain", time.Now(), nil, sendDone, "ctx")
+		close(done)
+	}()
+
+	sess.events <- Event{
+		Type:      EventClientFlow,
+		ToolName:  ToolCCConnectClientFlow,
+		ToolInput: "打开任务中心",
+		ToolInputRaw: map[string]any{
+			"type":        AskEventCreateTask,
+			"description": "打开任务中心",
+		},
+	}
+	sess.events <- Event{Type: EventResult, Content: "ok", Done: true}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processInteractiveEvents did not complete on unsupported platform")
+	}
+
+	state.mu.Lock()
+	if state.pending != nil {
+		t.Fatal("expected no pending permission")
+	}
+	state.mu.Unlock()
+}
+
+func TestProcessInteractiveEvents_ClientFlow_InvalidPayload(t *testing.T) {
+	p := &clientFlowPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	sess := newQueuingSession("client-flow-bad")
+	e := NewEngine("test", &controllableAgent{nextSession: sess}, []Platform{p}, "", LangEnglish)
+
+	key := "test:clientflow:bad"
+	session := e.sessions.GetOrCreateActive(key)
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx",
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	sendDone := make(chan error, 1)
+	sendDone <- nil
+
+	done := make(chan struct{})
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "m-cf-bad", time.Now(), nil, sendDone, "ctx")
+		close(done)
+	}()
+
+	sess.events <- Event{
+		Type:      EventClientFlow,
+		ToolName:  ToolCCConnectClientFlow,
+		ToolInput: "x",
+		ToolInputRaw: map[string]any{
+			"type":        "not_a_real_flow",
+			"description": "x",
+		},
+	}
+	sess.events <- Event{
+		Type:      EventClientFlow,
+		ToolName:  ToolCCConnectClientFlow,
+		ToolInput: "   ",
+		ToolInputRaw: map[string]any{
+			"type":        AskEventConnectAccount,
+			"description": "   ",
+		},
+	}
+	sess.events <- Event{Type: EventResult, Content: "ok", Done: true}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processInteractiveEvents did not complete after invalid client_flow")
+	}
+
+	if flows := p.getFlows(); len(flows) != 0 {
+		t.Fatalf("SendClientFlow must not be called for invalid payload, got %v", flows)
+	}
+	state.mu.Lock()
+	if state.pending != nil {
+		t.Fatal("expected no pending permission for invalid client_flow")
+	}
+	state.mu.Unlock()
+}
+
+func TestProcessInteractiveEvents_ClientFlow_DuringPendingAsk(t *testing.T) {
+	p := &clientFlowPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	sess := newQueuingSession("client-flow-pending")
+	e := NewEngine("test", &controllableAgent{nextSession: sess}, []Platform{p}, "", LangEnglish)
+
+	key := "test:clientflow:pending"
+	session := e.sessions.GetOrCreateActive(key)
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx-sse",
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	sendDone := make(chan error, 1)
+	sendDone <- nil
+
+	done := make(chan struct{})
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "m-cf-pending", time.Now(), nil, sendDone, "ctx-sse")
+		close(done)
+	}()
+
+	sess.events <- Event{
+		Type:         EventPermissionRequest,
+		RequestID:    "req-ask-pending",
+		ToolName:     "AskUserQuestion",
+		ToolInput:    "Which account?",
+		ToolInputRaw: map[string]any{"question": "Which account?"},
+		Questions: []UserQuestion{{
+			Question: "Which account?",
+			Options:  []UserQuestionOption{{Label: "A", Value: "a"}, {Label: "B", Value: "b"}},
+		}},
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		state.mu.Lock()
+		pending := state.pending
+		state.mu.Unlock()
+		if pending != nil && len(pending.Questions) > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for pending ask")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	sess.events <- Event{
+		Type:      EventClientFlow,
+		ToolName:  ToolCCConnectClientFlow,
+		ToolInput: "绑定新账户",
+		ToolInputRaw: map[string]any{
+			"type":        AskEventConnectAccount,
+			"description": "绑定新账户",
+		},
+	}
+
+	deadline = time.After(2 * time.Second)
+	for {
+		if len(p.getFlows()) > 0 {
+			break
+		}
+		state.mu.Lock()
+		stillPending := state.pending != nil
+		state.mu.Unlock()
+		if !stillPending {
+			t.Fatal("pending ask resolved before client_flow was delivered")
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for SendClientFlow during pending ask")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	state.mu.Lock()
+	if state.pending == nil {
+		t.Fatal("client_flow must not clear pending ask")
+	}
+	state.mu.Unlock()
+
+	if !e.handlePendingPermission(p, &Message{
+		SessionKey: key,
+		UserID:     "u1",
+		Content:    "askq:0:1",
+		ReplyCtx:   "ctx-sse",
+	}, "askq:0:1", key) {
+		t.Fatal("expected ask answer to resolve pending request")
+	}
+
+	sess.events <- Event{Type: EventResult, Content: "done", Done: true}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processInteractiveEvents did not complete after pending ask + client_flow")
+	}
+
+	flows := p.getFlows()
+	if len(flows) != 1 || flows[0].typ != AskEventConnectAccount || flows[0].desc != "绑定新账户" {
+		t.Fatalf("SendClientFlow during pending ask got %v", flows)
 	}
 }
 

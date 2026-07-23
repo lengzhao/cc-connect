@@ -12,6 +12,7 @@
 ## Unreleased
 
 ### Added
+- **chat-api `client_flow`**: new independent Claude Code MCP tool `cc_connect_client_flow` emits a minimal non-blocking SSE guide (`flow_id`, `type`, `description`, `run_id`, `message_id`) for App-owned flows. Supported types are `connect_account`, `create_task`, and `task_center_approval`; it requires no respond, does not occupy the interaction slot, and can coexist with `question_request`. See `docs/plans/2026-07-23-chat-api-client-flow-design.md`.
 - **Claude Code Ask User MCP**: resident HTTP MCP tool `cc_connect_ask_user` (`mcp__ccconnect__cc_connect_ask_user`) preserves structured ask fields (`event` / `value` / `tag` / `allow_custom_input`) that Claude Code strips from native `AskUserQuestion` `can_use_tool` input. chat-api consumes `core.UserQuestion` into the card-contract `question_request` / `respond` (see card contract entry below). Config: `[projects.agent.options] ask_user_mode = "mcp"|"native"|"hybrid"` (default `mcp`). See `docs/plans/2026-07-23-cc-connect-ask-user-mcp-design.md`.
 - **chat-api AskUserQuestion history**: after a successful `question_request` respond, question text and the user-visible label (or custom input) are always persisted as normal session history turns so `GET /conversations/{id}/messages` can replay them; permission confirms are not recorded. See `docs/plans/2026-07-23-chat-api-askuserquestion-history-design.md`.
 - **chat-api card contract**: `question_request` emits envelope + `card_group` (length 1) with `event`, option `tag`, and `others.custom_input`; unified `POST /conversations/messages/respond` accepts `answers[]` for questions and `decision` for permissions (legacy `/runs/.../interactions/.../respond` removed). See `docs/plans/2026-07-22-askuserquestion-rich-confirm-design.md`.
@@ -20,9 +21,6 @@
 - **Reasonix agent**: new agent adapter for Reasonix multi-model coding agent, bridging via HTTP serve API (POST /submit, SSE /events, POST /approve). Supports default/yolo/plan permission modes, SSE auto-reconnect with backoff, and thinking accumulator. (#1281)
 - **cloud_web platform**: 新增 self-hosted IM Gateway 作为 first-class platform 接入 (CWIP v1 协议,支持 websocket / long_poll / gateway 3 种 transport,完整 inbound/outbound + capability negotiation + graceful degradation)。 详见 docs/cloud-web.md + #1282。
 
-## Unreleased
-
-### Added
 - **Feishu: outbound bot-to-bot @mention resolution** via new `mention_map` config option. Maps agent-friendly names (e.g. `BOT-A`) to Feishu open_ids so that when an agent writes `@BOT-A` in its reply, cc-connect converts it to a native Feishu `<at>` tag that triggers a real notification. Layered on top of `resolve_mentions` (group-member matching) with higher priority, so explicit config always wins (#1322).
 
 ### Fixed

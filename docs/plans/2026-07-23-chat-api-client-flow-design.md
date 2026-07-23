@@ -1,7 +1,7 @@
 # chat-api `client_flow` SSE（独立 MCP）
 
 > Date: 2026-07-23  
-> Status: approved  
+> Status: implemented
 > Related: [Ask User MCP](./2026-07-23-cc-connect-ask-user-mcp-design.md)、[AskUserQuestion 卡片契约](./2026-07-22-askuserquestion-rich-confirm-design.md)  
 > External contract: `logs/agent-chat-api.zh-CN.md` §3.6 `client_flow`
 
@@ -25,7 +25,7 @@
 | 触发方式 | 独立 MCP：`cc_connect_client_flow` |
 | `type` 枚举 | 复用 `connect_account` / `create_task` / `task_center_approval` |
 | 文档修正 | 对外示例 `account_bind` → `connect_account` |
-| 非 chat-api | Hub/Engine 侧静默成功（no-op） |
+| 非 chat-api | 已绑定 session 仍正常发出事件；Engine 发现平台未实现 `ClientFlowSender` 后跳过 |
 | 与确认卡关系 | 可并存；各自独立 SSE |
 
 ## Architecture
@@ -59,15 +59,15 @@ type ClientFlowSender interface {
 }
 ```
 
-- `AskUserHub`（或同 MCP 绑定的 emitter）扩展 fire-and-forget：
+- `AskUserHub.EmitClientFlow` 校验后构造 `EventClientFlow`，复用 session 已实现的 `AskUserEmitter.EmitAskUser` 发入同一事件流；实现中**不存在**独立 `ClientFlowEmitter`：
 
 ```go
-type ClientFlowEmitter interface {
-	EmitClientFlow(event Event) error
+type AskUserEmitter interface {
+	EmitAskUser(event Event) error
 }
 ```
 
-Claude session 同时实现 `AskUserEmitter` + `ClientFlowEmitter`（或合并为一个 emitter 接口含两方法）。Hub 在 session Bind 时注册。
+Claude session 在 Hub `Bind` 时注册现有 `AskUserEmitter`。如果 session 未绑定 emitter，MCP 调用返回错误；这与「session 已绑定、但当前平台不支持 `ClientFlowSender`」的 Engine no-op 是两种不同情况。
 
 ### MCP
 
@@ -96,7 +96,7 @@ Claude session 同时实现 `AskUserEmitter` + `ClientFlowEmitter`（或合并�
 在 `processInteractiveEvents`（或等价事件循环）处理 `EventClientFlow`：
 
 1. 取当前平台；若实现 `ClientFlowSender`，调用 `SendClientFlow`。
-2. 未实现 → 打 debug/info 日志后忽略（MCP 已成功返回）。
+2. 当前 session 已绑定 emitter、但平台未实现 `ClientFlowSender` → 打 debug 日志后忽略；不影响已经返回的 MCP 成功结果。
 3. **不**创建 `pendingPermission`，不占 interaction 槽。
 
 ### chat-api
@@ -130,7 +130,7 @@ data: {
 |------|------|
 | 未知 type / 空 description | MCP 参数错误（`isError` 或 RPC error） |
 | session 无 emitter | MCP 错误（与 ask 一致） |
-| 平台非 chat-api | Emit 进 Engine → no-op；MCP 仍成功 |
+| 平台非 chat-api（session emitter 已绑定） | Emit 进 Engine；平台无 `ClientFlowSender` 时 no-op，MCP 仍成功 |
 | run 已结束 / replyCtx 无效 | `SendClientFlow` 返回 error；Engine 打日志；MCP 侧若已返回成功则无法回滚（可接受；emit 应在工具返回前完成入队） |
 
 > 为降低「SSE 未真正发出但 tool 已成功」的窗口：Hub 同步 `EmitClientFlow` 入 session events channel；Engine 尽快 flush。不引入 App 级 ACK。

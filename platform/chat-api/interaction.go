@@ -152,6 +152,32 @@ func (p *Platform) SendAskQuestion(_ context.Context, replyTo any, q core.UserQu
 	})
 }
 
+// SendClientFlow implements core.ClientFlowSender: enqueue non-blocking SSE
+// client_flow without occupying the interaction slot.
+func (p *Platform) SendClientFlow(_ context.Context, replyTo any, flowType, description string) error {
+	rc, ok := replyTo.(*replyContext)
+	if !ok || rc == nil || rc.runID == "" {
+		return fmt.Errorf("chat-api: unsupported reply context %T", replyTo)
+	}
+	flowType = core.NormalizeAskUserEvent(flowType)
+	description = strings.TrimSpace(description)
+	if flowType == "" || description == "" {
+		return fmt.Errorf("chat-api: invalid client_flow")
+	}
+	run := p.pending.get(rc.runID)
+	if run == nil {
+		return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
+	}
+	run.enqueueEvent("client_flow", map[string]any{
+		"flow_id":     newFlowID(),
+		"type":        flowType,
+		"description": description,
+		"run_id":      run.id,
+		"message_id":  run.messageID,
+	})
+	return nil
+}
+
 func resolveTagVariant(text, explicit string) string {
 	switch strings.ToLower(strings.TrimSpace(explicit)) {
 	case "recommend", "keep", "default", "warning":

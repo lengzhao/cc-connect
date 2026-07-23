@@ -264,12 +264,13 @@ const (
 	EventError             EventType = "error"              // error occurred
 	EventPermissionRequest EventType = "permission_request" // agent requests permission via stdio protocol
 	EventThinking          EventType = "thinking"           // thinking/processing status
+	EventClientFlow        EventType = "client_flow"        // non-blocking App flow guide
 )
 
 // UserQuestion represents a structured question from AskUserQuestion /
 // cc_connect_ask_user. Fields align with chat-api card_group + envelope event.
 type UserQuestion struct {
-	Question         string               `json:"question"` // card title + tool/answer key
+	Question         string               `json:"question"`         // card title + tool/answer key
 	Header           string               `json:"header,omitempty"` // legacy agent field; SSE uses Question
 	Description      string               `json:"description,omitempty"`
 	Event            string               `json:"event,omitempty"` // envelope semantic key (e.g. connect_account)

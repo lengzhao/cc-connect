@@ -4849,6 +4849,12 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 					"session", sessionKey,
 					"response_len", len(fullResponse))
 
+			case EventClientFlow:
+				// No active SSE/user turn for client_flow delivery; do not
+				// mis-route as permission or send a normal chat message.
+				slog.Debug("unsolicited client_flow ignored (no active turn)",
+					"session", sessionKey, "tool", event.ToolName)
+
 			case EventPermissionRequest:
 				// If approveAll (/yolo) is set, grant the request. Otherwise
 				// deny — there is no active user turn to consult — and notify
@@ -5015,103 +5021,110 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 	events := state.agentSession.Events()
 	stopCh := state.stopSignal()
+	var deferredEvents []Event
 	for {
 		var event Event
 		var ok bool
 
-		select {
-		case <-stopCh:
-			sp.discard()
-			return
-		case event, ok = <-events:
-			if !ok {
-				goto channelClosed
-			}
-		case err := <-pendingSend:
-			pendingSend = nil
-			if err != nil {
-				slog.Error("failed to send prompt", "error", err, "session_key", sessionKey)
+		if len(deferredEvents) > 0 {
+			event = deferredEvents[0]
+			deferredEvents = deferredEvents[1:]
+			ok = true
+		} else {
+			select {
+			case <-stopCh:
 				sp.discard()
-				if stopTyping != nil {
-					stopTyping()
-					stopTyping = nil
+				return
+			case event, ok = <-events:
+				if !ok {
+					goto channelClosed
 				}
-				e.notifyDroppedQueuedMessages(state, err)
-				if state.agentSession == nil || !state.agentSession.Alive() {
-					e.cleanupInteractiveState(sessionKey, state)
+			case err := <-pendingSend:
+				pendingSend = nil
+				if err != nil {
+					slog.Error("failed to send prompt", "error", err, "session_key", sessionKey)
+					sp.discard()
+					if stopTyping != nil {
+						stopTyping()
+						stopTyping = nil
+					}
+					e.notifyDroppedQueuedMessages(state, err)
+					if state.agentSession == nil || !state.agentSession.Alive() {
+						e.cleanupInteractiveState(sessionKey, state)
+					}
+					state.mu.Lock()
+					p := state.platform
+					state.mu.Unlock()
+					e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
+					return
 				}
+				continue
+			case <-idleCh:
+				slog.Error("agent session idle timeout: no events for too long, killing session",
+					"session_key", sessionKey, "timeout", e.eventIdleTimeout, "elapsed", time.Since(turnStart))
+				cp.Finalize(ProgressCardStateFailed)
+				sp.discard()
+				state.mu.Lock()
+				state.eventsNeedResync = true
+				p := state.platform
+				state.mu.Unlock()
+				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "agent session timed out (no response)"))
+				e.cleanupInteractiveState(sessionKey, state)
+				return
+			case <-turnDeadlineCh:
+				elapsed := time.Since(turnStart)
+				slog.Warn("agent turn exceeded max_turn_time: sending stop signal, will force-kill if needed",
+					"session_key", sessionKey, "max_turn_time", e.maxTurnTime, "elapsed", elapsed)
+				cp.Finalize(ProgressCardStateFailed)
+				sp.discard()
 				state.mu.Lock()
 				p := state.platform
 				state.mu.Unlock()
-				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
-				return
-			}
-			continue
-		case <-idleCh:
-			slog.Error("agent session idle timeout: no events for too long, killing session",
-				"session_key", sessionKey, "timeout", e.eventIdleTimeout, "elapsed", time.Since(turnStart))
-			cp.Finalize(ProgressCardStateFailed)
-			sp.discard()
-			state.mu.Lock()
-			state.eventsNeedResync = true
-			p := state.platform
-			state.mu.Unlock()
-			e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "agent session timed out (no response)"))
-			e.cleanupInteractiveState(sessionKey, state)
-			return
-		case <-turnDeadlineCh:
-			elapsed := time.Since(turnStart)
-			slog.Warn("agent turn exceeded max_turn_time: sending stop signal, will force-kill if needed",
-				"session_key", sessionKey, "max_turn_time", e.maxTurnTime, "elapsed", elapsed)
-			cp.Finalize(ProgressCardStateFailed)
-			sp.discard()
-			state.mu.Lock()
-			p := state.platform
-			state.mu.Unlock()
-			e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError),
-				fmt.Sprintf("agent turn exceeded maximum time (%v), stopping", e.maxTurnTime)))
+				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError),
+					fmt.Sprintf("agent turn exceeded maximum time (%v), stopping", e.maxTurnTime)))
 
-			// Two-phase shutdown: first try a graceful stop so the agent can
-			// write its final state before dying (preserves --resume ability).
-			// If it doesn't exit within a short grace window, force-kill.
-			state.markStopped()
-			gracePeriod := 10 * time.Second
-			graceTimer := time.NewTimer(gracePeriod)
-		graceLoop:
-			for {
-				select {
-				case evt, ok := <-state.agentSession.Events():
-					if !ok || (ok && evt.Done) {
-						// Agent exited cleanly; state is intact, resume will work.
-						slog.Info("agent exited gracefully after max_turn_time stop signal",
-							"session_key", sessionKey, "elapsed", time.Since(turnStart))
+				// Two-phase shutdown: first try a graceful stop so the agent can
+				// write its final state before dying (preserves --resume ability).
+				// If it doesn't exit within a short grace window, force-kill.
+				state.markStopped()
+				gracePeriod := 10 * time.Second
+				graceTimer := time.NewTimer(gracePeriod)
+			graceLoop:
+				for {
+					select {
+					case evt, ok := <-state.agentSession.Events():
+						if !ok || (ok && evt.Done) {
+							// Agent exited cleanly; state is intact, resume will work.
+							slog.Info("agent exited gracefully after max_turn_time stop signal",
+								"session_key", sessionKey, "elapsed", time.Since(turnStart))
+							graceTimer.Stop()
+							state.mu.Lock()
+							state.eventsNeedResync = false
+							state.mu.Unlock()
+							break graceLoop
+						}
+					case <-graceTimer.C:
+						// Agent did not stop within grace period — force-kill.
+						slog.Error("agent did not stop within grace period after max_turn_time; force-killing",
+							"session_key", sessionKey, "grace_period", gracePeriod)
 						graceTimer.Stop()
 						state.mu.Lock()
-						state.eventsNeedResync = false
+						state.eventsNeedResync = true
 						state.mu.Unlock()
-						break graceLoop
+						e.cleanupInteractiveState(sessionKey, state)
+						return
 					}
-				case <-graceTimer.C:
-					// Agent did not stop within grace period — force-kill.
-					slog.Error("agent did not stop within grace period after max_turn_time; force-killing",
-						"session_key", sessionKey, "grace_period", gracePeriod)
-					graceTimer.Stop()
-					state.mu.Lock()
-					state.eventsNeedResync = true
-					state.mu.Unlock()
-					e.cleanupInteractiveState(sessionKey, state)
-					return
 				}
+				// Graceful exit path: cleanupInteractiveState closes the session,
+				// but eventsNeedResync=false so the next --resume works correctly.
+				e.cleanupInteractiveState(sessionKey, state)
+				return
+			case <-e.ctx.Done():
+				state.mu.Lock()
+				state.eventsNeedResync = true
+				state.mu.Unlock()
+				return
 			}
-			// Graceful exit path: cleanupInteractiveState closes the session,
-			// but eventsNeedResync=false so the next --resume works correctly.
-			e.cleanupInteractiveState(sessionKey, state)
-			return
-		case <-e.ctx.Done():
-			state.mu.Lock()
-			state.eventsNeedResync = true
-			state.mu.Unlock()
-			return
 		}
 
 		if state.isStopped() {
@@ -5568,6 +5581,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 			}
 
+		case EventClientFlow:
+			// Non-blocking App flow guide: never freeze stream, never create
+			// pendingPermission, never occupy the interaction slot.
+			e.dispatchClientFlow(p, replyCtx, sessionKey, event)
+			continue
+
 		case EventPermissionRequest:
 			// Structured ask is capability-driven: any event with Questions
 			// uses the AskUserQuestion UI path (MCP cc_connect_ask_user,
@@ -5646,7 +5665,32 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				idleTimer.Stop()
 			}
 
-			<-pending.Resolved
+			// While waiting for the user confirm, still accept client_flow so
+			// App guidance can appear alongside an open question_request.
+		waitPermission:
+			for {
+				select {
+				case <-pending.Resolved:
+					break waitPermission
+				case <-stopCh:
+					sp.discard()
+					return
+				case <-e.ctx.Done():
+					state.mu.Lock()
+					state.eventsNeedResync = true
+					state.mu.Unlock()
+					return
+				case ev, ok := <-events:
+					if !ok {
+						break waitPermission
+					}
+					if ev.Type == EventClientFlow {
+						e.dispatchClientFlow(p, replyCtx, sessionKey, ev)
+						continue
+					}
+					deferredEvents = append(deferredEvents, ev)
+				}
+			}
 			slog.Info("permission resolved", "request_id", event.RequestID)
 
 			// The stream preview was frozen+detached when this permission
@@ -11752,6 +11796,39 @@ func (e *Engine) sendAskQuestions(p Platform, replyCtx any, pending *pendingPerm
 		return
 	}
 	e.sendAskQuestionPrompt(p, replyCtx, pending.Questions, 0)
+}
+
+// dispatchClientFlow delivers a non-blocking App flow guide when the platform
+// supports ClientFlowSender. Invalid payloads and unsupported platforms are
+// ignored without occupying the interaction slot.
+func (e *Engine) dispatchClientFlow(p Platform, replyCtx any, sessionKey string, event Event) {
+	flowType, _ := event.ToolInputRaw["type"].(string)
+	desc := event.ToolInput
+	if desc == "" {
+		if d, ok := event.ToolInputRaw["description"].(string); ok {
+			desc = d
+		}
+	}
+	desc = strings.TrimSpace(desc)
+	flowType = NormalizeAskUserEvent(flowType)
+	if flowType == "" || desc == "" {
+		slog.Warn("client_flow ignored: invalid payload",
+			"type", flowType, "session", sessionKey)
+		return
+	}
+	if sender, ok := p.(ClientFlowSender); ok {
+		ctx := e.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := sender.SendClientFlow(ctx, replyCtx, flowType, desc); err != nil {
+			slog.Warn("client_flow send failed",
+				"error", err, "type", flowType, "session", sessionKey)
+		}
+		return
+	}
+	slog.Debug("client_flow skipped: platform unsupported",
+		"type", flowType, "session", sessionKey)
 }
 
 func formatAskOptionLabel(e *Engine, opt UserQuestionOption) string {

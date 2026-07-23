@@ -80,6 +80,37 @@ func ParseToolArguments(raw json.RawMessage) (core.UserQuestion, error) {
 	return q, nil
 }
 
+// ClientFlowArgs is the MCP input for cc_connect_client_flow.
+type ClientFlowArgs struct {
+	Type        string
+	Description string
+}
+
+// ParseClientFlowArguments validates type + description for client_flow.
+// type must be one of the three known enums (after trim); unknown/empty → error.
+// description must be non-empty after trim.
+func ParseClientFlowArguments(raw json.RawMessage) (ClientFlowArgs, error) {
+	if len(raw) == 0 {
+		return ClientFlowArgs{}, fmt.Errorf("arguments required")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return ClientFlowArgs{}, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if m == nil {
+		return ClientFlowArgs{}, fmt.Errorf("arguments must be a JSON object")
+	}
+	typ := NormalizeEvent(strField(m, "type"))
+	if typ == "" {
+		return ClientFlowArgs{}, fmt.Errorf("invalid type: must be connect_account, create_task, or task_center_approval")
+	}
+	desc := strField(m, "description")
+	if desc == "" {
+		return ClientFlowArgs{}, fmt.Errorf("description required")
+	}
+	return ClientFlowArgs{Type: typ, Description: desc}, nil
+}
+
 func firstString(m map[string]any, keys ...string) string {
 	for _, k := range keys {
 		if s := strField(m, k); s != "" {

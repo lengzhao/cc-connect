@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.2.5**（2026-07-23）<br>
+> 版本：**v1.2.6**（2026-07-23）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
 
 ## 1. 概述
 
@@ -15,6 +15,7 @@
 - 会话历史（游标分页）
 - 发送消息：**SSE 流式**（`message` → `thinking_delta?` → `tool_call?` / `tool_result?` → `text_delta` → `message_end`）
 - 用户确认窗口：权限 / AskUserQuestion（单确认可扩展）；公共 respond 字段、`ping` 保活、单槽 supersede
+- 极简 `client_flow`：通过独立 MCP 非阻塞引导 App 打开自有业务流程
 - 隐式创建会话（首条 `chat-messages` 不带 `conversation_id`）
 - 会话忙时排队（默认 `busy_policy=queue`，复用 Engine 队列）
 
@@ -328,6 +329,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 | `text_delta` | `message_id`, `text`, `replace?` | 正文增量（不含工具 markdown）；`replace:true` 时客户端应丢弃已有缓冲并整体替换 |
 | `permission_request` | 见 §3.5 | 工具权限确认窗口 |
 | `question_request` | 见 §3.5 | AskUserQuestion 单确认窗口（可扩展字段） |
+| `client_flow` | 见 §3.5 | 非阻塞 App 业务流程引导 |
 | `interaction_superseded` | `interaction_id`, `replacement_id`, `run_id`, `message_id` | 同一 run 上新确认替换旧确认 |
 | `interaction_ack` | `interaction_id`, `message_id`, `text?` | 用户已响应确认的回执（可选） |
 | `ping` | `run_id`, `ts` | SSE 保活；可忽略 |
@@ -349,6 +351,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 - 断开 SSE **不**停止 agent，内容仍写入 history
 - `message_queued` 后勿立即重开 SSE；等上轮结束或轮询 history
 - 收到 `permission_request` / `question_request` 时弹出确认窗口；用 `expires_at` 倒计时；优先 `POST /conversations/messages/respond`（`answers[]`），**不要**把确认结果当普通 `chat-messages`
+- 收到 `client_flow` 时保持 Streaming；App 可按 `type` 打开自有流程，但服务端不等待，也不要调用 respond
 - `ping` 为保活事件，客户端可忽略
 - 同一 run 若出现新的确认，会先发 `interaction_superseded`；旧 `interaction_id` 不可再 respond
 - AskUserQuestion 超时后当前阻塞 turn 会取消；后续用户输入应重新 `POST /chat-messages`，作为普通对话
@@ -369,7 +372,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 
 `transfer_method` 仅支持 `base64`。`type`：`image` | `file` | `audio`（audio 每请求最多一条）。
 
-### 3.5 用户确认窗口
+### 3.5 用户确认与流程交互
 
 Agent 在工具权限或 AskUserQuestion 时，SSE 中插入结构化交互事件。两类确认都保持原 SSE **打开**，App 弹窗后调用 §4.9 回传；确认后同一 SSE 继续 `text_delta` → `message_end`。
 
@@ -460,6 +463,49 @@ POST /conversations/messages/respond
 #### 输入框
 
 卡上 `others.custom_input.enabled=true` 时前端展示「其他…」输入；契约回传用 `answers[].custom_input`。旧路径仍可用 `{"answer":"..."}`。
+
+#### `client_flow`（独立、非阻塞）
+
+`client_flow` 由独立 MCP 工具 `cc_connect_client_flow`（Claude Code 中为 `mcp__ccconnect__cc_connect_client_flow`）触发，不是 `cc_connect_ask_user` 的确认结果。它只引导 App 打开自有流程，不创建未决 interaction，不占用单槽，不等待用户，也没有 respond。它可以与同一 run 的 `question_request` 并存。
+
+```text
+event: client_flow
+data: {
+  "flow_id":"flow_xxx",
+  "type":"connect_account",
+  "description":"绑定新账户",
+  "run_id":"run_abc",
+  "message_id":"s1a2b3c:1"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `flow_id` | string | 本次流程引导 ID，仅用于客户端关联 |
+| `type` | string | 三枚举之一：`connect_account` / `create_task` / `task_center_approval`；与 `question_request.event` 复用同一组枚举及语义 |
+| `description` | string | 必填非空的用户引导文案 |
+| `run_id` | string | 所属轮次 ID |
+| `message_id` | string | 所属消息 ID |
+
+| 关键语义 | 行为 |
+|----------|------|
+| 协议形状 | 仅上述五个字段；不传 URL、deep link 或业务 JSON |
+| 阻塞与回传 | 非阻塞；无 `interaction_id` / `expires_at` / `actions`，不调用 §4.9 respond |
+| interaction 单槽 | 不创建、不替换、不占用 interaction；可与 `question_request` 并存 |
+| 会话历史 | 临时 SSE 引导，不作为问答写入 history |
+| App 行为 | 按 `type` 打开 App 自有流程；服务端继续处理当前流，不等待流程完成 |
+
+客户端状态机中，只有 `permission_request` / `question_request` 进入 `WaitingInteraction`；`client_flow` 到达时仍是 `Streaming`。App 可在自身 UI 中并行打开流程页。
+
+```mermaid
+stateDiagram-v2
+  [*] --> Streaming
+  Streaming --> WaitingInteraction: permission_request / question_request
+  WaitingInteraction --> Streaming: respond / interaction_ack
+  Streaming --> Streaming: client_flow（App 打开流程，服务端不等待）
+  WaitingInteraction --> WaitingInteraction: client_flow
+  Streaming --> Done: message_end
+```
 
 **超时**（`interaction_timeout`，默认 `10m`，且不超过当前 run 剩余 `request_timeout`）
 
@@ -745,6 +791,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.2.6 | 2026-07-23 | 新增独立 MCP `cc_connect_client_flow` 与非阻塞 `client_flow` SSE；三种 `type` 与 `question_request.event` 同源，不占 interaction 槽且无需 respond |
 | v1.2.5 | 2026-07-23 | `question_request` 对齐卡片契约：`card_group` + 信封 `event` + `tag`；统一 `POST .../conversations/messages/respond`（`answers[]` / `decision`） |
 | v1.2.3 | 2026-07-22 | AskUserQuestion 富交互过渡版（已由 v1.2.4 收敛为单确认） |
 | v1.2.2 | 2026-07-21 | SSE `text_delta`/`thinking_delta` 支持可选 `replace`；流式卡片解析不再因答案内 `---` 截断；Engine 双写 `StructuredStreamingCard` 事件后 chat-api 优先走结构化路径 |

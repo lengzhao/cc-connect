@@ -147,6 +147,9 @@ Example when the user may type another bank:
 
 Do not ask a separate clarification question after the tool call; wait for the user's answer.
 
+### Client flow guide (cc_connect_client_flow)
+Use mcp__ccconnect__cc_connect_client_flow when the App should open its own business flow WITHOUT a confirm card (e.g. bind new account while also asking which existing account to use). Required: type (connect_account | create_task | task_center_approval), description. Does not wait for user respond. May be used together with cc_connect_ask_user.
+
 ### Send generated images, files, or voice messages back to the user
 When you generate a local image or file that should be sent to the user, use:
 
@@ -434,6 +437,12 @@ type PreferAskUserButtons interface {
 // metadata) without going through generic cards/buttons.
 type AskQuestionSender interface {
 	SendAskQuestion(ctx context.Context, replyCtx any, q UserQuestion, qIdx int) error
+}
+
+// ClientFlowSender is an optional interface for platforms that emit non-blocking
+// App flow guidance (SSE client_flow) without occupying the interaction slot.
+type ClientFlowSender interface {
+	SendClientFlow(ctx context.Context, replyCtx any, flowType, description string) error
 }
 
 // AskUserQuestionHistoryRecorder is implemented by platforms that want

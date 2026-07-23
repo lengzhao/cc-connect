@@ -1,5 +1,5 @@
 // Package askuser implements a minimal Streamable HTTP MCP server that exposes
-// cc_connect_ask_user for Claude Code structured confirmations.
+// cc_connect_ask_user and cc_connect_client_flow for Claude Code.
 package askuser
 
 import (
@@ -144,7 +144,7 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		result = map[string]any{}
 	case "tools/list":
-		result = map[string]any{"tools": []any{toolDescriptor()}}
+		result = map[string]any{"tools": []any{toolDescriptor(), clientFlowToolDescriptor()}}
 	case "tools/call":
 		result, err = s.callTool(r.Context(), sessionKey, req.Params)
 		if err != nil {
@@ -242,6 +242,34 @@ func toolDescriptor() map[string]any {
 	}
 }
 
+func clientFlowToolDescriptor() map[string]any {
+	return map[string]any{
+		"name": core.ToolCCConnectClientFlow,
+		"description": "非阻塞地引导 App 打开自有业务流程（如绑定账户、创建任务、去任务中心审批）。" +
+			"不用于普通确认问答，也不等待用户 respond；可与 cc_connect_ask_user 同时使用。",
+		"inputSchema": map[string]any{
+			"type":     "object",
+			"required": []string{"type", "description"},
+			"properties": map[string]any{
+				"type": map[string]any{
+					"type": "string",
+					"description": "流程类型枚举：connect_account（连接账户）、create_task（创建任务）、" +
+						"task_center_approval（去任务中心审批）。",
+					"enum": []any{
+						EventConnectAccount,
+						EventCreateTask,
+						EventTaskCenterApproval,
+					},
+				},
+				"description": map[string]any{
+					"type":        "string",
+					"description": "流程说明文案（必填），展示给用户引导其进入 App 自有流程。",
+				},
+			},
+		},
+	}
+}
+
 func (s *Server) callTool(ctx context.Context, sessionKey string, paramsRaw json.RawMessage) (any, error) {
 	var params struct {
 		Name      string          `json:"name"`
@@ -250,13 +278,21 @@ func (s *Server) callTool(ctx context.Context, sessionKey string, paramsRaw json
 	if err := json.Unmarshal(paramsRaw, &params); err != nil {
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
-	if params.Name != toolName && params.Name != core.MCPQualifiedAskUserTool {
-		return nil, fmt.Errorf("unknown tool %q", params.Name)
-	}
 	if sessionKey == "" {
 		return nil, fmt.Errorf("missing %s header", core.SessionKeyHeader)
 	}
-	q, err := ParseToolArguments(params.Arguments)
+	switch params.Name {
+	case toolName, core.MCPQualifiedAskUserTool:
+		return s.callAsk(ctx, sessionKey, params.Arguments)
+	case core.ToolCCConnectClientFlow, core.MCPQualifiedClientFlowTool:
+		return s.callClientFlow(sessionKey, params.Arguments)
+	default:
+		return nil, fmt.Errorf("unknown tool %q", params.Name)
+	}
+}
+
+func (s *Server) callAsk(ctx context.Context, sessionKey string, argsRaw json.RawMessage) (any, error) {
+	q, err := ParseToolArguments(argsRaw)
 	if err != nil {
 		return nil, err
 	}
@@ -283,6 +319,22 @@ func (s *Server) callTool(ctx context.Context, sessionKey string, paramsRaw json
 	text := formatAskResult(q, res)
 	return map[string]any{
 		"content": []any{map[string]any{"type": "text", "text": text}},
+	}, nil
+}
+
+func (s *Server) callClientFlow(sessionKey string, argsRaw json.RawMessage) (any, error) {
+	in, err := ParseClientFlowArguments(argsRaw)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.hub.EmitClientFlow(sessionKey, in.Type, in.Description); err != nil {
+		return map[string]any{
+			"content": []any{map[string]any{"type": "text", "text": "client_flow failed: " + err.Error()}},
+			"isError": true,
+		}, nil
+	}
+	return map[string]any{
+		"content": []any{map[string]any{"type": "text", "text": fmt.Sprintf("client_flow emitted: %s", in.Type)}},
 	}, nil
 }
 

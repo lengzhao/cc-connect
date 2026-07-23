@@ -121,6 +121,207 @@ func TestWriteMCPConfig_SessionHeader(t *testing.T) {
 	}
 }
 
+func TestParseClientFlowArguments(t *testing.T) {
+	in, err := ParseClientFlowArguments(json.RawMessage(`{"type":"connect_account","description":"绑定新账户"}`))
+	if err != nil || in.Type != EventConnectAccount || in.Description != "绑定新账户" {
+		t.Fatalf("%+v %v", in, err)
+	}
+
+	in, err = ParseClientFlowArguments(json.RawMessage(`{"type":" create_task ","description":" 创建任务 "}`))
+	if err != nil || in.Type != EventCreateTask || in.Description != "创建任务" {
+		t.Fatalf("trim: %+v %v", in, err)
+	}
+
+	_, err = ParseClientFlowArguments(json.RawMessage(`{"type":"account_bind","description":"x"}`))
+	if err == nil {
+		t.Fatal("account_bind must fail")
+	}
+	_, err = ParseClientFlowArguments(json.RawMessage(`{"type":"unknown_flow","description":"x"}`))
+	if err == nil {
+		t.Fatal("unknown type must fail")
+	}
+	_, err = ParseClientFlowArguments(json.RawMessage(`{"type":"connect_account","description":"  "}`))
+	if err == nil {
+		t.Fatal("empty description must fail")
+	}
+	_, err = ParseClientFlowArguments(json.RawMessage(`{"description":"x"}`))
+	if err == nil {
+		t.Fatal("missing type must fail")
+	}
+	_, err = ParseClientFlowArguments(json.RawMessage(`{"type":"connect_account"}`))
+	if err == nil {
+		t.Fatal("missing description must fail")
+	}
+	_, err = ParseClientFlowArguments(json.RawMessage(`[]`))
+	if err == nil {
+		t.Fatal("non-object must fail")
+	}
+	_, err = ParseClientFlowArguments(nil)
+	if err == nil {
+		t.Fatal("nil args must fail")
+	}
+}
+
+func TestClientFlowToolDescriptor(t *testing.T) {
+	desc := clientFlowToolDescriptor()
+	if desc["name"] != core.ToolCCConnectClientFlow {
+		t.Fatalf("name=%v", desc["name"])
+	}
+	if !strings.Contains(fmt.Sprint(desc["description"]), "非阻塞") {
+		t.Fatalf("description should clarify non-blocking: %v", desc["description"])
+	}
+	schema, _ := desc["inputSchema"].(map[string]any)
+	gotReq := map[string]bool{}
+	switch req := schema["required"].(type) {
+	case []string:
+		for _, r := range req {
+			gotReq[r] = true
+		}
+	case []any:
+		for _, r := range req {
+			s, _ := r.(string)
+			gotReq[s] = true
+		}
+	default:
+		t.Fatalf("required type %T = %v", schema["required"], schema["required"])
+	}
+	if !gotReq["type"] || !gotReq["description"] || len(gotReq) != 2 {
+		t.Fatalf("required=%v", schema["required"])
+	}
+	props, _ := schema["properties"].(map[string]any)
+	typ, _ := props["type"].(map[string]any)
+	enum, _ := typ["enum"].([]any)
+	if len(enum) != 3 {
+		t.Fatalf("type enum must be exactly 3 values, got %v", enum)
+	}
+	for _, v := range enum {
+		s, _ := v.(string)
+		if s == "" {
+			t.Fatal("type enum must not include empty string")
+		}
+		if NormalizeEvent(s) == "" {
+			t.Fatalf("unexpected enum value %q", s)
+		}
+	}
+	if _, ok := props["description"].(map[string]any); !ok {
+		t.Fatal("description property required")
+	}
+}
+
+func TestServer_ToolsCallClientFlow(t *testing.T) {
+	hub := core.NewAskUserHub()
+	srv, err := Start(hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close(context.Background())
+
+	var got core.Event
+	emitted := make(chan struct{}, 1)
+	hub.Bind("sess-cf", askEmitterFunc(func(e core.Event) error {
+		got = e
+		emitted <- struct{}{}
+		return nil
+	}))
+
+	postRPC(t, srv.MCPURL(), "", map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{},
+	})
+
+	list := postRPC(t, srv.MCPURL(), "sess-cf", map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": map[string]any{},
+	})
+	if !bytes.Contains(list, []byte(core.ToolCCConnectAskUser)) {
+		t.Fatalf("tools/list missing ask: %s", list)
+	}
+	if !bytes.Contains(list, []byte(core.ToolCCConnectClientFlow)) {
+		t.Fatalf("tools/list missing client_flow: %s", list)
+	}
+
+	start := time.Now()
+	call := postRPC(t, srv.MCPURL(), "sess-cf", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": core.ToolCCConnectClientFlow,
+			"arguments": map[string]any{
+				"type":        "connect_account",
+				"description": "绑定新账户",
+			},
+		},
+	})
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("client_flow must return immediately, took %v", elapsed)
+	}
+	if !bytes.Contains(call, []byte("emitted")) || !bytes.Contains(call, []byte("connect_account")) {
+		t.Fatalf("tools/call=%s", call)
+	}
+	if bytes.Contains(call, []byte(`"isError":true`)) || bytes.Contains(call, []byte(`"isError": true`)) {
+		t.Fatalf("unexpected error result: %s", call)
+	}
+
+	select {
+	case <-emitted:
+	case <-time.After(time.Second):
+		t.Fatal("expected EventClientFlow emit")
+	}
+	if got.Type != core.EventClientFlow || got.ToolName != core.ToolCCConnectClientFlow {
+		t.Fatalf("event=%+v", got)
+	}
+	if got.ToolInput != "绑定新账户" {
+		t.Fatalf("description=%q", got.ToolInput)
+	}
+	if got.ToolInputRaw["type"] != "connect_account" {
+		t.Fatalf("raw type=%v", got.ToolInputRaw["type"])
+	}
+
+	// Qualified MCP name also works.
+	callQ := postRPC(t, srv.MCPURL(), "sess-cf", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      4,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": core.MCPQualifiedClientFlowTool,
+			"arguments": map[string]any{
+				"type":        "create_task",
+				"description": "去创建",
+			},
+		},
+	})
+	if !bytes.Contains(callQ, []byte("emitted")) || !bytes.Contains(callQ, []byte("create_task")) {
+		t.Fatalf("qualified tools/call=%s", callQ)
+	}
+}
+
+func TestServer_ToolsCallClientFlow_HubFailureReturnsToolError(t *testing.T) {
+	hub := core.NewAskUserHub()
+	srv, err := Start(hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close(context.Background())
+
+	call := postRPC(t, srv.MCPURL(), "sess-without-emitter", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": core.ToolCCConnectClientFlow,
+			"arguments": map[string]any{
+				"type":        "connect_account",
+				"description": "绑定新账户",
+			},
+		},
+	})
+	if !bytes.Contains(call, []byte(`"isError":true`)) {
+		t.Fatalf("expected MCP tool error result: %s", call)
+	}
+	if !bytes.Contains(call, []byte("client_flow failed:")) {
+		t.Fatalf("expected client_flow failure text: %s", call)
+	}
+}
+
 func TestServer_ToolsCallAsk(t *testing.T) {
 	hub := core.NewAskUserHub()
 	srv, err := Start(hub)

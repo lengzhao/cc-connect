@@ -13,7 +13,7 @@
 ## Non-goals
 
 - Engine BatchMode / Claude 多题一次弹卡
-- 业务流程引导（`client_flow`）不属于本 MCP + SSE 卡片契约切片
+- 业务流程引导（`client_flow`）不属于本 MCP + SSE 卡片契约切片；其独立 MCP 与非阻塞 SSE 见 [`client_flow` 设计](./2026-07-23-chat-api-client-flow-design.md)
 - 用契约 `{code:0}` 替换 chat-api `{ok,data}` 信封
 
 ## Agent 侧来源（Claude Code）

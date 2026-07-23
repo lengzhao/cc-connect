@@ -1,10 +1,11 @@
 # chat-api Platform — API v1
 
-> Version: **v1.2.5** (2026-07-23)
+> Version: **v1.2.6** (2026-07-23)
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
 > AskUserQuestion card contract: [plans/2026-07-22-askuserquestion-rich-confirm-design.md](./plans/2026-07-22-askuserquestion-rich-confirm-design.md)
 > Ask User MCP (Claude Code source): [plans/2026-07-23-cc-connect-ask-user-mcp-design.md](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md)
+> Client flow MCP: [plans/2026-07-23-chat-api-client-flow-design.md](./plans/2026-07-23-chat-api-client-flow-design.md)
 > AskUserQuestion history: [plans/2026-07-23-chat-api-askuserquestion-history-design.md](./plans/2026-07-23-chat-api-askuserquestion-history-design.md)
 > Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)  
 > Stream answer parse: [plans/2026-07-21-chat-api-stream-answer-parse-design.md](./plans/2026-07-21-chat-api-stream-answer-parse-design.md)  
@@ -14,7 +15,7 @@
 
 `chat-api` is a cc-connect **Platform** — HTTP + SSE API for custom apps / BFFs.
 
-**v1**: SSE-only chat, implicit conversation create, default `busy_policy=queue`, tool SSE events, and permission / AskUserQuestion confirm windows.
+**v1**: SSE-only chat, implicit conversation create, default `busy_policy=queue`, tool SSE events, permission / AskUserQuestion confirm windows, and minimal non-blocking `client_flow` guides.
 
 > Agent-side source: Claude Code defaults to resident MCP tool `cc_connect_ask_user` so `event` / `value` / `tag` / `allow_custom_input` survive; see [Ask User MCP](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md).
 
@@ -46,13 +47,15 @@
 
 ## SSE events
 
-`message`, `thinking_delta`, `tool_call`, `tool_result`, `text_delta`, `permission_request`, `question_request`, `interaction_superseded`, `interaction_ack`, `ping`, `message_end`, `error`, `message_queued`
+`message`, `thinking_delta`, `tool_call`, `tool_result`, `text_delta`, `permission_request`, `question_request`, `client_flow`, `interaction_superseded`, `interaction_ack`, `ping`, `message_end`, `error`, `message_queued`
 
 `text_delta` / `thinking_delta` may include optional `replace: true` (full-text replace instead of append). Clients must handle it or progress lines can duplicate into the answer.
 
 `tool_call` / `tool_result` / interaction SSE events are ephemeral by default. See [Tool SSE design](./plans/2026-07-15-chat-api-tool-sse-design.md) and [Interaction hardening](./plans/2026-07-14-chat-api-interaction-hardening.md).
 
 `question_request` uses the card contract: envelope (`interaction_id` / `run_id` / `message_id` / `expires_at` / optional `event`) + `card_group` (length 1 from Engine/Claude). Options use `label` / `value` / `description` / `tag`; custom input is `others.custom_input.enabled`. Respond only via `POST /conversations/messages/respond` — questions use `answers[]` (`value` or `custom_input`); permissions use `decision`.
+
+`client_flow` is emitted from the independent `cc_connect_client_flow` MCP tool and carries exactly `flow_id`, `type`, `description`, `run_id`, and `message_id`. `type` is one of `connect_account`, `create_task`, or `task_center_approval`, sharing the same enum and semantics as `question_request.event`. It is non-blocking: it creates no interaction, occupies no interaction slot, requires no respond, and may coexist with `question_request`. The App handles the enum locally while the SSE turn keeps streaming. See [Client flow MCP](./plans/2026-07-23-chat-api-client-flow-design.md).
 
 After a successful question respond, chat-api always persists the confirm as normal history turns: readable question text as `assistant`, the user-visible option label (or custom input) as `user`, then the agent’s final reply. `GET …/messages` still returns plain `query`/`answer` pairs. Permission confirms are not written to history.
 
