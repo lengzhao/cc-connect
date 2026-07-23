@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,9 +49,9 @@ type Agent struct {
 	providers        []core.ProviderConfig
 	activeIdx        int // -1 = no provider set
 	sessionEnv       []string
-	routerURL        string // Claude Code Router URL (e.g., "http://127.0.0.1:3456")
-	routerAPIKey     string // Claude Code Router API key (optional)
-	systemPrompt     string // Custom system prompt to pass to Claude CLI
+	routerURL        string   // Claude Code Router URL (e.g., "http://127.0.0.1:3456")
+	routerAPIKey     string   // Claude Code Router API key (optional)
+	systemPrompt     string   // Custom system prompt to pass to Claude CLI
 	pluginDirs       []string // Plugin directories to load via --plugin-dir (repeatable)
 
 	appendSystemPrompt string // Custom text appended to the system prompt (keeps Claude's default)
@@ -72,45 +73,51 @@ type Agent struct {
 	// means legacy spawn as the supervisor user. See core/runas.go.
 	spawnOpts core.SpawnOptions
 
+	// Ask-user MCP support (ask_user_mode = mcp|native|hybrid).
+	askUserMode          string
+	askMCPURL            string
+	askHub               *core.AskUserHub
+	pendingAskSessionKey string
+
 	mu sync.RWMutex
 }
 
 var claudeProviderManagedEnvVars = map[string]struct{}{
-	"CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":                  {},
-	"CLAUDE_CODE_USE_BEDROCK":                               {},
-	"CLAUDE_CODE_USE_VERTEX":                                {},
-	"CLAUDE_CODE_USE_FOUNDRY":                               {},
-	"ANTHROPIC_BASE_URL":                                    {},
-	"ANTHROPIC_BEDROCK_BASE_URL":                            {},
-	"ANTHROPIC_VERTEX_BASE_URL":                             {},
-	"ANTHROPIC_FOUNDRY_BASE_URL":                            {},
-	"ANTHROPIC_FOUNDRY_RESOURCE":                            {},
-	"ANTHROPIC_VERTEX_PROJECT_ID":                           {},
-	"CLOUD_ML_REGION":                                       {},
-	"ANTHROPIC_API_KEY":                                     {},
-	"ANTHROPIC_AUTH_TOKEN":                                  {},
-	"CLAUDE_CODE_OAUTH_TOKEN":                               {},
-	"AWS_BEARER_TOKEN_BEDROCK":                              {},
-	"ANTHROPIC_FOUNDRY_API_KEY":                             {},
-	"CLAUDE_CODE_SKIP_BEDROCK_AUTH":                         {},
-	"CLAUDE_CODE_SKIP_VERTEX_AUTH":                          {},
-	"CLAUDE_CODE_SKIP_FOUNDRY_AUTH":                         {},
-	"ANTHROPIC_MODEL":                                       {},
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL":                         {},
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION":             {},
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME":                    {},
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES":  {},
-	"ANTHROPIC_DEFAULT_OPUS_MODEL":                          {},
-	"ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION":              {},
-	"ANTHROPIC_DEFAULT_OPUS_MODEL_NAME":                     {},
-	"ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES":   {},
+	"CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":                 {},
+	"CLAUDE_CODE_USE_BEDROCK":                              {},
+	"CLAUDE_CODE_USE_VERTEX":                               {},
+	"CLAUDE_CODE_USE_FOUNDRY":                              {},
+	"ANTHROPIC_BASE_URL":                                   {},
+	"ANTHROPIC_BEDROCK_BASE_URL":                           {},
+	"ANTHROPIC_VERTEX_BASE_URL":                            {},
+	"ANTHROPIC_FOUNDRY_BASE_URL":                           {},
+	"ANTHROPIC_FOUNDRY_RESOURCE":                           {},
+	"ANTHROPIC_VERTEX_PROJECT_ID":                          {},
+	"CLOUD_ML_REGION":                                      {},
+	"ANTHROPIC_API_KEY":                                    {},
+	"ANTHROPIC_AUTH_TOKEN":                                 {},
+	"CLAUDE_CODE_OAUTH_TOKEN":                              {},
+	"AWS_BEARER_TOKEN_BEDROCK":                             {},
+	"ANTHROPIC_FOUNDRY_API_KEY":                            {},
+	"CLAUDE_CODE_SKIP_BEDROCK_AUTH":                        {},
+	"CLAUDE_CODE_SKIP_VERTEX_AUTH":                         {},
+	"CLAUDE_CODE_SKIP_FOUNDRY_AUTH":                        {},
+	"ANTHROPIC_MODEL":                                      {},
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL":                        {},
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION":            {},
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME":                   {},
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES": {},
+	"ANTHROPIC_DEFAULT_OPUS_MODEL":                         {},
+	"ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION":             {},
+	"ANTHROPIC_DEFAULT_OPUS_MODEL_NAME":                    {},
+	"ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES":  {},
 
 	// Provider-specific base URL env vars for thinking rewrite proxy routing.
 	// These are set by cc-connect when thinking override is needed for
 	// Bedrock/Vertex/Foundry providers that don't use base_url config.
-	"ANTHROPIC_BEDROCK_PROXY_BASE_URL": {},
-	"ANTHROPIC_VERTEX_PROXY_BASE_URL":  {},
-	"ANTHROPIC_FOUNDRY_PROXY_BASE_URL": {},
+	"ANTHROPIC_BEDROCK_PROXY_BASE_URL":                      {},
+	"ANTHROPIC_VERTEX_PROXY_BASE_URL":                       {},
+	"ANTHROPIC_FOUNDRY_PROXY_BASE_URL":                      {},
 	"ANTHROPIC_DEFAULT_SONNET_MODEL":                        {},
 	"ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION":            {},
 	"ANTHROPIC_DEFAULT_SONNET_MODEL_NAME":                   {},
@@ -193,6 +200,9 @@ func New(opts map[string]any) (core.Agent, error) {
 		}
 	}
 
+	askUserMode, _ := opts["ask_user_mode"].(string)
+	askUserMode = normalizeAskUserMode(askUserMode)
+
 	// Claude Code Router support
 	routerURL, _ := opts["router_url"].(string)
 	routerAPIKey, _ := opts["router_api_key"].(string)
@@ -264,9 +274,38 @@ func New(opts map[string]any) (core.Agent, error) {
 		routerAPIKey:     routerAPIKey,
 		spawnOpts:        spawnOpts,
 		ccDataDir:        ccDataDir,
+		askUserMode:      askUserMode,
 
 		appendSystemPrompt: appendSystemPrompt,
 	}, nil
+}
+
+func normalizeAskUserMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "native":
+		return "native"
+	case "hybrid":
+		return "hybrid"
+	case "mcp", "":
+		return "mcp"
+	default:
+		return "mcp"
+	}
+}
+
+// SetAskUserSupport configures MCP-backed structured ask (called from main).
+func (a *Agent) SetAskUserSupport(mcpURL string, hub *core.AskUserHub) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.askMCPURL = strings.TrimSpace(mcpURL)
+	a.askHub = hub
+}
+
+// PrepareAskUserSession implements core.AskUserSessionPreparer.
+func (a *Agent) PrepareAskUserSession(sessionKey string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pendingAskSessionKey = sessionKey
 }
 
 // normalizeEffort maps user-friendly aliases to Claude CLI --effort values.
@@ -524,9 +563,14 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	// When router_url is set, --verbose conflicts with --output-format stream-json
 	// (verbose emits non-JSON text to stdout that corrupts the JSON stream).
 	disableVerbose := a.routerURL != ""
+	askMode := a.askUserMode
+	askURL := a.askMCPURL
+	askHub := a.askHub
+	askSessionKey := a.pendingAskSessionKey
+	a.pendingAskSessionKey = ""
 	a.mu.Unlock()
 
-	return newClaudeSession(ctx, workDir, a.cmd, a.cliExtraArgs, a.cmdArgsFlag, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt, tools, disTools, pluginDirs, extraEnv, platformPrompt, disableVerbose, a.spawnOpts, maxTok, a.ccDataDir)
+	return newClaudeSession(ctx, workDir, a.cmd, a.cliExtraArgs, a.cmdArgsFlag, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt, tools, disTools, pluginDirs, extraEnv, platformPrompt, disableVerbose, a.spawnOpts, maxTok, a.ccDataDir, askMode, askURL, askSessionKey, askHub)
 }
 
 func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, error) {
@@ -1384,10 +1428,15 @@ func parseUserQuestions(input map[string]any) []core.UserQuestion {
 		if !ok {
 			continue
 		}
+		question := firstNonEmpty(strVal(qMap, "question"), strVal(qMap, "title"), strVal(qMap, "header"))
 		q := core.UserQuestion{
-			Question:    strVal(qMap, "question"),
-			Header:      strVal(qMap, "header"),
-			MultiSelect: boolVal(qMap, "multiSelect"),
+			Question:    question,
+			Description: strVal(qMap, "description"),
+			Event:       core.NormalizeAskUserEvent(strVal(qMap, "event")),
+			MultiSelect: boolVal(qMap, "multiSelect") || boolVal(qMap, "multi_select"),
+		}
+		if enabled, explicit := parseAllowCustomInput(qMap); explicit {
+			q.AllowCustomInput = enabled
 		}
 		if optsRaw, ok := qMap["options"].([]any); ok {
 			for _, oRaw := range optsRaw {
@@ -1395,10 +1444,19 @@ func parseUserQuestions(input map[string]any) []core.UserQuestion {
 				if !ok {
 					continue
 				}
-				q.Options = append(q.Options, core.UserQuestionOption{
+				tag, tagVariant := parseOptionTag(oMap["tag"])
+				if tag == "" && boolVal(oMap, "recommended") {
+					tag = "推荐"
+					tagVariant = "recommend"
+				}
+				opt := core.UserQuestionOption{
 					Label:       strVal(oMap, "label"),
 					Description: strVal(oMap, "description"),
-				})
+					Value:       optionValueStr(oMap["value"]),
+					Tag:         tag,
+					TagVariant:  tagVariant,
+				}
+				q.Options = append(q.Options, opt)
 			}
 		}
 		if q.Question != "" {
@@ -1408,14 +1466,92 @@ func parseUserQuestions(input map[string]any) []core.UserQuestion {
 	return questions
 }
 
+func optionValueStr(raw any) string {
+	switch v := raw.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	case float64:
+		if v == float64(int64(v)) {
+			return strconv.FormatInt(int64(v), 10)
+		}
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case json.Number:
+		return v.String()
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func parseOptionTag(raw any) (text, variant string) {
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v), ""
+	case map[string]any:
+		return strings.TrimSpace(strVal(v, "text")), normalizeTagVariant(strVal(v, "variant"))
+	default:
+		return "", ""
+	}
+}
+
+func normalizeTagVariant(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "recommend", "keep", "default", "warning":
+		return strings.ToLower(strings.TrimSpace(v))
+	default:
+		return ""
+	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func strVal(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
 }
 
+// parseAllowCustomInput returns (enabled, explicit). explicit is true when the
+// question map carries allow_custom_input / allowCustomInput (even if false).
+func parseAllowCustomInput(qMap map[string]any) (enabled bool, explicit bool) {
+	if v, ok := qMap["allowCustomInput"]; ok {
+		return coerceBool(v), true
+	}
+	if v, ok := qMap["allow_custom_input"]; ok {
+		return coerceBool(v), true
+	}
+	return false, false
+}
+
+func coerceBool(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		s := strings.TrimSpace(t)
+		return strings.EqualFold(s, "true") || s == "1"
+	default:
+		return false
+	}
+}
+
 func boolVal(m map[string]any, key string) bool {
-	v, _ := m[key].(bool)
-	return v
+	v, ok := m[key]
+	if !ok {
+		return false
+	}
+	return coerceBool(v)
 }
 
 // encodeClaudeProjectKey converts an absolute path to Claude Code's project key format.

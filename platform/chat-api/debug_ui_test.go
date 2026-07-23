@@ -52,8 +52,25 @@ func TestDebugUIServesPage(t *testing.T) {
 	if !strings.Contains(html, "Ensure bubble exists first") {
 		t.Fatalf("debug UI must create assistant/thinking bubble before appending deltas")
 	}
-	if !strings.Contains(html, "multi_select") || !strings.Contains(html, "showIxModal") {
-		t.Fatalf("debug UI must honor question_request.multi_select for single vs multi UI")
+	if !strings.Contains(html, "card_group") || !strings.Contains(html, "showIxModal") {
+		t.Fatalf("debug UI must honor question_request.card_group for question UI")
+	}
+	if !strings.Contains(html, "/conversations/messages/respond") ||
+		!strings.Contains(html, "eventActionLabel") ||
+		!strings.Contains(html, "knownAskEvent") ||
+		!strings.Contains(html, "optionDisplayText") ||
+		!strings.Contains(html, `choice.type = multiSelect ? "checkbox" : "radio"`) ||
+		!strings.Contains(html, `btn.textContent = "Commit"`) {
+		t.Fatalf("debug UI must support card contract respond path, known ask events, and rich options")
+	}
+	if !strings.Contains(html, `input[type="radio"], input[type="checkbox"]`) ||
+		!strings.Contains(html, "flex: 0 0 auto") {
+		t.Fatalf("debug UI choice controls must not inherit full-width text input styles")
+	}
+	if !strings.Contains(html, `dataset.kind = "custom"`) ||
+		!strings.Contains(html, "其他…自己输入") ||
+		!strings.Contains(html, "custom_input: customInput") {
+		t.Fatalf("debug UI must expose allow_custom_input as a radio/checkbox option whose value is the typed text")
 	}
 	if !strings.Contains(html, `id="btnIxClose"`) || !strings.Contains(html, "unlockComposer") {
 		t.Fatalf("debug UI must allow hiding confirmation modal to send a parallel chat-messages")

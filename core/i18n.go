@@ -421,6 +421,7 @@ const (
 	MsgAskQuestionMulti     MsgKey = "ask_question_multi"
 	MsgAskQuestionPrompt    MsgKey = "ask_question_prompt"
 	MsgAskQuestionAnswered  MsgKey = "ask_question_answered"
+	MsgAskQuestionCustomInput MsgKey = "ask_question_custom_input"
 
 	MsgCommandsTitle        MsgKey = "commands_title"
 	MsgCommandsEmpty        MsgKey = "commands_empty"
@@ -2747,6 +2748,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "已回答",
 		LangJapanese:           "回答済み",
 		LangSpanish:            "Respondido",
+	},
+	MsgAskQuestionCustomInput: {
+		LangEnglish:            "Other (type your answer)",
+		LangChinese:            "其他（请输入你的回答）",
+		LangTraditionalChinese: "其他（請輸入你的回答）",
+		LangJapanese:           "その他（回答を入力）",
+		LangSpanish:            "Otro (escriba su respuesta)",
 	},
 	MsgCommandsTitle: {
 		LangEnglish:            "🔧 **Custom Commands** (%d)\n\n",

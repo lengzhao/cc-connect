@@ -21,8 +21,6 @@ func (p *Platform) handleRunRoutes(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case len(parts) == 2 && parts[1] == "cancel":
 		p.handleCancelRun(w, r, parts[0])
-	case len(parts) == 4 && parts[1] == "interactions" && parts[3] == "respond":
-		p.handleRespondInteraction(w, r, parts[0], parts[2])
 	default:
 		writeErr(w, http.StatusNotFound, "not found")
 	}

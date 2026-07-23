@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.2.2**（2026-07-21）<br>
+> 版本：**v1.2.5**（2026-07-23）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
 
 ## 1. 概述
 
@@ -14,7 +14,7 @@
 - 会话列表、重命名、删除
 - 会话历史（游标分页）
 - 发送消息：**SSE 流式**（`message` → `thinking_delta?` → `tool_call?` / `tool_result?` → `text_delta` → `message_end`）
-- 用户确认窗口：权限 / AskUserQuestion；公共 respond 字段、`ping` 保活、单槽 supersede
+- 用户确认窗口：权限 / AskUserQuestion（单确认可扩展）；公共 respond 字段、`ping` 保活、单槽 supersede
 - 隐式创建会话（首条 `chat-messages` 不带 `conversation_id`）
 - 会话忙时排队（默认 `busy_policy=queue`，复用 Engine 队列）
 
@@ -102,7 +102,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | `POST /chat-messages` | 是 | `user_header` |
 | `PATCH` / `DELETE` | 是（须 owner） | `user_header` |
 | `POST …/cancel` | 是（须发起者） | `user_header` |
-| `POST …/interactions/…/respond` | 是（须发起者） | `user_header` |
+| `POST …/conversations/messages/respond` | 是（须发起者） | `user_header` |
 
 默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（可选，仅 `POST /chat-messages` 读取；cancel / interaction respond 使用 run 内保存的 channel）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`；路径段不得为 `.` / `..` / 空，且不得以 `/` 开头或结尾（段内允许 `a.b` 这类点号）。省略时入口分配 `default_channel`。
 
@@ -127,7 +127,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | 401 | `unauthorized` | Token 无效 |
 | 400 | `user required` | 缺少 user |
 | 400 | `invalid request` | 参数错误 |
-| 400 | `exactly one of decision, option_id, option_ids, answer required` | 确认回传字段互斥/缺省 |
+| 400 | `answers required` / `permission response requires decision` | 确认回传缺字段或类型不匹配 |
 | 400 | `invalid decision` / `unknown option` | 确认回传内容无效 |
 | 404 | `not found` | 资源不存在、无权，或 interaction 已被 supersede |
 | 409 | `conversation busy` | `busy_policy=reject` 时会话忙 |
@@ -327,7 +327,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 | `tool_result` | `message_id`, `tool_call_id`, `name?`, `status?`, `exit_code?`, `success?`, `output?` | 工具结果（可选） |
 | `text_delta` | `message_id`, `text`, `replace?` | 正文增量（不含工具 markdown）；`replace:true` 时客户端应丢弃已有缓冲并整体替换 |
 | `permission_request` | 见 §3.5 | 工具权限确认窗口 |
-| `question_request` | 见 §3.5 | AskUserQuestion 确认窗口 |
+| `question_request` | 见 §3.5 | AskUserQuestion 单确认窗口（可扩展字段） |
 | `interaction_superseded` | `interaction_id`, `replacement_id`, `run_id`, `message_id` | 同一 run 上新确认替换旧确认 |
 | `interaction_ack` | `interaction_id`, `message_id`, `text?` | 用户已响应确认的回执（可选） |
 | `ping` | `run_id`, `ts` | SSE 保活；可忽略 |
@@ -348,7 +348,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 - `tool_call` / `tool_result` 单独渲染，勿并入正文
 - 断开 SSE **不**停止 agent，内容仍写入 history
 - `message_queued` 后勿立即重开 SSE；等上轮结束或轮询 history
-- 收到 `permission_request` / `question_request` 时弹出确认窗口；用 `expires_at` 倒计时；通过 §4.9 回传结果，**不要**把确认结果当普通 `chat-messages`
+- 收到 `permission_request` / `question_request` 时弹出确认窗口；用 `expires_at` 倒计时；优先 `POST /conversations/messages/respond`（`answers[]`），**不要**把确认结果当普通 `chat-messages`
 - `ping` 为保活事件，客户端可忽略
 - 同一 run 若出现新的确认，会先发 `interaction_superseded`；旧 `interaction_id` 不可再 respond
 - AskUserQuestion 超时后当前阻塞 turn 会取消；后续用户输入应重新 `POST /chat-messages`，作为普通对话
@@ -396,87 +396,69 @@ data: {
 
 **`question_request`**
 
+默认**单确认**；`card_group` 恒为长度 1 的数组（契约形状）。多题仍由 Engine 顺序逐题下发。信封层可选 `event`（Agent/tool 透传）。
+
+> **Agent 侧来源（不影响本 SSE 契约）**：Claude Code 默认经常驻 MCP 工具 `cc_connect_ask_user` 产出 `core.UserQuestion`（`event` / `value` / `tag` / `allow_custom_input` 一等字段）；`ask_user_mode=native|hybrid` 时可降级原生 `AskUserQuestion`。详见 [Ask User MCP](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md)。
+
 ```text
 event: question_request
 data: {
   "interaction_id":"ix_abc",
   "run_id":"run_abc",
   "message_id":"s1a2b3c:1",
-  "prompt":"选择部署环境",
   "expires_at":1780004100,
-  "multi_select": false,
-  "actions":[
-    {"id":"0:1","label":"Staging"},
-    {"id":"0:2","label":"Production"}
+  "event":"connect_account",
+  "card_group":[
+    {
+      "type":"single_select",
+      "title":"账户选择",
+      "description":"以下为已开户账户",
+      "options":[
+        {"label":"招商银行 ****1234","value":"acc_cmb","description":"已开通","tag":{"text":"推荐","variant":"recommend"}},
+        {"label":"工商银行 ****5678","value":"acc_icbc","description":"已开通","tag":{"text":"交易所","variant":"default"}}
+      ]
+    }
   ]
 }
 ```
 
 #### `question_request` 数据结构
 
-`question_request` 是 AskUserQuestion 的公共 SSE 表示。`@logs/select2.json` 和
-`@logs/input3.json` 都属于这一类事件快照，字段含义如下：
-
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `interaction_id` | string | 是 | 本次交互 ID；回传时放入 URL |
+| `interaction_id` | string | 是 | 本次交互 ID |
 | `run_id` | string | 是 | 所属轮次 ID |
 | `message_id` | string | 是 | 所属消息 ID |
-| `prompt` | string | 是 | 问题文案，可包含 Markdown 和选项说明 |
-| `expires_at` | integer | 是 | Unix 秒时间戳；仅用于客户端倒计时，服务端状态才是最终依据 |
-| `multi_select` | boolean | 是 | `false` 单选，`true` 多选 |
-| `actions` | array | 否 | 可点击选项；没有结构化选项时为空或省略 |
+| `expires_at` | integer | 是 | Unix 秒 |
+| `event` | string | 否 | 导航引导：`connect_account` / `create_task` / `task_center_approval`。缺省、空或未匹配时不出现该字段，前端不渲染额外功能按钮，走通用发送/确认 |
+| `card_group` | Card[] | 是 | 卡片数组；Claude/Engine 路径长度恒为 1 |
 
-`actions` 数组元素结构：
+`Card`：`type`（`single_select`\|`multi_select`）、`title`、`description?`、`options`、`others.custom_input.enabled?`。
+
+`Option`：`label`、`value`（选中标识）、`description?`、`tag?`（`{text,variant}`；`recommend`\|`keep`\|`default`\|`warning`）。无独立 `id`。
+
+推荐回传（契约路径）：
+
+```http
+POST /conversations/messages/respond
+```
 
 ```json
 {
-  "id": "0:1",
-  "label": "选项1"
+  "conversation_id":"s1a2b3c",
+  "run_id":"run_abc",
+  "interaction_id":"ix_abc",
+  "answers":[{"index":0,"value":"acc_cmb"}]
 }
 ```
 
-其中：
+`answers[].value` 可为标量或数组（多选）；`custom_input` 为「其他…」自由输入。`value` 与 `custom_input` 并存时 v1 优先 `value`。响应信封仍为 `{ok,data}`。
 
-- `id` 是公共选项 ID，应原样用于 §4.9 的 `option_id` 或 `option_ids`；
-- `label` 是客户端展示文本；
-- 当前协议没有 `description`、`input_type`、`placeholder`、`multiline`、
-  `required` 等字段。
+权限确认同一路径：body 带 `decision`（`allow` / `deny` / `allow_all`），勿带 `answers`。
 
-例如，`select2.json` 可以抽象为：
+#### 输入框
 
-```json
-{
-  "prompt": "请选择一个选项？",
-  "multi_select": false,
-  "actions": [
-    {"id": "0:1", "label": "选项1"},
-    {"id": "0:2", "label": "选项2"},
-    {"id": "0:3", "label": "选项3"}
-  ]
-}
-```
-
-`input3.json` 的四个 `actions` 仍然只是四个按钮选项；例如“单行输入”
-只是按钮的 `label`，并不表示服务端已经声明了一个单行输入控件。
-
-#### 输入框支持边界
-
-当前协议**不支持在 `question_request` 中明确声明输入框类型**。也就是说，
-不能通过事件指定“单行输入”“多行输入”“带占位提示”或其他自定义输入控件。
-
-但客户端可以自行在收到 `question_request` 后展示输入框，并使用
-`POST /runs/{run_id}/interactions/{interaction_id}/respond` 回传：
-
-```json
-{"answer": "用户输入的自由文本"}
-```
-
-`answer` 与 `option_id` / `option_ids` / `decision` 互斥，四者必须且只能填写一种。服务端
-不会校验输入框是单行还是多行，也不会接收或保存 placeholder 等控件元数据。
-
-`actions[].id` 是公共 ID，问答选项应原样回传为 `option_id` 或
-`option_ids`；权限事件的 `actions[].id` 则对应 §4.9 的 `decision` 值。
+卡上 `others.custom_input.enabled=true` 时前端展示「其他…」输入；契约回传用 `answers[].custom_input`。旧路径仍可用 `{"answer":"..."}`。
 
 **超时**（`interaction_timeout`，默认 `10m`，且不超过当前 run 剩余 `request_timeout`）
 
@@ -599,6 +581,7 @@ GET /conversations/{conversation_id}/messages?cursor=s1a2b3c:5&limit=20
 }
 ```
 
+
 ### 4.7 发送消息
 
 ```http
@@ -638,33 +621,32 @@ SSE 仍连接时发送 `event: error`，`data.error` 为 `canceled by user`。
 
 ### 4.9 响应确认窗口
 
+#### `POST /conversations/messages/respond`
+
 ```http
-POST /runs/{run_id}/interactions/{interaction_id}/respond
+POST /conversations/messages/respond
 X-Chat-API-User: user_001
 Content-Type: application/json
 
-{"decision":"allow"}
-```
-
-用于响应 `permission_request` 和 `question_request`。响应后原 SSE 继续等待 agent 输出。
-
-推荐公共字段（互斥，恰好一个）：
-
-```json
-{"decision":"allow"}
-{"decision":"deny"}
-{"decision":"allow_all"}
-{"option_id":"0:2"}
-{"option_ids":["0:1","0:3"]}
-{"answer":"自由文本"}
+{
+  "conversation_id":"s1a2b3c",
+  "run_id":"run_abc",
+  "interaction_id":"ix_abc",
+  "answers":[{"index":0,"value":"acc_cmb"}]
+}
 ```
 
 | 字段 | 说明 |
 |------|------|
-| `decision` | 权限结果：`allow` / `deny` / `allow_all` |
-| `option_id` | 单选问答；`"0:2"` 映射为内部 `askq:0:2` |
-| `option_ids` | 多选问答（仅当 `question_request.multi_select=true`）；映射为 Engine 编号列表（如 `1,3`）。单选收到多个 `option_ids` → `400` |
-| `answer` | 自由文本答案 |
+| `answers[].index` | 卡下标；单卡为 `0` |
+| `answers[].value` | 选中 option 的 `value`（多选为数组） |
+| `answers[].custom_input` | 「其他…」自定义输入 |
+
+权限确认示例：
+
+```json
+{"run_id":"run_abc","interaction_id":"ix_abc","decision":"allow"}
+```
 
 归属 user 须与发起 `chat-messages` 的 user 一致，否则 `404`。已响应 → `409 interaction already responded`；已过期 → `409 interaction expired`；已被 supersede → `404`。
 
@@ -688,7 +670,7 @@ Content-Type: application/json
 | `GET` | `/conversations/{id}/messages` | 历史 |
 | `POST` | `/chat-messages` | 发消息（SSE） |
 | `POST` | `/runs/{run_id}/cancel` | 取消轮次 |
-| `POST` | `/runs/{run_id}/interactions/{interaction_id}/respond` | 响应确认窗口 |
+| `POST` | `/conversations/messages/respond` | 确认回传（`answers[]` 或 `decision`） |
 
 **v1 不提供**：`POST /conversations`、`response_mode=blocking`、历史附件 replay、`/health`。
 
@@ -762,6 +744,8 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.2.5 | 2026-07-23 | `question_request` 对齐卡片契约：`card_group` + 信封 `event` + `tag`；统一 `POST .../conversations/messages/respond`（`answers[]` / `decision`） |
+| v1.2.3 | 2026-07-22 | AskUserQuestion 富交互过渡版（已由 v1.2.4 收敛为单确认） |
 | v1.2.2 | 2026-07-21 | SSE `text_delta`/`thinking_delta` 支持可选 `replace`；流式卡片解析不再因答案内 `---` 截断；Engine 双写 `StructuredStreamingCard` 事件后 chat-api 优先走结构化路径 |
 | v1.2.1 | 2026-07-21 | 新增 `forward_headers`：白名单入站 header 仅进 hooks（对齐 a2a） |
 | v1.2.0 | 2026-07-16 | 新增会话详情、异步 Name 生成及 `auto_generate_name_mode` |

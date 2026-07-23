@@ -272,6 +272,7 @@ func (p *Platform) routes() http.Handler {
 	mux.HandleFunc(p.path+"conversations/", wrap(p.handleConversationSub))
 	mux.HandleFunc(p.path+"chat-messages", wrap(p.handleChatMessages))
 	mux.HandleFunc(p.path+"runs/", wrap(p.handleRunRoutes))
+	mux.HandleFunc(p.path+"conversations/messages/respond", wrap(p.handleCardRespond))
 	p.registerDebugUI(mux)
 	return mux
 }

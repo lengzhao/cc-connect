@@ -77,6 +77,12 @@ type CronReplyTargetResolver interface {
 	ResolveCronReplyTarget(sessionKey string, title string) (resolvedSessionKey string, replyCtx any, err error)
 }
 
+// AskUserSessionPreparer is implemented by agents that need the platform
+// session key before StartSession (e.g. to write per-session MCP config).
+type AskUserSessionPreparer interface {
+	PrepareAskUserSession(sessionKey string)
+}
+
 // SessionEnvInjector is an optional interface for agents that accept
 // per-session environment variables (e.g. CC_PROJECT, CC_SESSION_KEY).
 type SessionEnvInjector interface {
@@ -130,6 +136,16 @@ func AgentSystemPrompt() string {
 Your normal text responses are automatically delivered to the user — just reply normally, do NOT use cc-connect send for ordinary text replies.
 
 ## Available tools
+
+### Structured user choices (cc_connect_ask_user)
+Prefer the MCP tool mcp__ccconnect__cc_connect_ask_user for option choices (one question per call). Do NOT use the built-in AskUserQuestion tool when this MCP tool is available — Claude Code strips cc-connect extensions from AskUserQuestion.
+
+Required: question, options[].label. Recommended: options[].description, options[].value (stable answer), options[].tag ({text, variant}: recommend=推荐绿 / keep=维持灰 / default=默认灰 / warning=警告黄), allow_custom_input (true only when any custom input beyond listed options is accepted). Optional event guides App page navigation: connect_account | create_task | task_center_approval (omit/empty/unknown → no extra App button; generic confirm only).
+
+Example when the user may type another bank:
+{"question":"Which bank account should be used?","event": "connect_account","options":[{"label":"Bank of China","description":"Use the Bank of China account","value": "boc","tag":{"text":"Recommended","variant":"recommend"}},{"label":"ICBC","description":"Use the ICBC account","value": "icbc"}],"allow_custom_input": true,"multi_select": false}
+
+Do not ask a separate clarification question after the tool call; wait for the user's answer.
 
 ### Send generated images, files, or voice messages back to the user
 When you generate a local image or file that should be sent to the user, use:
@@ -380,6 +396,13 @@ type ButtonOption struct {
 	// allows selecting more than one option. Platforms that surface structured
 	// interactions (e.g. chat-api question_request) may use this flag.
 	MultiSelect bool
+	// Recommended marks a preferred AskUserQuestion option for UIs that can
+	// render a badge; unsupported platforms may fold it into Text.
+	Recommended bool
+	// Description is optional option help text for structured platforms.
+	Description string
+	// Value is the stable option value (defaults to label when empty).
+	Value string
 }
 
 // InlineButtonSender is an optional interface for platforms that support
@@ -404,6 +427,13 @@ type CardSender interface {
 // question_request SSE, and the busy SSE turn cannot accept a text answer.
 type PreferAskUserButtons interface {
 	PreferAskUserButtons() bool
+}
+
+// AskQuestionSender is an optional interface for platforms that can render a
+// single structured AskUserQuestion (including allow_custom_input and option
+// metadata) without going through generic cards/buttons.
+type AskQuestionSender interface {
+	SendAskQuestion(ctx context.Context, replyCtx any, q UserQuestion, qIdx int) error
 }
 
 // CardNavigationHandler is called by platforms to render a card for in-place

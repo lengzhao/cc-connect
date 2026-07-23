@@ -20,6 +20,7 @@ import (
 	"github.com/chenhg5/cc-connect/config"
 	"github.com/chenhg5/cc-connect/core"
 	"github.com/chenhg5/cc-connect/daemon"
+	"github.com/chenhg5/cc-connect/mcp/askuser"
 	// Agent and platform imports are in separate plugin_*.go files
 	// controlled by build tags. See Makefile for selective compilation.
 )
@@ -374,6 +375,18 @@ func main() {
 	engines := make([]*core.Engine, 0, len(cfg.Projects))
 	effectiveWorkDirs := make([]string, 0, len(cfg.Projects))
 
+	askHub := core.NewAskUserHub()
+	askMCP, err := askuser.Start(askHub)
+	if err != nil {
+		slog.Error("failed to start ask-user MCP server", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = askMCP.Close(ctx)
+	}()
+
 	for _, proj := range cfg.Projects {
 		// Inject project-level run_as_user / run_as_env into the agent's
 		// opts map so agents that support isolation can pick them up
@@ -391,6 +404,11 @@ func main() {
 		if err != nil {
 			slog.Error("failed to create agent", "project", proj.Name, "error", err)
 			os.Exit(1)
+		}
+		if cfgAsk, ok := agent.(interface {
+			SetAskUserSupport(mcpURL string, hub *core.AskUserHub)
+		}); ok {
+			cfgAsk.SetAskUserSupport(askMCP.MCPURL(), askHub)
 		}
 
 		providerWiring := wireAgentProviders(agent, proj.Agent)
@@ -446,6 +464,7 @@ func main() {
 		engine.SetBaseWorkDir(workDir)
 		engine.SetProjectStateStore(projectState)
 		engine.SetDataDir(cfg.DataDir)
+		engine.SetAskUserHub(askHub)
 
 		// Wire multi-workspace mode
 		if proj.Mode == "multi-workspace" {

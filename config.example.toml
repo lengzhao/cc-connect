@@ -879,6 +879,15 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "auto" | "bypassP
 # 也可以禁用特定工具（传递给 --disallowedTools）：
 # disallowed_tools = ["WebSearch", "WebFetch"]
 
+# Structured ask source for Claude Code (chat-api SSE question_request unchanged).
+# Claude Code 结构化提问来源（chat-api SSE question_request 契约不变）：
+#   mcp    (default) — resident HTTP MCP tool cc_connect_ask_user; preserves
+#                      event / value / tag / allow_custom_input. Disallows native
+#                      AskUserQuestion (Claude strips cc-connect extensions there).
+#   native — legacy AskUserQuestion permission path (extensions may be dropped).
+#   hybrid — prefer MCP; if MCP/session unavailable at spawn, fall back to native.
+# ask_user_mode = "mcp"
+
 # Optional: specify a custom system prompt / 可选：指定自定义系统提示
 # Replaces Claude's default system prompt (passed via --system-prompt).
 # 替换 Claude 默认系统提示（通过 --system-prompt 传入）。

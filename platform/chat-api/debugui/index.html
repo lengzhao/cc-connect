@@ -134,6 +134,14 @@
       border-color: var(--accent-dim);
       box-shadow: 0 0 0 2px rgba(47, 211, 200, 0.12);
     }
+    input[type="radio"], input[type="checkbox"] {
+      width: auto;
+      padding: 0;
+      margin: 2px 0 0;
+      flex: 0 0 auto;
+      accent-color: var(--accent);
+      box-shadow: none;
+    }
     textarea { resize: vertical; min-height: 64px; }
 
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -831,17 +839,41 @@
         }
       }
 
+      function optionDisplayText(a) {
+        const parts = [a.label || String(a.value ?? a.id ?? "?")];
+        if (a.description) parts.push("— " + a.description);
+        if (a.tag && a.tag.text) parts.push("[" + a.tag.text + "]");
+        return parts.join(" ");
+      }
+
+      function eventActionLabel(eventName) {
+        if (eventName === "connect_account") return "连接账户";
+        if (eventName === "create_task") return "创建任务";
+        if (eventName === "task_center_approval") return "去任务中心审批";
+        return "";
+      }
+
+      function knownAskEvent(eventName) {
+        return !!eventActionLabel(eventName);
+      }
+
       async function respondInteraction(interactionId, payload) {
         const runId = state.interactionRunId || state.runId;
         if (!runId || !interactionId) return;
+        const body = {
+          run_id: runId,
+          interaction_id: interactionId,
+          conversation_id: state.conversationId || undefined,
+          ...payload,
+        };
         $("ixModalActions").querySelectorAll("button, input").forEach((n) => { n.disabled = true; });
         try {
           const res = await fetch(
-            `${apiBase()}/runs/${encodeURIComponent(runId)}/interactions/${encodeURIComponent(interactionId)}/respond`,
+            `${apiBase()}/conversations/messages/respond`,
             {
               method: "POST",
               headers: { ...authHeaders(), "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
+              body: JSON.stringify(body),
             }
           );
           const json = await res.json().catch(() => ({}));
@@ -851,7 +883,7 @@
             $("ixModalActions").querySelectorAll("button, input").forEach((n) => { n.disabled = false; });
             return;
           }
-          disableInteraction(interactionId, "responded · " + JSON.stringify(payload));
+          disableInteraction(interactionId, "responded · " + JSON.stringify(body));
         } catch (e) {
           logSSE("respond_error", e.message, "err");
           addBubble("sys", e.message);
@@ -875,94 +907,166 @@
         }
         if (isQuestion) meta.push("可点「隐藏」后用底部输入框发新消息验证");
         $("ixModalMeta").textContent = meta.join(" · ");
-        $("ixModalPrompt").textContent = data.prompt || "";
+
+        const card = Array.isArray(data.card_group) && data.card_group[0] ? data.card_group[0] : null;
+        const promptText = card
+          ? [card.title, card.description].filter(Boolean).join("\n")
+          : (data.prompt || "");
+        $("ixModalPrompt").textContent = promptText;
 
         const actionsEl = $("ixModalActions");
         actionsEl.innerHTML = "";
-        const actions = Array.isArray(data.actions) ? data.actions : [];
-        const multiSelect = isQuestion && data.multi_select === true;
+        let actions = [];
+        let multiSelect = false;
+        if (card && Array.isArray(card.options)) {
+          multiSelect = card.type === "multi_select";
+          actions = card.options.map((o) => ({
+            id: o.value,
+            label: o.label || String(o.value),
+            value: o.value,
+            description: o.description || "",
+            tag: o.tag || null,
+          }));
+        } else if (Array.isArray(data.actions)) {
+          // permission_request still uses actions
+          actions = data.actions;
+        }
+        const allowCustom = !!(card && card.others && card.others.custom_input && card.others.custom_input.enabled);
 
-        if (isQuestion && multiSelect && actions.length) {
-          // Multi-select: checkboxes + submit (option_ids).
+        if (isQuestion && knownAskEvent(data.event)) {
+          const eventLine = document.createElement("div");
+          eventLine.className = "body";
+          eventLine.style.margin = "0 0 10px 0";
+          eventLine.style.color = "var(--muted)";
+          const label = eventActionLabel(data.event);
+          eventLine.textContent = "event=" + data.event + (label ? " · " + label : "");
+          actionsEl.appendChild(eventLine);
+        }
+
+        if (isQuestion) {
+          const choiceInputs = [];
+          let firstChoice = null;
+          let customChoice = null;
+          let input = null;
           const list = document.createElement("div");
-          list.style.cssText = "display:flex;flex-direction:column;gap:8px;width:100%;margin-bottom:10px;";
-          const checks = [];
-          for (const a of actions) {
+          list.style.cssText = "display:flex;flex-direction:column;gap:8px;width:100%;margin-bottom:8px;";
+
+          actions.forEach((a, idx) => {
             const label = document.createElement("label");
             label.style.cssText = "display:flex;align-items:flex-start;gap:8px;cursor:pointer;";
-            const cb = document.createElement("input");
-            cb.type = "checkbox";
-            cb.value = a.id;
-            checks.push(cb);
+            const choice = document.createElement("input");
+            choice.type = multiSelect ? "checkbox" : "radio";
+            choice.name = "ix-choice-" + id;
+            choice.dataset.kind = "option";
+            choice.value = String(idx);
+            if (!firstChoice) firstChoice = choice;
+            choiceInputs.push(choice);
             const span = document.createElement("span");
-            span.textContent = a.label || a.id || "?";
-            label.appendChild(cb);
+            span.textContent = optionDisplayText(a);
+            label.appendChild(choice);
             label.appendChild(span);
             list.appendChild(label);
+          });
+
+          // allow_custom_input: treat free text as another radio/checkbox option;
+          // committed answer value is whatever the user typed (via custom_input).
+          if (allowCustom || !actions.length) {
+            const customRow = document.createElement("label");
+            customRow.style.cssText = "display:flex;align-items:flex-start;gap:8px;cursor:pointer;width:100%;";
+            customChoice = document.createElement("input");
+            customChoice.type = multiSelect ? "checkbox" : "radio";
+            customChoice.name = "ix-choice-" + id;
+            customChoice.dataset.kind = "custom";
+            customChoice.value = "__custom__";
+            if (!firstChoice) firstChoice = customChoice;
+            choiceInputs.push(customChoice);
+            const customBody = document.createElement("div");
+            customBody.style.cssText = "flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;";
+            const customLabel = document.createElement("span");
+            customLabel.textContent = actions.length ? "其他…自己输入" : "请输入回答";
+            input = document.createElement("input");
+            input.className = "ix-free";
+            input.type = "text";
+            input.placeholder = actions.length ? "输入自定义内容" : "请输入回答";
+            input.style.cssText = "width:100%;padding:8px;box-sizing:border-box;";
+            input.disabled = !!actions.length; // enable when custom option is selected
+            customBody.appendChild(customLabel);
+            customBody.appendChild(input);
+            customRow.appendChild(customChoice);
+            customRow.appendChild(customBody);
+            list.appendChild(customRow);
+
+            const syncCustomEnabled = () => {
+              const on = !!customChoice.checked;
+              input.disabled = !on && !!actions.length;
+              if (on) input.focus();
+            };
+            customChoice.addEventListener("change", syncCustomEnabled);
+            // Selecting a preset radio clears custom focus state for single-select.
+            choiceInputs.forEach((c) => {
+              if (c === customChoice) return;
+              c.addEventListener("change", () => {
+                if (!multiSelect) syncCustomEnabled();
+              });
+            });
+            input.addEventListener("focus", () => {
+              if (!customChoice.checked) {
+                customChoice.checked = true;
+                syncCustomEnabled();
+              }
+            });
           }
-          actionsEl.appendChild(list);
+
+          if (actions.length || allowCustom) {
+            actionsEl.appendChild(list);
+          }
+
           const btn = document.createElement("button");
           btn.type = "button";
           btn.className = "primary";
-          btn.textContent = "提交选择";
-          btn.addEventListener("click", () => {
-            const selected = checks.filter((c) => c.checked).map((c) => c.value);
-            if (!selected.length) return;
-            if (selected.length === 1) {
-              respondInteraction(id, { option_id: selected[0] });
-            } else {
-              respondInteraction(id, { option_ids: selected });
+          btn.textContent = "Commit";
+          const commit = () => {
+            const customOn = customChoice && customChoice.checked;
+            const customInput = input ? input.value.trim() : "";
+            if (customOn) {
+              if (!customInput) return;
+              // Free-text answer: API field is custom_input; payload value is the typed text.
+              respondInteraction(id, { answers: [{ index: 0, custom_input: customInput }] });
+              return;
             }
-          });
+            const selected = choiceInputs
+              .filter((choice) => choice.checked && choice.dataset.kind === "option")
+              .map((choice) => actions[Number(choice.value)])
+              .filter(Boolean)
+              .map((a) => a.value !== undefined ? a.value : a.id);
+            if (!selected.length) return;
+            respondInteraction(id, {
+              answers: [{ index: 0, value: multiSelect ? selected : selected[0] }],
+            });
+          };
+          btn.addEventListener("click", commit);
+          if (input) {
+            input.addEventListener("keydown", (e) => {
+              if (e.isComposing || e.keyCode === 229) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commit();
+              }
+            });
+          }
           actionsEl.appendChild(btn);
+          setTimeout(() => (firstChoice || btn).focus(), 0);
         } else if (actions.length) {
           for (const a of actions) {
             const btn = document.createElement("button");
             btn.type = "button";
-            btn.textContent = a.label || a.id || "?";
+            btn.textContent = optionDisplayText(a);
             const decision = String(a.id || "");
             if (decision === "allow" || decision === "allow_all") btn.className = "primary";
             if (decision === "deny") btn.className = "danger";
-            if (isQuestion) btn.className = "primary";
-            btn.addEventListener("click", () => {
-              if (isQuestion) {
-                respondInteraction(id, { option_id: a.id });
-              } else {
-                respondInteraction(id, { decision: a.id });
-              }
-            });
+            btn.addEventListener("click", () => respondInteraction(id, { decision: a.id }));
             actionsEl.appendChild(btn);
           }
-        }
-
-        if (isQuestion) {
-          // Always offer free-text answer for questions.
-          const row = document.createElement("div");
-          row.className = "ix-free";
-          row.style.marginTop = actions.length ? "12px" : "0";
-          const input = document.createElement("input");
-          input.placeholder = actions.length ? "或输入自由文本回答" : "请输入回答";
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "primary";
-          btn.textContent = "提交回答";
-          const submitFree = () => {
-            const answerText = input.value.trim();
-            if (!answerText) return;
-            respondInteraction(id, { answer: answerText });
-          };
-          btn.addEventListener("click", submitFree);
-          input.addEventListener("keydown", (e) => {
-            if (e.isComposing || e.keyCode === 229) return;
-            if (e.key === "Enter") {
-              e.preventDefault();
-              submitFree();
-            }
-          });
-          row.appendChild(input);
-          row.appendChild(btn);
-          actionsEl.appendChild(row);
-          setTimeout(() => input.focus(), 0);
         }
 
         $("ixModal").classList.add("open");
@@ -975,7 +1079,9 @@
         const tag = isQuestion ? "question" : "permission";
         const bubble = streamBubble("interaction", id, tag);
         interactionBubbles.set(id, bubble);
-        bubble.body.textContent = data.prompt || "";
+        bubble.body.textContent = (Array.isArray(data.card_group) && data.card_group[0] && data.card_group[0].title)
+          ? data.card_group[0].title
+          : (data.prompt || "");
         bubble.el.querySelectorAll(".ix-actions, .ix-free").forEach((n) => n.remove());
         const hint = document.createElement("div");
         hint.className = "body";

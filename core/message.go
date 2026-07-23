@@ -266,18 +266,25 @@ const (
 	EventThinking          EventType = "thinking"           // thinking/processing status
 )
 
-// UserQuestion represents a structured question from AskUserQuestion.
+// UserQuestion represents a structured question from AskUserQuestion /
+// cc_connect_ask_user. Fields align with chat-api card_group + envelope event.
 type UserQuestion struct {
-	Question    string               `json:"question"`
-	Header      string               `json:"header"`
-	Options     []UserQuestionOption `json:"options"`
-	MultiSelect bool                 `json:"multiSelect"`
+	Question         string               `json:"question"` // card title + tool/answer key
+	Header           string               `json:"header,omitempty"` // legacy agent field; SSE uses Question
+	Description      string               `json:"description,omitempty"`
+	Event            string               `json:"event,omitempty"` // envelope semantic key (e.g. connect_account)
+	AllowCustomInput bool                 `json:"allowCustomInput,omitempty"`
+	MultiSelect      bool                 `json:"multiSelect"`
+	Options          []UserQuestionOption `json:"options"`
 }
 
 // UserQuestionOption is one choice in a UserQuestion.
 type UserQuestionOption struct {
 	Label       string `json:"label"`
-	Description string `json:"description"`
+	Description string `json:"description,omitempty"`
+	Value       string `json:"value,omitempty"`       // stable value; empty → Label
+	Tag         string `json:"tag,omitempty"`         // badge text (e.g. 推荐 / 交易所)
+	TagVariant  string `json:"tag_variant,omitempty"` // recommend|keep|default|warning; empty → inferred from Tag at emit
 }
 
 // Event represents a single piece of agent output streamed back to the engine.
@@ -293,7 +300,7 @@ type Event struct {
 	ToolSuccess              *bool          // optional success flag for EventToolResult
 	SessionID                string         // agent-managed session ID for conversation continuity
 	RequestID                string         // unique request ID for EventPermissionRequest
-	Questions                []UserQuestion // populated when ToolName == "AskUserQuestion"
+	Questions                []UserQuestion // populated for structured asks (AskUserQuestion / cc_connect_ask_user / …)
 	Done                     bool
 	Error                    error
 	InputTokens              int // token usage from agent result events

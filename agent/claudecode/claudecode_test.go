@@ -73,9 +73,6 @@ func TestParseUserQuestions_ValidInput(t *testing.T) {
 	if q.Question != "Which database?" {
 		t.Errorf("question = %q", q.Question)
 	}
-	if q.Header != "Setup" {
-		t.Errorf("header = %q", q.Header)
-	}
 	if q.MultiSelect {
 		t.Error("expected multiSelect=false")
 	}
@@ -100,12 +97,41 @@ func TestParseUserQuestions_EmptyInput(t *testing.T) {
 func TestParseUserQuestions_NoQuestionText(t *testing.T) {
 	input := map[string]any{
 		"questions": []any{
-			map[string]any{"header": "Setup"},
+			map[string]any{"options": []any{map[string]any{"label": "A"}}},
 		},
 	}
 	qs := parseUserQuestions(input)
 	if len(qs) != 0 {
 		t.Errorf("expected 0 questions (no question text), got %d", len(qs))
+	}
+}
+
+func TestParseUserQuestions_HeaderFoldsIntoQuestion(t *testing.T) {
+	qs := parseUserQuestions(map[string]any{
+		"questions": []any{
+			map[string]any{
+				"header":  "Setup",
+				"options": []any{map[string]any{"label": "A"}},
+			},
+		},
+	})
+	if len(qs) != 1 || qs[0].Question != "Setup" {
+		t.Fatalf("question=%q want Setup", qs[0].Question)
+	}
+}
+
+func TestParseUserQuestions_QuestionWinsOverHeader(t *testing.T) {
+	qs := parseUserQuestions(map[string]any{
+		"questions": []any{
+			map[string]any{
+				"question": "Which?",
+				"header":   "Setup",
+				"options":  []any{map[string]any{"label": "A"}},
+			},
+		},
+	})
+	if len(qs) != 1 || qs[0].Question != "Which?" {
+		t.Fatalf("question=%q want Which?", qs[0].Question)
 	}
 }
 
@@ -128,6 +154,159 @@ func TestParseUserQuestions_MultiSelect(t *testing.T) {
 	}
 	if !qs[0].MultiSelect {
 		t.Error("expected multiSelect=true")
+	}
+}
+
+func TestParseUserQuestions_RichFields(t *testing.T) {
+	input := map[string]any{
+		"questions": []any{
+			map[string]any{
+				"question":           "Which database?",
+				"title":              "Database",
+				"description":        "Pick primary store",
+				"placeholder":        "Type or choose",
+				"submit_label":       "Confirm",
+				"variant":            "info",
+				"event":              "create_task",
+				"allow_custom_input": true,
+				"multiSelect":        false,
+				"options": []any{
+					map[string]any{
+						"label":       "PostgreSQL",
+						"description": "Production",
+						"value":       "pg",
+						"recommended": true,
+						"tag":         map[string]any{"text": "推荐", "variant": "recommend"},
+						"display":     map[string]any{"badge": "rec"},
+					},
+					map[string]any{"label": "SQLite", "value": "sqlite"},
+				},
+			},
+		},
+	}
+	qs := parseUserQuestions(input)
+	if len(qs) != 1 {
+		t.Fatalf("expected 1 question, got %d", len(qs))
+	}
+	q := qs[0]
+	if q.Question != "Which database?" || q.Description != "Pick primary store" {
+		t.Fatalf("unexpected question fields: %+v", q)
+	}
+	if q.Event != "create_task" {
+		t.Fatalf("event=%q", q.Event)
+	}
+	if !q.AllowCustomInput {
+		t.Fatal("expected AllowCustomInput=true")
+	}
+	if len(q.Options) != 2 {
+		t.Fatalf("options=%d", len(q.Options))
+	}
+	if q.Options[0].Value != "pg" {
+		t.Fatalf("option0=%+v", q.Options[0])
+	}
+	if q.Options[0].Tag != "推荐" {
+		t.Fatalf("option0.tag=%q", q.Options[0].Tag)
+	}
+	if q.Options[0].TagVariant != "recommend" {
+		t.Fatalf("option0.tag_variant=%q", q.Options[0].TagVariant)
+	}
+}
+
+func TestParseUserQuestions_TitleFoldsIntoQuestion(t *testing.T) {
+	qs := parseUserQuestions(map[string]any{
+		"questions": []any{
+			map[string]any{
+				"title":   "Database",
+				"options": []any{map[string]any{"label": "A"}},
+			},
+		},
+	})
+	if len(qs) != 1 || qs[0].Question != "Database" {
+		t.Fatalf("question=%q want Database", qs[0].Question)
+	}
+}
+
+func TestParseUserQuestions_AllowCustomInputDefaultsFalse(t *testing.T) {
+	qs := parseUserQuestions(map[string]any{
+		"questions": []any{
+			map[string]any{
+				"question": "Pick one",
+				"options":  []any{map[string]any{"label": "A"}},
+			},
+		},
+	})
+	if qs[0].AllowCustomInput {
+		t.Fatal("expected AllowCustomInput=false by default")
+	}
+}
+
+func TestParseUserQuestions_AllowCustomInputExplicitTrue(t *testing.T) {
+	qs := parseUserQuestions(map[string]any{
+		"questions": []any{
+			map[string]any{
+				"question":           "Pick one",
+				"allow_custom_input": true,
+				"options":            []any{map[string]any{"label": "A"}},
+			},
+		},
+	})
+	if !qs[0].AllowCustomInput {
+		t.Fatal("expected AllowCustomInput=true when explicitly enabled")
+	}
+}
+
+func TestParseUserQuestions_RecommendedFoldsIntoTag(t *testing.T) {
+	qs := parseUserQuestions(map[string]any{
+		"questions": []any{
+			map[string]any{
+				"question": "Which?",
+				"options": []any{
+					map[string]any{"label": "A", "recommended": true},
+				},
+			},
+		},
+	})
+	if qs[0].Options[0].Tag != "推荐" {
+		t.Fatalf("tag=%q", qs[0].Options[0].Tag)
+	}
+	if qs[0].Options[0].TagVariant != "recommend" {
+		t.Fatalf("tag_variant=%q", qs[0].Options[0].TagVariant)
+	}
+}
+
+func TestParseUserQuestions_TagVariantExplicit(t *testing.T) {
+	qs := parseUserQuestions(map[string]any{
+		"questions": []any{
+			map[string]any{
+				"question": "Which?",
+				"options": []any{
+					map[string]any{"label": "A", "tag": map[string]any{"text": "维持", "variant": "keep"}},
+					map[string]any{"label": "B", "tag": map[string]any{"text": "自定义", "variant": "warning"}},
+				},
+			},
+		},
+	})
+	if qs[0].Options[0].TagVariant != "keep" {
+		t.Fatalf("option0 variant=%q", qs[0].Options[0].TagVariant)
+	}
+	if qs[0].Options[1].TagVariant != "warning" {
+		t.Fatalf("option1 variant=%q", qs[0].Options[1].TagVariant)
+	}
+}
+
+func TestParseUserQuestions_NumericValue(t *testing.T) {
+	qs := parseUserQuestions(map[string]any{
+		"questions": []any{
+			map[string]any{
+				"question": "Amount?",
+				"options": []any{
+					map[string]any{"label": "Five thousand", "value": 5000},
+				},
+			},
+		},
+	})
+	if qs[0].Options[0].Value != "5000" {
+		t.Fatalf("numeric value=%q", qs[0].Options[0].Value)
 	}
 }
 
@@ -543,7 +722,7 @@ func TestWorkspaceAgentOptions_FullSnapshot(t *testing.T) {
 	// PATH. WorkspaceAgentOptions only reads fields that the production
 	// New() also writes; this just verifies the snapshot shape.
 	a := &Agent{
-		cmd:           "my-cli",
+		cmd:              "my-cli",
 		cliExtraArgs:     []string{"--add-dir", "/parent"},
 		cmdArgsFlag:      "-a",
 		model:            "claude-opus-4-7",
@@ -559,7 +738,7 @@ func TestWorkspaceAgentOptions_FullSnapshot(t *testing.T) {
 
 	want := map[string]any{
 		"mode":               "acceptEdits",
-		"cmd":           "my-cli --add-dir /parent",
+		"cmd":                "my-cli --add-dir /parent",
 		"cmd_args_flag":      "-a",
 		"model":              "claude-opus-4-7",
 		"reasoning_effort":   "high",
@@ -621,7 +800,7 @@ func TestWorkspaceAgentOptions_RoundTripsThroughNew(t *testing.T) {
 		t.Skip("run_as_user-based LookPath bypass is Unix-only")
 	}
 	parent := &Agent{
-		cmd:           "my-cli",
+		cmd:              "my-cli",
 		cliExtraArgs:     []string{"code", "--add-dir", "/parent"},
 		cmdArgsFlag:      "-a",
 		model:            "claude-opus-4-7",

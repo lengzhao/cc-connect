@@ -36,19 +36,27 @@ const (
 )
 
 type interactionAction struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Value       string `json:"value,omitempty"`
+	Tag         string `json:"-"`
+	TagVariant  string `json:"-"`
 }
 
 type interactionState struct {
-	ID          string
-	Kind        interactionKind
-	Prompt      string
-	Actions     []interactionAction
-	MultiSelect bool
-	ExpiresAt   time.Time
-	Responded   bool
-	Expired     bool
+	ID               string
+	Kind             interactionKind
+	Prompt           string
+	Title            string
+	Description      string
+	AllowCustomInput bool
+	Event            string
+	Actions          []interactionAction
+	MultiSelect      bool
+	ExpiresAt        time.Time
+	Responded        bool
+	Expired          bool
 }
 
 type pendingSSEEvent struct {

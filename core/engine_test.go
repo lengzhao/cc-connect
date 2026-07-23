@@ -46,13 +46,14 @@ type recordingAgentSession struct {
 	lastID     string
 	lastResult PermissionResult
 	calls      int
+	respondErr error
 }
 
 func (s *recordingAgentSession) RespondPermission(id string, res PermissionResult) error {
 	s.lastID = id
 	s.lastResult = res
 	s.calls++
-	return nil
+	return s.respondErr
 }
 
 type stubPlatformEngine struct {
@@ -2641,6 +2642,28 @@ func TestAgentSystemPrompt_MentionsAttachmentSend(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "NO_REPLY") {
 		t.Fatalf("prompt missing silent reply guidance for voice tool: %q", prompt)
+	}
+}
+
+func TestAgentSystemPrompt_GuidesAskUserQuestionSingleConfirm(t *testing.T) {
+	prompt := AgentSystemPrompt()
+	for _, want := range []string{
+		"cc_connect_ask_user",
+		"mcp__ccconnect__cc_connect_ask_user",
+		"one question",
+		"event",
+		"allow_custom_input",
+		`"allow_custom_input": true`,
+		`"event": "connect_account"`,
+		`"value": "boc"`,
+		"value",
+		"tag",
+		"Do not ask a separate clarification question",
+		"AskUserQuestion", // still mentioned as do-not-use when MCP available
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("AgentSystemPrompt missing %q", want)
+		}
 	}
 }
 
@@ -6827,7 +6850,6 @@ func TestHandleCardNav_HelpToolsShowsCronExecUsage(t *testing.T) {
 func testQuestions() []UserQuestion {
 	return []UserQuestion{{
 		Question: "Which database?",
-		Header:   "Setup",
 		Options: []UserQuestionOption{
 			{Label: "PostgreSQL", Description: "Recommended for production"},
 			{Label: "SQLite", Description: "Lightweight, file-based"},
@@ -6841,7 +6863,6 @@ func testMultiQuestions() []UserQuestion {
 	return []UserQuestion{
 		{
 			Question: "Which database?",
-			Header:   "Database",
 			Options: []UserQuestionOption{
 				{Label: "PostgreSQL"},
 				{Label: "SQLite"},
@@ -6849,7 +6870,6 @@ func testMultiQuestions() []UserQuestion {
 		},
 		{
 			Question: "Which framework?",
-			Header:   "Framework",
 			Options: []UserQuestionOption{
 				{Label: "Gin"},
 				{Label: "Echo"},
@@ -6922,6 +6942,287 @@ func TestBuildAskQuestionResponse(t *testing.T) {
 	}
 	if _, ok := result["questions"]; !ok {
 		t.Error("expected original questions to be preserved")
+	}
+}
+
+func TestBuildAskQuestionResponse_UsesQuestionAsKey(t *testing.T) {
+	qs := []UserQuestion{
+		{Question: "Which database?"},
+		{Question: "Which framework?"},
+	}
+	result := buildAskQuestionResponse(map[string]any{}, qs, map[int]string{0: "pg", 1: "gin"})
+	answers := result["answers"].(map[string]any)
+	if answers["Which database?"] != "pg" || answers["Which framework?"] != "gin" {
+		t.Fatalf("answers=%v", answers)
+	}
+}
+
+func TestResolveAskQuestionAnswer_UsesOptionValue(t *testing.T) {
+	e := newTestEngine()
+	q := UserQuestion{
+		Question: "DB?",
+		Options: []UserQuestionOption{
+			{Label: "PostgreSQL", Value: "pg"},
+			{Label: "SQLite", Value: "sqlite"},
+		},
+	}
+	if got := e.resolveAskQuestionAnswer(q, "askq:0:1"); got != "pg" {
+		t.Fatalf("got %q, want pg", got)
+	}
+}
+
+func TestResolveAskQuestionDisplayAnswer_UsesLabelNotValue(t *testing.T) {
+	e := newTestEngine()
+	q := UserQuestion{
+		Question: "Which account?",
+		Options: []UserQuestionOption{
+			{Label: "工资卡", Value: "acc_001", Tag: "推荐", TagVariant: "recommend"},
+			{Label: "理财卡", Value: "acc_002"},
+		},
+	}
+	if got := e.resolveAskQuestionAnswer(q, "askq:0:1"); got != "acc_001" {
+		t.Fatalf("agent_value = %q, want acc_001", got)
+	}
+	if got := e.resolveAskQuestionDisplayAnswer(q, "askq:0:1"); got != "工资卡" {
+		t.Fatalf("display_value = %q, want 工资卡", got)
+	}
+}
+
+func TestResolveAskQuestionDisplayAnswer_NumericAndMultiSelect(t *testing.T) {
+	e := newTestEngine()
+	q := UserQuestion{
+		Question: "Pick?",
+		Options: []UserQuestionOption{
+			{Label: "工资卡", Value: "acc_001"},
+			{Label: "理财卡", Value: "acc_002"},
+			{Label: "信用卡", Value: "acc_003"},
+		},
+	}
+
+	if got := e.resolveAskQuestionAnswer(q, "2"); got != "acc_002" {
+		t.Fatalf("single agent_value = %q, want acc_002", got)
+	}
+	if got := e.resolveAskQuestionDisplayAnswer(q, "2"); got != "理财卡" {
+		t.Fatalf("single display_value = %q, want 理财卡", got)
+	}
+
+	q.MultiSelect = true
+	for _, input := range []string{"1,2", "1，2", "1 2"} {
+		if got := e.resolveAskQuestionAnswer(q, input); got != "acc_001, acc_002" {
+			t.Fatalf("multi agent_value(%q) = %q, want acc_001, acc_002", input, got)
+		}
+		if got := e.resolveAskQuestionDisplayAnswer(q, input); got != "工资卡, 理财卡" {
+			t.Fatalf("multi display_value(%q) = %q, want 工资卡, 理财卡", input, got)
+		}
+	}
+}
+
+func TestResolveAskQuestionDisplayAnswer_CustomTextTrimmed(t *testing.T) {
+	e := newTestEngine()
+	q := UserQuestion{
+		Question:         "Account?",
+		AllowCustomInput: true,
+		Options: []UserQuestionOption{
+			{Label: "工资卡", Value: "acc_001"},
+		},
+	}
+	const raw = "  自定义账户名  "
+	want := "自定义账户名"
+	if got := e.resolveAskQuestionAnswer(q, raw); got != want {
+		t.Fatalf("agent custom = %q, want %q", got, want)
+	}
+	if got := e.resolveAskQuestionDisplayAnswer(q, raw); got != want {
+		t.Fatalf("display custom = %q, want %q", got, want)
+	}
+}
+
+func TestResolveAskQuestionDisplayAnswer_EmptyLabelDoesNotLeakValue(t *testing.T) {
+	e := newTestEngine()
+	q := UserQuestion{
+		Question: "Account?",
+		Options: []UserQuestionOption{
+			{Label: "  ", Value: "acc_001"},
+			{Label: " 理财卡 ", Value: "acc_002"},
+		},
+	}
+	if got := e.resolveAskQuestionAnswer(q, "askq:0:1"); got != "acc_001" {
+		t.Fatalf("agent_value = %q, want acc_001", got)
+	}
+	if got := e.resolveAskQuestionDisplayAnswer(q, "askq:0:1"); got != "" {
+		t.Fatalf("empty label display = %q, want empty (must not leak value)", got)
+	}
+	if got := e.resolveAskQuestionDisplayAnswer(q, "2"); got != "理财卡" {
+		t.Fatalf("trimmed display = %q, want 理财卡", got)
+	}
+}
+
+func TestHandlePendingPermission_AskUserQuestion_AckShowsLabelNotValue(t *testing.T) {
+	e := newTestEngine()
+	p := &stubPlatformEngine{n: "test"}
+	rec := &recordingAgentSession{}
+
+	qs := []UserQuestion{{
+		Question: "Which account?",
+		Options: []UserQuestionOption{
+			{Label: "工资卡", Value: "acc_001"},
+			{Label: "理财卡", Value: "acc_002"},
+		},
+	}}
+	state := &interactiveState{
+		agentSession: rec,
+		platform:     p,
+		replyCtx:     "ctx",
+		pending: &pendingPermission{
+			RequestID: "req-ack-1",
+			ToolName:  "AskUserQuestion",
+			ToolInput: map[string]any{"questions": []any{}},
+			Questions: qs,
+			Resolved:  make(chan struct{}),
+		},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates["test:chat:user1"] = state
+	e.interactiveMu.Unlock()
+
+	if !e.handlePendingPermission(p, &Message{
+		SessionKey: "test:chat:user1",
+		UserID:     "user1",
+		Content:    "askq:0:1",
+		ReplyCtx:   "ctx",
+	}, "askq:0:1", "") {
+		t.Fatal("expected handled")
+	}
+
+	answers := rec.lastResult.UpdatedInput["answers"].(map[string]any)
+	if answers["Which account?"] != "acc_001" {
+		t.Fatalf("agent must receive value acc_001, got %v", answers["Which account?"])
+	}
+
+	ack := findAskQuestionAck(p.getSent())
+	if ack == "" {
+		t.Fatalf("expected ✅ ack, sent=%v", p.getSent())
+	}
+	if !strings.Contains(ack, "工资卡") {
+		t.Fatalf("ack must show label, got %q", ack)
+	}
+	if strings.Contains(ack, "acc_001") {
+		t.Fatalf("ack must not leak agent value, got %q", ack)
+	}
+	if want := "✅ Which account?: **工资卡**"; ack != want {
+		t.Fatalf("ack = %q, want %q", ack, want)
+	}
+}
+
+func TestHandlePendingPermission_AskUserQuestion_MultiQuestion_AckShowsLabelNotValue(t *testing.T) {
+	e := newTestEngine()
+	p := &stubPlatformEngine{n: "test"}
+	rec := &recordingAgentSession{}
+
+	qs := []UserQuestion{
+		{
+			Question: "Which account?",
+			Options: []UserQuestionOption{
+				{Label: "工资卡", Value: "acc_001"},
+				{Label: "理财卡", Value: "acc_002"},
+			},
+		},
+		{
+			Question: "Which bank?",
+			Options: []UserQuestionOption{
+				{Label: "工行", Value: "bank_icbc"},
+				{Label: "招行", Value: "bank_cmb"},
+			},
+		},
+	}
+	state := &interactiveState{
+		agentSession: rec,
+		platform:     p,
+		replyCtx:     "ctx",
+		pending: &pendingPermission{
+			RequestID: "req-ack-multi",
+			ToolName:  "AskUserQuestion",
+			ToolInput: map[string]any{"questions": []any{}},
+			Questions: qs,
+			Resolved:  make(chan struct{}),
+		},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates["test:chat:user1"] = state
+	e.interactiveMu.Unlock()
+
+	// Intermediate ack for question 0
+	if !e.handlePendingPermission(p, &Message{
+		SessionKey: "test:chat:user1",
+		UserID:     "user1",
+		Content:    "1",
+		ReplyCtx:   "ctx",
+	}, "1", "") {
+		t.Fatal("expected handled for q0")
+	}
+	if rec.calls != 0 {
+		t.Fatal("must not RespondPermission before all questions answered")
+	}
+	midAck := findAskQuestionAck(p.getSent())
+	if midAck != "✅ Which account?: **工资卡**" {
+		t.Fatalf("intermediate ack = %q, want label 工资卡", midAck)
+	}
+	if strings.Contains(midAck, "acc_001") {
+		t.Fatalf("intermediate ack leaked value: %q", midAck)
+	}
+
+	p.clearSent()
+
+	// Final ack for question 1
+	if !e.handlePendingPermission(p, &Message{
+		SessionKey: "test:chat:user1",
+		UserID:     "user1",
+		Content:    "2",
+		ReplyCtx:   "ctx",
+	}, "2", "") {
+		t.Fatal("expected handled for q1")
+	}
+	answers := rec.lastResult.UpdatedInput["answers"].(map[string]any)
+	if answers["Which account?"] != "acc_001" || answers["Which bank?"] != "bank_cmb" {
+		t.Fatalf("agent answers = %#v", answers)
+	}
+	finalAck := findAskQuestionAck(p.getSent())
+	if finalAck != "✅ Which bank?: **招行**" {
+		t.Fatalf("finalize ack = %q, want label 招行", finalAck)
+	}
+	if strings.Contains(finalAck, "bank_cmb") {
+		t.Fatalf("finalize ack leaked value: %q", finalAck)
+	}
+}
+
+func findAskQuestionAck(sent []string) string {
+	for _, s := range sent {
+		if strings.HasPrefix(s, "✅") {
+			return s
+		}
+	}
+	return ""
+}
+
+func TestSendAskQuestionPrompt_RecommendedOptionLabel(t *testing.T) {
+	e := newTestEngine()
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	qs := []UserQuestion{{
+		Question: "DB?",
+		Options: []UserQuestionOption{
+			{Label: "PostgreSQL", Tag: "推荐", Description: "prod"},
+			{Label: "SQLite"},
+		},
+	}}
+	e.sendAskQuestionPrompt(p, "ctx", qs, 0)
+	if len(p.sentCards) != 1 {
+		t.Fatalf("cards=%d", len(p.sentCards))
+	}
+	text := p.sentCards[0].RenderText()
+	if !strings.Contains(text, "推荐") && !strings.Contains(text, "Recommended") {
+		t.Fatalf("expected recommended marker in card text: %s", text)
+	}
+	if p.sentCards[0].Header == nil || p.sentCards[0].Header.Title != e.i18n.T(MsgAskQuestionTitle) {
+		t.Fatalf("expected default ask title, got %#v", p.sentCards[0].Header)
 	}
 }
 
@@ -7301,6 +7602,72 @@ func TestHandlePendingPermission_AskUserQuestion_SingleQuestion(t *testing.T) {
 	state.mu.Unlock()
 }
 
+// MCP-backed asks must Complete the AskUserHub (tool result path), not
+// RespondPermission / control_response.
+func TestHandlePendingPermission_MCPAskUser_CompletesHub(t *testing.T) {
+	e := newTestEngine()
+	hub := NewAskUserHub()
+	e.SetAskUserHub(hub)
+	p := &stubPlatformEngine{n: "test"}
+	rec := &recordingAgentSession{}
+
+	done := make(chan AskUserResult, 1)
+	hub.Bind("mcp-sess", askEmitterFunc(func(ev Event) error { return nil }))
+	// Manually register a waiter matching the pending RequestID.
+	reqID := "ask_mcp_test_1"
+	hub.mu.Lock()
+	hub.pending[reqID] = &askWaiter{sessionKey: "mcp-sess", ch: done}
+	hub.mu.Unlock()
+
+	qs := []UserQuestion{{
+		Question:         "Which wallet?",
+		Event:            "connect_account",
+		AllowCustomInput: true,
+		Options: []UserQuestionOption{
+			{Label: "metamask", Value: "metamask", Tag: "Recommended", TagVariant: "recommend"},
+			{Label: "imToken", Value: "imToken"},
+		},
+	}}
+	state := &interactiveState{
+		agentSession: rec,
+		platform:     p,
+		replyCtx:     "ctx",
+		pending: &pendingPermission{
+			RequestID: reqID,
+			ToolName:  ToolCCConnectAskUser,
+			Questions: qs,
+			Resolved:  make(chan struct{}),
+		},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates["test:chat:user1"] = state
+	e.interactiveMu.Unlock()
+
+	handled := e.handlePendingPermission(p, &Message{
+		SessionKey: "test:chat:user1",
+		UserID:     "user1",
+		Content:    "1",
+		ReplyCtx:   "ctx",
+	}, "1", "")
+	if !handled {
+		t.Fatal("expected handled")
+	}
+	if rec.calls != 0 {
+		t.Fatalf("MCP ask must not RespondPermission, got %d calls", rec.calls)
+	}
+	select {
+	case res := <-done:
+		if res.Answers[0] != "metamask" {
+			t.Fatalf("answers=%v", res.Answers)
+		}
+		if res.DisplayAnswers[0] != "metamask" {
+			t.Fatalf("display=%v", res.DisplayAnswers)
+		}
+	default:
+		t.Fatal("expected Hub.Complete to deliver result")
+	}
+}
+
 func TestHandlePendingPermission_AskUserQuestion_MultiQuestion_Sequential(t *testing.T) {
 	e := newTestEngine()
 	p := &stubPlatformEngine{n: "test"}
@@ -7553,7 +7920,6 @@ func TestHandlePendingPermission_ExtensionSelect_StillRoutedAsAskUserQuestion(t 
 			},
 			Questions: []UserQuestion{{
 				Question: "Pick a color",
-				Header:   "Select",
 				Options: []UserQuestionOption{
 					{Label: "Red"},
 					{Label: "Green"},

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/chenhg5/cc-connect/core"
+	"github.com/chenhg5/cc-connect/mcp/askuser"
 )
 
 // claudeSession manages a long-running Claude Code process using
@@ -72,6 +73,11 @@ type claudeSession struct {
 	// when the session reuses the shared file (the common 99% case)
 	// or when there is nothing to append.
 	promptFilePath string
+
+	// MCP ask-user binding (optional).
+	askHub        *core.AskUserHub
+	askSessionKey string
+	mcpConfigPath string
 }
 
 // StartupWarning implements core.StartupWarner. Returns a non-empty string
@@ -216,7 +222,7 @@ func buildAppendSystemPrompt(agentPrompt, platformPrompt, userAppend string) str
 	return strings.Join(parts, "\n")
 }
 
-func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cmdArgsFlag string, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt string, allowedTools, disallowedTools []string, pluginDirs []string, extraEnv []string, platformPrompt string, disableVerbose bool, spawnOpts core.SpawnOptions, maxContextTokens int, ccDataDir string) (*claudeSession, error) {
+func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cmdArgsFlag string, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt string, allowedTools, disallowedTools []string, pluginDirs []string, extraEnv []string, platformPrompt string, disableVerbose bool, spawnOpts core.SpawnOptions, maxContextTokens int, ccDataDir string, askUserMode, askMCPURL, askSessionKey string, askHub *core.AskUserHub) (*claudeSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	// Claude Code rejects bypassPermissions when running as root.
@@ -226,6 +232,15 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		slog.Warn("claudeSession: bypassPermissions not allowed under root, downgrading to auto mode")
 		mode = "auto"
 		rootDowngradeWarning = "⚠️ Running as root: bypassPermissions mode is not supported and has been downgraded to auto. The agent may still pause on high-risk operations."
+	}
+
+	useMCPAsk := shouldUseMCPAsk(askUserMode, askMCPURL, askSessionKey, askHub)
+	if useMCPAsk {
+		disallowedTools = ensureToolListed(disallowedTools, "AskUserQuestion")
+		// Only extend an existing allowlist; an empty allowlist means "all tools".
+		if len(allowedTools) > 0 {
+			allowedTools = ensureToolListed(allowedTools, core.MCPQualifiedAskUserTool)
+		}
 	}
 
 	// innerArgs are Claude Code CLI flags — when a wrapper is used with
@@ -269,23 +284,6 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		innerArgs = append(innerArgs, "--system-prompt", systemPrompt)
 	}
 
-	// Append the cc-connect functionality prompt, platform formatting hints,
-	// and the user's custom append prompt — via Claude's
-	// --append-system-prompt-file flag (not --append-system-prompt). Writing
-	// to a file avoids the Windows 8192-byte command-line limit (#1376):
-	// AgentSystemPrompt is ~9KB on its own and grew past the cap in v1.3.3,
-	// so even users with no customization need this workaround.
-	//
-	// Two paths exist to keep the common case zero-overhead:
-	//   • 99% case (no platform formatting, no user append) — reuse the
-	//     shared cc-connect-system.md file written once at startup; no
-	//     per-spawn write, no cleanup needed.
-	//   • 1% edge case (Slack/Weixin/MAX platform formatting or user-set
-	//     append_system_prompt) — write a per-spawn temp file containing
-	//     the merged content, removed on Close.
-	//
-	// Claude only reads the file at startup and never writes it, so the
-	// shared file is safe under concurrent spawns.
 	var promptFilePath string
 	var promptFileIsShared bool
 	if appended := buildAppendSystemPrompt(core.AgentSystemPrompt(), platformPrompt, appendSystemPrompt); appended != "" {
@@ -315,13 +313,27 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		innerArgs = append(innerArgs, "--max-context-tokens", strconv.Itoa(maxContextTokens))
 	}
 
+	var mcpConfigPath string
+	if useMCPAsk {
+		base := ccDataDir
+		if base == "" {
+			base = os.TempDir()
+		}
+		mcpConfigPath = filepath.Join(base, "agent-prompts", "mcp-ask-"+sanitizeSessionFile(askSessionKey)+".json")
+		if err := writeAskUserMCPConfig(mcpConfigPath, askMCPURL, askSessionKey); err != nil {
+			cancel()
+			return nil, fmt.Errorf("claudeSession: write mcp config: %w", err)
+		}
+		innerArgs = append(innerArgs, "--mcp-config", mcpConfigPath)
+	}
+
 	// outerArgs are understood by both the wrapper and Claude CLI directly.
 	var outerArgs []string
 	if model != "" {
 		outerArgs = append(outerArgs, "--model", model)
 	}
 
-	slog.Debug("claudeSession: starting", "innerArgs", core.RedactArgs(innerArgs), "outerArgs", core.RedactArgs(outerArgs), "dir", workDir, "mode", mode, "run_as_user", spawnOpts.RunAsUser)
+	slog.Debug("claudeSession: starting", "innerArgs", core.RedactArgs(innerArgs), "outerArgs", core.RedactArgs(outerArgs), "dir", workDir, "mode", mode, "run_as_user", spawnOpts.RunAsUser, "ask_user_mcp", useMCPAsk)
 
 	// Per-spawn defense in depth: if run_as_user is set, re-run the cheap
 	// preflight (sudo still works + target still can't escalate) right
@@ -454,14 +466,74 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		ccHooks:             newCCPermissionHookRunner(workDir),
 		startupWarning:      rootDowngradeWarning,
 		promptFilePath:      cleanupPromptPath,
+		mcpConfigPath:       mcpConfigPath,
+		askHub:              askHub,
+		askSessionKey:       askSessionKey,
 	}
 	cs.setPermissionMode(mode)
 	cs.sessionID.Store(sessionID)
 	cs.alive.Store(true)
 
+	if useMCPAsk && askHub != nil && askSessionKey != "" {
+		askHub.Bind(askSessionKey, cs)
+	}
+
 	go cs.readLoop(stdout, &stderrBuf)
 
 	return cs, nil
+}
+
+func shouldUseMCPAsk(mode, mcpURL, sessionKey string, hub *core.AskUserHub) bool {
+	ready := mcpURL != "" && sessionKey != "" && hub != nil
+	switch mode {
+	case "native":
+		return false
+	case "hybrid":
+		return ready
+	default: // mcp
+		if !ready {
+			slog.Warn("claudeSession: ask_user_mode=mcp but MCP/session unavailable; using native AskUserQuestion")
+		}
+		return ready
+	}
+}
+
+func ensureToolListed(list []string, tool string) []string {
+	for _, t := range list {
+		if t == tool {
+			return list
+		}
+	}
+	return append(list, tool)
+}
+
+func sanitizeSessionFile(key string) string {
+	r := strings.NewReplacer(":", "_", "/", "_", "\\", "_", " ", "_")
+	s := r.Replace(key)
+	if len(s) > 80 {
+		s = s[:80]
+	}
+	if s == "" {
+		return "session"
+	}
+	return s
+}
+
+func writeAskUserMCPConfig(path, mcpURL, sessionKey string) error {
+	return askuser.WriteMCPConfig(path, mcpURL, sessionKey)
+}
+
+// EmitAskUser implements core.AskUserEmitter for MCP-backed asks.
+func (cs *claudeSession) EmitAskUser(event core.Event) error {
+	if !cs.alive.Load() {
+		return fmt.Errorf("session process is not running")
+	}
+	select {
+	case cs.events <- event:
+		return nil
+	case <-cs.ctx.Done():
+		return cs.ctx.Err()
+	}
 }
 
 func (cs *claudeSession) readLoop(stdout io.ReadCloser, stderrBuf *bytes.Buffer) {
@@ -868,6 +940,16 @@ func (cs *claudeSession) handleControlRequest(raw map[string]any) {
 	toolName, _ := request["tool_name"].(string)
 	input, _ := request["input"].(map[string]any)
 
+	// MCP ask tool blocks inside the MCP server for the user answer; never
+	// surface a second permission card for it.
+	if core.IsMCPAskTool(toolName) || strings.HasPrefix(toolName, "mcp__ccconnect__") {
+		_ = cs.RespondPermission(requestID, core.PermissionResult{
+			Behavior:     "allow",
+			UpdatedInput: input,
+		})
+		return
+	}
+
 	if cs.autoApprove.Load() {
 		slog.Debug("claudeSession: auto-approving", "request_id", requestID, "tool", toolName)
 		_ = cs.RespondPermission(requestID, core.PermissionResult{
@@ -917,6 +999,7 @@ func (cs *claudeSession) handleControlRequest(raw map[string]any) {
 	}
 
 	slog.Info("claudeSession: permission request", "request_id", requestID, "tool", toolName)
+
 	evt := core.Event{
 		Type:         core.EventPermissionRequest,
 		RequestID:    requestID,
@@ -1175,6 +1258,12 @@ func (cs *claudeSession) Close() error {
 	defer func() {
 		if cs.promptFilePath != "" {
 			_ = os.Remove(cs.promptFilePath)
+		}
+		if cs.mcpConfigPath != "" {
+			_ = os.Remove(cs.mcpConfigPath)
+		}
+		if cs.askHub != nil && cs.askSessionKey != "" {
+			cs.askHub.Unbind(cs.askSessionKey)
 		}
 	}()
 

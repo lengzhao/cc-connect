@@ -1,8 +1,10 @@
 # chat-api Platform — API v1
 
-> Version: **v1.2.2** (2026-07-21)  
+> Version: **v1.2.5** (2026-07-23)
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
+> AskUserQuestion card contract: [plans/2026-07-22-askuserquestion-rich-confirm-design.md](./plans/2026-07-22-askuserquestion-rich-confirm-design.md)
+> Ask User MCP (Claude Code source): [plans/2026-07-23-cc-connect-ask-user-mcp-design.md](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md)
 > Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)  
 > Stream answer parse: [plans/2026-07-21-chat-api-stream-answer-parse-design.md](./plans/2026-07-21-chat-api-stream-answer-parse-design.md)  
 > Structured streaming (planned): [plans/2026-07-21-structured-streaming-card-design.md](./plans/2026-07-21-structured-streaming-card-design.md)
@@ -12,6 +14,8 @@
 `chat-api` is a cc-connect **Platform** — HTTP + SSE API for custom apps / BFFs.
 
 **v1**: SSE-only chat, implicit conversation create, default `busy_policy=queue`, tool SSE events, and permission / AskUserQuestion confirm windows.
+
+> Agent-side source: Claude Code defaults to resident MCP tool `cc_connect_ask_user` so `event` / `value` / `tag` / `allow_custom_input` survive; see [Ask User MCP](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md).
 
 ## Endpoints
 
@@ -25,7 +29,7 @@
 | `GET` | `/conversations/{id}/messages` | History |
 | `POST` | `/chat-messages` | Send (SSE) |
 | `POST` | `/runs/{run_id}/cancel` | Cancel turn |
-| `POST` | `/runs/{run_id}/interactions/{interaction_id}/respond` | Respond to confirm window |
+| `POST` | `/conversations/messages/respond` | Respond to confirm (`answers[]` or `decision`) |
 
 ## Conventions
 
@@ -45,9 +49,9 @@
 
 `text_delta` / `thinking_delta` may include optional `replace: true` (full-text replace instead of append). Clients must handle it or progress lines can duplicate into the answer.
 
-`tool_call` / `tool_result` / interaction events are ephemeral (not written to history). See [Tool SSE design](./plans/2026-07-15-chat-api-tool-sse-design.md) and [Interaction hardening](./plans/2026-07-14-chat-api-interaction-hardening.md).
+`tool_call` / `tool_result` / interaction SSE events are ephemeral by default. See [Tool SSE design](./plans/2026-07-15-chat-api-tool-sse-design.md) and [Interaction hardening](./plans/2026-07-14-chat-api-interaction-hardening.md).
 
-`question_request` includes `multi_select` (`true`/`false`). Clients must use `option_id` for single-select and `option_ids` only when `multi_select=true`.
+`question_request` uses the card contract: envelope (`interaction_id` / `run_id` / `message_id` / `expires_at` / optional `event`) + `card_group` (length 1 from Engine/Claude). Options use `label` / `value` / `description` / `tag`; custom input is `others.custom_input.enabled`. Respond only via `POST /conversations/messages/respond` — questions use `answers[]` (`value` or `custom_input`); permissions use `decision`.
 
 ## Configuration
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,17 @@ import (
 
 	"github.com/chenhg5/cc-connect/core"
 )
+
+func postRespond(t *testing.T, p *Platform, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/conversations/messages/respond", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	return rec
+}
 
 func TestPermissionRequestSSEAndRespond(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
@@ -111,13 +123,8 @@ func TestPermissionRequestSSEAndRespond(t *testing.T) {
 		t.Fatalf("missing permission_request event: %#v body=%s", events, rec.Body.String())
 	}
 
-	respondBody := `{"decision":"allow"}`
-	respondReq := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/interactions/"+interactionID+"/respond", strings.NewReader(respondBody))
-	respondReq.Header.Set("Authorization", "Bearer secret")
-	respondReq.Header.Set("X-Chat-API-User", "user_001")
-	respondReq.Header.Set("Content-Type", "application/json")
-	respondRec := httptest.NewRecorder()
-	p.routes().ServeHTTP(respondRec, respondReq)
+	respondBody := fmt.Sprintf(`{"run_id":%q,"interaction_id":%q,"decision":"allow"}`, runID, interactionID)
+	respondRec := postRespond(t, p, respondBody)
 	if respondRec.Code != http.StatusOK {
 		t.Fatalf("respond status = %d body=%s", respondRec.Code, respondRec.Body.String())
 	}
@@ -156,8 +163,7 @@ func TestPermissionRequestSSEAndRespond(t *testing.T) {
 	}
 
 	// Duplicate respond while run still active → 409
-	dupRec := httptest.NewRecorder()
-	p.routes().ServeHTTP(dupRec, respondReq)
+	dupRec := postRespond(t, p, respondBody)
 	if dupRec.Code != http.StatusConflict {
 		t.Fatalf("dup status = %d, want 409 body=%s", dupRec.Code, dupRec.Body.String())
 	}
@@ -251,13 +257,9 @@ func TestAskQuestionRequestSSEAndRespond(t *testing.T) {
 		t.Fatalf("question_request ended SSE before response: %#v", events)
 	}
 
-	respondReq := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/interactions/"+interactionID+"/respond",
-		strings.NewReader(`{"option_id":"0:2"}`))
-	respondReq.Header.Set("Authorization", "Bearer secret")
-	respondReq.Header.Set("X-Chat-API-User", "user_001")
-	respondReq.Header.Set("Content-Type", "application/json")
-	respondRec := httptest.NewRecorder()
-	p.routes().ServeHTTP(respondRec, respondReq)
+	respondRec := postRespond(t, p, fmt.Sprintf(
+		`{"run_id":%q,"interaction_id":%q,"answers":[{"index":0,"value":"Production"}]}`,
+		runID, interactionID))
 	if respondRec.Code != http.StatusOK {
 		t.Fatalf("respond status = %d body=%s", respondRec.Code, respondRec.Body.String())
 	}
@@ -345,7 +347,7 @@ func TestEmitInteractionPublicActionIDs(t *testing.T) {
 	}
 	_ = waitInteractionID(t, rec, "question_request")
 
-	var actions []any
+	var cardGroup []any
 	for _, e := range parseSSE(rec.Body.String()) {
 		if e.Name != "question_request" {
 			continue
@@ -354,24 +356,31 @@ func TestEmitInteractionPublicActionIDs(t *testing.T) {
 		if err := json.Unmarshal([]byte(e.Data), &payload); err != nil {
 			t.Fatal(err)
 		}
-		actions, _ = payload["actions"].([]any)
-		ms, ok := payload["multi_select"].(bool)
-		if !ok {
-			t.Fatalf("missing multi_select bool: %#v", payload)
+		if _, ok := payload["actions"]; ok {
+			t.Fatalf("question_request must not include top-level actions: %#v", payload)
 		}
-		if ms {
-			t.Fatalf("single-select question_request must set multi_select=false: %#v", payload)
+		if _, ok := payload["multi_select"]; ok {
+			t.Fatalf("question_request must not include top-level multi_select: %#v", payload)
+		}
+		cardGroup, _ = payload["card_group"].([]any)
+		if len(cardGroup) != 1 {
+			t.Fatalf("card_group=%#v", cardGroup)
+		}
+		card, _ := cardGroup[0].(map[string]any)
+		if card["type"] != "single_select" {
+			t.Fatalf("card.type=%#v", card["type"])
+		}
+		opts, _ := card["options"].([]any)
+		if len(opts) < 2 {
+			t.Fatalf("options=%#v", opts)
+		}
+		first, _ := opts[0].(map[string]any)
+		if first["label"] == "" {
+			t.Fatalf("first option=%#v", first)
 		}
 	}
-	if len(actions) < 2 {
-		t.Fatalf("actions = %#v", actions)
-	}
-	first, _ := actions[0].(map[string]any)
-	if first["id"] != "0:1" {
-		t.Fatalf("first action id = %#v, want 0:1", first["id"])
-	}
-	if _, ok := first["description"]; ok {
-		t.Fatalf("description enrichment should be gone: %#v", first)
+	if len(cardGroup) != 1 {
+		t.Fatalf("card_group missing")
 	}
 	close(release)
 	<-done
@@ -469,7 +478,7 @@ func TestAskQuestionMultiSelectSSE(t *testing.T) {
 	}
 	ixID := waitInteractionID(t, rec, "question_request")
 	runID := ""
-	var multi any
+	var cardType any
 	for _, e := range parseSSE(rec.Body.String()) {
 		if e.Name != "question_request" {
 			continue
@@ -478,24 +487,23 @@ func TestAskQuestionMultiSelectSSE(t *testing.T) {
 		if err := json.Unmarshal([]byte(e.Data), &payload); err != nil {
 			t.Fatal(err)
 		}
-		multi = payload["multi_select"]
+		cards, _ := payload["card_group"].([]any)
+		if len(cards) > 0 {
+			card, _ := cards[0].(map[string]any)
+			cardType = card["type"]
+		}
 		runID, _ = payload["run_id"].(string)
 	}
-	if multi != true {
-		t.Fatalf("multi_select = %#v, want true", multi)
+	if cardType != "multi_select" {
+		t.Fatalf("card.type = %#v, want multi_select", cardType)
 	}
 	if runID == "" {
 		t.Fatal("missing run_id")
 	}
 
-	respondReq := httptest.NewRequest(http.MethodPost,
-		"/v1/runs/"+runID+"/interactions/"+ixID+"/respond",
-		strings.NewReader(`{"option_ids":["0:1","0:3"]}`))
-	respondReq.Header.Set("Authorization", "Bearer secret")
-	respondReq.Header.Set("X-Chat-API-User", "user_001")
-	respondReq.Header.Set("Content-Type", "application/json")
-	respondRec := httptest.NewRecorder()
-	p.routes().ServeHTTP(respondRec, respondReq)
+	respondRec := postRespond(t, p, fmt.Sprintf(
+		`{"run_id":%q,"interaction_id":%q,"answers":[{"index":0,"value":["A","C"]}]}`,
+		runID, ixID))
 	if respondRec.Code != http.StatusOK {
 		t.Fatalf("respond status=%d body=%s", respondRec.Code, respondRec.Body.String())
 	}
@@ -608,8 +616,8 @@ func TestInteractionRespondWrongUser(t *testing.T) {
 	runID := <-ready
 	interactionID := waitInteractionID(t, rec, "permission_request")
 
-	bad := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/interactions/"+interactionID+"/respond",
-		strings.NewReader(`{"decision":"allow"}`))
+	badBody := fmt.Sprintf(`{"run_id":%q,"interaction_id":%q,"decision":"allow"}`, runID, interactionID)
+	bad := httptest.NewRequest(http.MethodPost, "/v1/conversations/messages/respond", strings.NewReader(badBody))
 	bad.Header.Set("Authorization", "Bearer secret")
 	bad.Header.Set("X-Chat-API-User", "other_user")
 	bad.Header.Set("Content-Type", "application/json")
@@ -829,13 +837,9 @@ func TestQuestionInteractionTimeoutCancelsTurn(t *testing.T) {
 		t.Fatalf("missing structured interaction timeout error: %#v", events)
 	}
 
-	respondReq := httptest.NewRequest(http.MethodPost, "/v1/runs/run_x/interactions/"+interactionID+"/respond",
-		strings.NewReader(`{"option_id":"0:1"}`))
-	respondReq.Header.Set("Authorization", "Bearer secret")
-	respondReq.Header.Set("X-Chat-API-User", "user_001")
-	respondReq.Header.Set("Content-Type", "application/json")
-	respondRec := httptest.NewRecorder()
-	p.routes().ServeHTTP(respondRec, respondReq)
+	respondRec := postRespond(t, p, fmt.Sprintf(
+		`{"run_id":"run_x","interaction_id":%q,"answers":[{"index":0,"value":"A"}]}`,
+		interactionID))
 	if respondRec.Code != http.StatusNotFound {
 		t.Fatalf("expired respond status = %d body=%s", respondRec.Code, respondRec.Body.String())
 	}
@@ -1000,24 +1004,12 @@ func TestInteractionSuperseded(t *testing.T) {
 		t.Fatalf("missing interaction_superseded: %s", rec.Body.String())
 	}
 
-	oldReq := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/interactions/"+firstID+"/respond",
-		strings.NewReader(`{"decision":"allow"}`))
-	oldReq.Header.Set("Authorization", "Bearer secret")
-	oldReq.Header.Set("X-Chat-API-User", "user_001")
-	oldReq.Header.Set("Content-Type", "application/json")
-	oldRec := httptest.NewRecorder()
-	p.routes().ServeHTTP(oldRec, oldReq)
+	oldRec := postRespond(t, p, fmt.Sprintf(`{"run_id":%q,"interaction_id":%q,"decision":"allow"}`, runID, firstID))
 	if oldRec.Code != http.StatusNotFound && oldRec.Code != http.StatusConflict {
 		t.Fatalf("old respond status=%d body=%s", oldRec.Code, oldRec.Body.String())
 	}
 
-	newReq := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/interactions/"+secondID+"/respond",
-		strings.NewReader(`{"decision":"allow"}`))
-	newReq.Header.Set("Authorization", "Bearer secret")
-	newReq.Header.Set("X-Chat-API-User", "user_001")
-	newReq.Header.Set("Content-Type", "application/json")
-	newRec := httptest.NewRecorder()
-	p.routes().ServeHTTP(newRec, newReq)
+	newRec := postRespond(t, p, fmt.Sprintf(`{"run_id":%q,"interaction_id":%q,"decision":"allow"}`, runID, secondID))
 	if newRec.Code != http.StatusOK {
 		t.Fatalf("new respond status=%d body=%s", newRec.Code, newRec.Body.String())
 	}
@@ -1048,5 +1040,169 @@ func TestPlainCardDoesNotEmitQuestionRequest(t *testing.T) {
 	}
 	if !hasEvent(events, "message_end") {
 		t.Fatalf("expected message_end: %#v", events)
+	}
+}
+
+func TestSendAskQuestion_RichSingleConfirm(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
+	bindTestSessions(t, p)
+
+	ready := make(chan struct{}, 1)
+	release := make(chan struct{})
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		if strings.HasPrefix(msg.Content, "askq:") || msg.Content == "/stop" {
+			if scp, ok := platform.(core.StreamingCardPlatform); ok {
+				c, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+				_ = c.Finalize(context.Background(), "ok")
+			}
+			return
+		}
+		q := core.UserQuestion{
+			Question:         "请选择账户",
+			Description:      "已开户账户",
+			Event:            "connect_account",
+			AllowCustomInput: true,
+			Options: []core.UserQuestionOption{
+				{Label: "招行 ****1234", Value: "acc1", Tag: "推荐", TagVariant: "recommend", Description: "默认"},
+				{Label: "工行 ****5678", Value: "acc2", Tag: "交易所", TagVariant: "default"},
+			},
+		}
+		_ = platform.(core.AskQuestionSender).SendAskQuestion(context.Background(), msg.ReplyCtx, q, 0)
+		ready <- struct{}{}
+		<-release
+		if scp, ok := platform.(core.StreamingCardPlatform); ok {
+			c, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+			_ = c.Finalize(context.Background(), "done")
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(`{"query":"q"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		p.routes().ServeHTTP(rec, req)
+		close(done)
+	}()
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout")
+	}
+	ixID := waitInteractionID(t, rec, "question_request")
+	var payload map[string]any
+	for _, e := range parseSSE(rec.Body.String()) {
+		if e.Name != "question_request" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(e.Data), &payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if payload["event"] != "connect_account" {
+		t.Fatalf("event=%#v", payload["event"])
+	}
+	if _, ok := payload["actions"]; ok {
+		t.Fatalf("must not include actions: %#v", payload)
+	}
+	cards, _ := payload["card_group"].([]any)
+	if len(cards) != 1 {
+		t.Fatalf("card_group=%#v", cards)
+	}
+	card, _ := cards[0].(map[string]any)
+	if card["title"] != "请选择账户" || card["type"] != "single_select" {
+		t.Fatalf("card=%#v", card)
+	}
+	others, _ := card["others"].(map[string]any)
+	ci, _ := others["custom_input"].(map[string]any)
+	if ci["enabled"] != true {
+		t.Fatalf("custom_input=%#v", others)
+	}
+	opts, _ := card["options"].([]any)
+	a0, _ := opts[0].(map[string]any)
+	if a0["value"] != "acc1" {
+		t.Fatalf("option0=%#v", a0)
+	}
+	tag0, _ := a0["tag"].(map[string]any)
+	if tag0["variant"] != "recommend" {
+		t.Fatalf("option0.tag=%#v", tag0)
+	}
+	a1, _ := opts[1].(map[string]any)
+	tag1, _ := a1["tag"].(map[string]any)
+	if tag1["text"] != "交易所" || tag1["variant"] != "default" {
+		t.Fatalf("option1.tag=%#v", tag1)
+	}
+
+	// answers[] contract path
+	got := make(chan string, 1)
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		got <- msg.Content
+		if scp, ok := platform.(core.StreamingCardPlatform); ok {
+			c, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+			_ = c.Finalize(context.Background(), "ok")
+		}
+	})
+	body := fmt.Sprintf(`{"conversation_id":%q,"run_id":%q,"interaction_id":%q,"answers":[{"index":0,"value":"acc1"}]}`,
+		strings.Split(payload["message_id"].(string), ":")[0], payload["run_id"], ixID)
+	respondRec := postRespond(t, p, body)
+	if respondRec.Code != http.StatusOK {
+		t.Fatalf("respond status=%d body=%s", respondRec.Code, respondRec.Body.String())
+	}
+	select {
+	case content := <-got:
+		if content != "askq:0:1" {
+			t.Fatalf("mapped content=%q", content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for mapped answer")
+	}
+	close(release)
+	<-done
+}
+
+func TestBuildQuestionRequestPayload_OmitsCustomInputWhenDisabled(t *testing.T) {
+	payload := buildQuestionRequestPayload(&runState{
+		id:        "run_1",
+		messageID: "conv_1:0",
+	}, &interactionState{
+		ID:        "ix_1",
+		Kind:      interactionQuestion,
+		Prompt:    "Pick one",
+		ExpiresAt: time.Unix(1780004100, 0),
+		Actions: []interactionAction{
+			{ID: "askq:0:1", Label: "A"},
+		},
+	})
+	cards, _ := payload["card_group"].([]map[string]any)
+	card := cards[0]
+	if _, ok := card["others"]; ok {
+		t.Fatalf("others must be omitted when custom input is disabled: %#v", card)
+	}
+}
+
+func TestNormalizeCardAnswers_CustomInputAndUnknownValue(t *testing.T) {
+	ix := &interactionState{
+		Kind:        interactionQuestion,
+		MultiSelect: false,
+		Actions: []interactionAction{
+			{ID: "askq:0:1", Label: "$5,000", Value: "5000"},
+		},
+	}
+	content, err := normalizeCardAnswers(ix, []cardAnswer{{
+		Index:       0,
+		CustomInput: json.RawMessage(`3000`),
+	}})
+	if err != nil || content != "3000" {
+		t.Fatalf("custom_input => %q err=%v", content, err)
+	}
+	_, err = normalizeCardAnswers(ix, []cardAnswer{{
+		Index: 0,
+		Value: json.RawMessage(`"nope"`),
+	}})
+	if !errors.Is(err, errUnknownOption) {
+		t.Fatalf("unknown value err=%v", err)
 	}
 }

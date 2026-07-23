@@ -474,6 +474,9 @@ type Engine struct {
 
 	// Data directory for socket path injection
 	dataDir string
+
+	// askUserHub completes MCP-originated structured asks (tool result path).
+	askUserHub *AskUserHub
 }
 
 // workspaceInitFlow tracks a channel that is being onboarded to a workspace.
@@ -675,7 +678,8 @@ type pendingPermission struct {
 	ToolInput       map[string]any
 	InputPreview    string
 	Questions       []UserQuestion // non-nil for AskUserQuestion
-	Answers         map[int]string // collected answers keyed by question index
+	Answers         map[int]string // collected agent-facing answers keyed by question index
+	DisplayAnswers  map[int]string // collected display labels/custom text
 	CurrentQuestion int            // index of the question currently being asked
 	Resolved        chan struct{}  // closed when user responds
 	resolveOnce     sync.Once
@@ -1386,6 +1390,16 @@ func (e *Engine) SetProjectStateStore(store *ProjectStateStore) {
 
 func (e *Engine) SetDataDir(dir string) {
 	e.dataDir = dir
+}
+
+// SetAskUserHub wires the MCP ask completion hub (Claude Code MCP path).
+func (e *Engine) SetAskUserHub(h *AskUserHub) {
+	e.askUserHub = h
+}
+
+// AskUserHub returns the hub used for MCP structured asks (may be nil).
+func (e *Engine) AskUserHub() *AskUserHub {
+	return e.askUserHub
 }
 
 // RemoveCommand removes a custom command by name. Returns false if not found.
@@ -3372,38 +3386,27 @@ found:
 		curIdx := pending.CurrentQuestion
 		q := pending.Questions[curIdx]
 		answer := e.resolveAskQuestionAnswer(q, content)
+		display := e.resolveAskQuestionDisplayAnswer(q, content)
 
 		if pending.Answers == nil {
 			pending.Answers = make(map[int]string)
 		}
+		if pending.DisplayAnswers == nil {
+			pending.DisplayAnswers = make(map[int]string)
+		}
 		pending.Answers[curIdx] = answer
+		pending.DisplayAnswers[curIdx] = display
 
 		// More questions remaining — advance to next and send new card
 		if curIdx+1 < len(pending.Questions) {
 			pending.CurrentQuestion = curIdx + 1
-			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", q.Question, answer))
+			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", q.Question, display))
 			e.sendAskQuestionPrompt(p, msg.ReplyCtx, pending.Questions, curIdx+1)
 			return true
 		}
 
 		// All questions answered — build response and resolve
-		updatedInput := buildAskQuestionResponse(pending.ToolInput, pending.Questions, pending.Answers)
-
-		if err := state.agentSession.RespondPermission(pending.RequestID, PermissionResult{
-			Behavior:     "allow",
-			UpdatedInput: updatedInput,
-		}); err != nil {
-			slog.Error("failed to send AskUserQuestion response", "error", err)
-			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
-		} else {
-			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", q.Question, answer))
-		}
-
-		state.mu.Lock()
-		state.pending = nil
-		state.mu.Unlock()
-		pending.resolve()
-		return true
+		return e.finalizeAskQuestion(p, msg, state, pending, q.Question, display)
 	}
 
 	lower := strings.ToLower(strings.TrimSpace(content))
@@ -3469,9 +3472,21 @@ func (e *Engine) lookupPending(iKey string) (*interactiveState, *pendingPermissi
 	return state, pending
 }
 
-// resolveAskQuestionAnswer converts user input into answer text.
-// It handles button callbacks ("askq:qIdx:optIdx"), numeric selections ("1", "1,3"), and free text.
+// resolveAskQuestionAnswer converts user input into the agent-facing answer
+// (option value, falling back to label; free text unchanged).
 func (e *Engine) resolveAskQuestionAnswer(q UserQuestion, input string) string {
+	return resolveAskQuestionSelection(q, input, optionAnswerValue)
+}
+
+// resolveAskQuestionDisplayAnswer converts user input into the human-readable
+// answer used for ack text and MCP tool results (option label; free text unchanged).
+func (e *Engine) resolveAskQuestionDisplayAnswer(q UserQuestion, input string) string {
+	return resolveAskQuestionSelection(q, input, optionDisplayLabel)
+}
+
+// resolveAskQuestionSelection shares askq:/numeric/free-text parsing for agent
+// and display answer pickers. pick maps a selected option to the desired string.
+func resolveAskQuestionSelection(q UserQuestion, input string, pick func(UserQuestionOption) string) string {
 	input = strings.TrimSpace(input)
 
 	// Handle card button callback: "askq:qIdx:optIdx"
@@ -3479,13 +3494,13 @@ func (e *Engine) resolveAskQuestionAnswer(q UserQuestion, input string) string {
 		parts := strings.SplitN(input, ":", 3)
 		if len(parts) == 3 {
 			if idx, err := strconv.Atoi(parts[2]); err == nil && idx >= 1 && idx <= len(q.Options) {
-				return q.Options[idx-1].Label
+				return pick(q.Options[idx-1])
 			}
 		}
 		// Legacy format "askq:N"
 		if len(parts) == 2 {
 			if idx, err := strconv.Atoi(parts[1]); err == nil && idx >= 1 && idx <= len(q.Options) {
-				return q.Options[idx-1].Label
+				return pick(q.Options[idx-1])
 			}
 		}
 	}
@@ -3493,7 +3508,7 @@ func (e *Engine) resolveAskQuestionAnswer(q UserQuestion, input string) string {
 	// Try numeric index(es)
 	if q.MultiSelect {
 		parts := strings.FieldsFunc(input, func(r rune) bool { return r == ',' || r == '，' || r == ' ' })
-		var labels []string
+		var selected []string
 		allNumeric := true
 		for _, p := range parts {
 			p = strings.TrimSpace(p)
@@ -3502,21 +3517,84 @@ func (e *Engine) resolveAskQuestionAnswer(q UserQuestion, input string) string {
 				allNumeric = false
 				break
 			}
-			labels = append(labels, q.Options[idx-1].Label)
+			selected = append(selected, pick(q.Options[idx-1]))
 		}
-		if allNumeric && len(labels) > 0 {
-			return strings.Join(labels, ", ")
+		if allNumeric && len(selected) > 0 {
+			return strings.Join(selected, ", ")
 		}
 	} else {
 		if idx, err := strconv.Atoi(input); err == nil && idx >= 1 && idx <= len(q.Options) {
-			return q.Options[idx-1].Label
+			return pick(q.Options[idx-1])
 		}
 	}
 
 	return input
 }
 
-// buildAskQuestionResponse constructs the updatedInput for AskUserQuestion control_response.
+func optionAnswerValue(opt UserQuestionOption) string {
+	if v := strings.TrimSpace(opt.Value); v != "" {
+		return v
+	}
+	return strings.TrimSpace(opt.Label)
+}
+
+func optionDisplayLabel(opt UserQuestionOption) string {
+	return strings.TrimSpace(opt.Label)
+}
+
+func questionAnswersKey(q UserQuestion) string {
+	return q.Question
+}
+
+func (e *Engine) finalizeAskQuestion(p Platform, msg *Message, state *interactiveState, pending *pendingPermission, ackQuestion, ackAnswer string) bool {
+	if pending != nil && IsMCPAskTool(pending.ToolName) && e.askUserHub != nil {
+		e.askUserHub.Complete(pending.RequestID, pending.Answers, pending.DisplayAnswers)
+		if ackQuestion != "" {
+			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", ackQuestion, ackAnswer))
+		}
+		state.mu.Lock()
+		state.pending = nil
+		state.mu.Unlock()
+		pending.resolve()
+		return true
+	}
+
+	updatedInput := buildAskQuestionResponse(pending.ToolInput, pending.Questions, pending.Answers)
+
+	if err := state.agentSession.RespondPermission(pending.RequestID, PermissionResult{
+		Behavior:     "allow",
+		UpdatedInput: updatedInput,
+	}); err != nil {
+		slog.Error("failed to send AskUserQuestion response", "error", err)
+		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
+	} else {
+		if ackQuestion != "" {
+			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", ackQuestion, ackAnswer))
+		}
+	}
+
+	state.mu.Lock()
+	state.pending = nil
+	state.mu.Unlock()
+	pending.resolve()
+	return true
+}
+
+// abortPendingAsk finishes a pending permission/ask without a user answer.
+// MCP asks must Deny the hub waiter so tools/call does not hang.
+func (e *Engine) abortPendingAsk(pending *pendingPermission, reason string) {
+	if pending == nil {
+		return
+	}
+	if IsMCPAskTool(pending.ToolName) && e.askUserHub != nil {
+		msg := reason
+		if msg == "" {
+			msg = "ask aborted"
+		}
+		e.askUserHub.Deny(pending.RequestID, msg)
+	}
+	pending.resolve()
+}
 func buildAskQuestionResponse(originalInput map[string]any, questions []UserQuestion, collected map[int]string) map[string]any {
 	result := make(map[string]any)
 	for k, v := range originalInput {
@@ -3525,7 +3603,7 @@ func buildAskQuestionResponse(originalInput map[string]any, questions []UserQues
 	answers := make(map[string]any)
 	for idx, ans := range collected {
 		if idx >= 0 && idx < len(questions) {
-			answers[questions[idx].Question] = ans
+			answers[questionAnswersKey(questions[idx])] = ans
 		}
 	}
 	result["answers"] = answers
@@ -4088,6 +4166,10 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 		ppi.SetPlatformPrompt(prompt)
 	}
 
+	if prep, ok := agent.(AskUserSessionPreparer); ok {
+		prep.PrepareAskUserSession(sessionKey)
+	}
+
 	// Check if context is already canceled (e.g. during shutdown/restart)
 	if e.ctx.Err() != nil {
 		slog.Debug("skipping session start: context canceled", "session_key", sessionKey)
@@ -4264,7 +4346,7 @@ func (e *Engine) cleanupInteractiveState(sessionKey string, expected ...*interac
 		state.pending = nil
 		state.mu.Unlock()
 		if pending != nil {
-			pending.resolve()
+			e.abortPendingAsk(pending, "session reset")
 		}
 
 		e.notifyDroppedQueuedMessages(state, fmt.Errorf("session reset"))
@@ -4383,7 +4465,7 @@ func (e *Engine) cleanupInteractiveStateForIdleToken(sessionKey string, expected
 	state.pending = nil
 	state.mu.Unlock()
 	if pending != nil {
-		pending.resolve()
+		e.abortPendingAsk(pending, "agent session idle timeout")
 	}
 	e.notifyDroppedQueuedMessages(state, fmt.Errorf("session reset"))
 
@@ -5411,18 +5493,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 
 		case EventPermissionRequest:
-			// extension_select is a Pi extension UI request routed via the
-			// AskUserQuestion rich-card path. The pi session adapter populates
-			// event.Questions so it renders as a button card (same UX as Claude
-			// Code's AskUserQuestion).
-			//
-			// extension_confirm is intentionally NOT in this list: extensions
-			// use ctx.ui.confirm() to ask the user for permission on a tool
-			// call (e.g. permission-gate on Bash), and the engine must render
-			// it as a regular permission request (Allow/Deny) so the UX
-			// matches other agents. See forwardConfirm in agent/pi/session.go.
-			isAskQuestion := (event.ToolName == "AskUserQuestion" ||
-				event.ToolName == "extension_select") && len(event.Questions) > 0
+			// Structured ask is capability-driven: any event with Questions
+			// uses the AskUserQuestion UI path (MCP cc_connect_ask_user,
+			// native AskUserQuestion, or Pi extension_select).
+			isAskQuestion := IsStructuredAsk(event)
 
 			state.mu.Lock()
 			autoApprove := state.approveAll
@@ -5430,10 +5504,14 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 			if autoApprove {
 				slog.Debug("auto-approving (approve-all)", "request_id", event.RequestID, "tool", event.ToolName)
-				_ = state.agentSession.RespondPermission(event.RequestID, PermissionResult{
-					Behavior:     "allow",
-					UpdatedInput: event.ToolInputRaw,
-				})
+				if IsMCPAskTool(event.ToolName) && e.askUserHub != nil {
+					e.askUserHub.Complete(event.RequestID, nil, nil)
+				} else {
+					_ = state.agentSession.RespondPermission(event.RequestID, PermissionResult{
+						Behavior:     "allow",
+						UpdatedInput: event.ToolInputRaw,
+					})
+				}
 				continue
 			}
 
@@ -5474,7 +5552,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			state.mu.Unlock()
 
 			if isAskQuestion {
-				e.sendAskQuestionPrompt(p, replyCtx, event.Questions, 0)
+				e.sendAskQuestions(p, replyCtx, pending)
 			} else {
 				permLimit := e.display.ToolMaxLen
 				if permLimit > 0 {
@@ -10162,7 +10240,7 @@ func (e *Engine) stopInteractiveSessionWithOptions(sessionKey string, notifyQueu
 		e.interactiveMu.Unlock()
 
 		if pending != nil {
-			pending.resolve()
+			e.abortPendingAsk(pending, "session cancelled")
 		}
 		if notifyQueued {
 			e.notifyDroppedQueuedMessages(state, fmt.Errorf("session cancelled"))
@@ -10203,7 +10281,7 @@ normalCleanup:
 	e.interactiveMu.Unlock()
 
 	if pending != nil {
-		pending.resolve()
+		e.abortPendingAsk(pending, "session reset")
 	}
 	if notifyQueued {
 		e.notifyDroppedQueuedMessages(state, fmt.Errorf("session reset"))
@@ -11591,6 +11669,39 @@ func preferAskUserButtons(p Platform) bool {
 	return ok && pref.PreferAskUserButtons()
 }
 
+// sendAskQuestions delivers the first AskUserQuestion prompt. Additional
+// questions (if any) are shown sequentially after each answer.
+func (e *Engine) sendAskQuestions(p Platform, replyCtx any, pending *pendingPermission) {
+	if pending == nil || len(pending.Questions) == 0 {
+		return
+	}
+	e.sendAskQuestionPrompt(p, replyCtx, pending.Questions, 0)
+}
+
+func formatAskOptionLabel(e *Engine, opt UserQuestionOption) string {
+	label := opt.Label
+	if tag := strings.TrimSpace(opt.Tag); tag != "" {
+		label = tag + " · " + label
+	}
+	return label
+}
+
+func askOptionRecommended(opt UserQuestionOption) bool {
+	if strings.EqualFold(strings.TrimSpace(opt.TagVariant), "recommend") {
+		return true
+	}
+	tag := strings.TrimSpace(opt.Tag)
+	return tag == "推荐" || strings.EqualFold(tag, "recommended")
+}
+
+func formatAskOptionDesc(e *Engine, opt UserQuestionOption) string {
+	desc := formatAskOptionLabel(e, opt)
+	if opt.Description != "" {
+		desc += " — " + opt.Description
+	}
+	return desc
+}
+
 // sendAskQuestionPrompt renders one question (by index) from the AskUserQuestion list.
 // qIdx is the 0-based index of the question to display.
 func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []UserQuestion, qIdx int) {
@@ -11604,20 +11715,40 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 	if total > 1 {
 		titleSuffix = fmt.Sprintf(" (%d/%d)", qIdx+1, total)
 	}
+	cardTitle := e.i18n.T(MsgAskQuestionTitle)
 
-	// Prefer inline buttons when the platform opts in (e.g. chat-api). Card
-	// multiSelect intentionally has no askq buttons so users can reply with
-	// "1,3" as text — that path cannot emit question_request SSE.
+	// Structured ask-question sender (e.g. chat-api) gets full metadata.
+	if as, ok := p.(AskQuestionSender); ok {
+		if err := e.waitOutgoing(p); err != nil {
+			slog.Warn("sendAskQuestionPrompt: outgoing wait cancelled", "platform", p.Name(), "error", err)
+			return
+		}
+		if err := as.SendAskQuestion(e.ctx, replyCtx, q, qIdx); err != nil {
+			slog.Warn("sendAskQuestionPrompt: AskQuestionSender failed, falling back",
+				"platform", p.Name(), "error", err)
+		} else {
+			return
+		}
+	}
+
+	// Prefer inline buttons when the platform opts in. Card multiSelect
+	// intentionally has no askq buttons so users can reply with "1,3" as text.
 	if supportsCards(p) && !preferAskUserButtons(p) {
-		cb := NewCard().Title(e.i18n.T(MsgAskQuestionTitle)+titleSuffix, "blue")
+		cb := NewCard().Title(cardTitle+titleSuffix, "blue")
 		body := "**" + q.Question + "**"
+		if q.Description != "" {
+			body += "\n\n" + q.Description
+		}
+		if q.AllowCustomInput {
+			body += "\n\n" + e.i18n.T(MsgAskQuestionCustomInput)
+		}
 		if q.MultiSelect {
 			// For multiSelect, buttons would resolve on the first click and prevent
 			// selecting multiple options. Render options as a numbered text list
 			// instead, and instruct the user to reply with comma-separated numbers.
 			body += e.i18n.T(MsgAskQuestionMulti) + "\n\n"
 			for i, opt := range q.Options {
-				body += fmt.Sprintf("%d. **%s**", i+1, opt.Label)
+				body += fmt.Sprintf("%d. **%s**", i+1, formatAskOptionLabel(e, opt))
 				if opt.Description != "" {
 					body += " — " + opt.Description
 				}
@@ -11628,13 +11759,10 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 		} else {
 			cb.Markdown(body)
 			for i, opt := range q.Options {
-				desc := opt.Label
-				if opt.Description != "" {
-					desc += " — " + opt.Description
-				}
+				desc := formatAskOptionDesc(e, opt)
 				answerData := fmt.Sprintf("askq:%d:%d", qIdx, i+1)
-				cb.ListItemBtnExtra(desc, opt.Label, "default", answerData, map[string]string{
-					"askq_label":    opt.Label,
+				cb.ListItemBtnExtra(desc, formatAskOptionLabel(e, opt), "default", answerData, map[string]string{
+					"askq_label":    optionAnswerValue(opt),
 					"askq_question": q.Question,
 				})
 			}
@@ -11644,19 +11772,27 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 		return
 	}
 
-	// Try inline buttons (Telegram)
+	// Try inline buttons (Telegram / PreferAskUserButtons)
 	if bs, ok := p.(InlineButtonSender); ok {
 		var textBuf strings.Builder
 		textBuf.WriteString("❓ *")
 		textBuf.WriteString(q.Question)
 		textBuf.WriteString("*")
 		textBuf.WriteString(titleSuffix)
+		if q.Description != "" {
+			textBuf.WriteString("\n")
+			textBuf.WriteString(q.Description)
+		}
+		if q.AllowCustomInput {
+			textBuf.WriteString("\n")
+			textBuf.WriteString(e.i18n.T(MsgAskQuestionCustomInput))
+		}
 		if q.MultiSelect {
 			textBuf.WriteString(e.i18n.T(MsgAskQuestionMulti))
 		}
 		hasDesc := false
 		for _, opt := range q.Options {
-			if opt.Description != "" {
+			if opt.Description != "" || strings.TrimSpace(opt.Tag) != "" {
 				hasDesc = true
 				break
 			}
@@ -11664,7 +11800,7 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 		if hasDesc {
 			textBuf.WriteString("\n")
 			for i, opt := range q.Options {
-				textBuf.WriteString(fmt.Sprintf("\n*%d. %s*", i+1, opt.Label))
+				textBuf.WriteString(fmt.Sprintf("\n*%d. %s*", i+1, formatAskOptionLabel(e, opt)))
 				if opt.Description != "" {
 					textBuf.WriteString(" — ")
 					textBuf.WriteString(opt.Description)
@@ -11675,9 +11811,12 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 		var rows [][]ButtonOption
 		for i, opt := range q.Options {
 			rows = append(rows, []ButtonOption{{
-				Text:        opt.Label,
+				Text:        formatAskOptionLabel(e, opt),
 				Data:        fmt.Sprintf("askq:%d:%d", qIdx, i+1),
 				MultiSelect: q.MultiSelect,
+				Recommended: askOptionRecommended(opt),
+				Description: opt.Description,
+				Value:       optionAnswerValue(opt),
 			}})
 		}
 		if err := e.waitOutgoing(p); err != nil {
@@ -11695,12 +11834,20 @@ func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []Use
 	sb.WriteString(q.Question)
 	sb.WriteString("**")
 	sb.WriteString(titleSuffix)
+	if q.Description != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(q.Description)
+	}
+	if q.AllowCustomInput {
+		sb.WriteString("\n\n")
+		sb.WriteString(e.i18n.T(MsgAskQuestionCustomInput))
+	}
 	if q.MultiSelect {
 		sb.WriteString(e.i18n.T(MsgAskQuestionMulti))
 	}
 	sb.WriteString("\n\n")
 	for i, opt := range q.Options {
-		sb.WriteString(fmt.Sprintf("%d. **%s**", i+1, opt.Label))
+		sb.WriteString(fmt.Sprintf("%d. **%s**", i+1, formatAskOptionLabel(e, opt)))
 		if opt.Description != "" {
 			sb.WriteString(" — ")
 			sb.WriteString(opt.Description)
@@ -15824,6 +15971,9 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, sourceSessionKey,
 			}
 		}
 		inj.SetSessionEnv(envVars)
+	}
+	if prep, ok := agent.(AskUserSessionPreparer); ok {
+		prep.PrepareAskUserSession(relaySessionKey)
 	}
 
 	// Use the engine context (not the relay timeout context) so that the
