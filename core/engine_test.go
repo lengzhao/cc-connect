@@ -2629,22 +2629,6 @@ func TestProcessInteractiveEvents_RichCard_ToolThenNoReply(t *testing.T) {
 	}
 }
 
-func TestAgentSystemPrompt_MentionsAttachmentSend(t *testing.T) {
-	prompt := AgentSystemPrompt()
-	if !strings.Contains(prompt, "cc-connect send --image") {
-		t.Fatalf("prompt missing image send instructions: %q", prompt)
-	}
-	if !strings.Contains(prompt, "cc-connect send --file") {
-		t.Fatalf("prompt missing file send instructions: %q", prompt)
-	}
-	if !strings.Contains(prompt, "cc-connect send --tts") {
-		t.Fatalf("prompt missing tts send instructions: %q", prompt)
-	}
-	if !strings.Contains(prompt, "NO_REPLY") {
-		t.Fatalf("prompt missing silent reply guidance for voice tool: %q", prompt)
-	}
-}
-
 func TestAgentSystemPrompt_GuidesAskUserQuestionSingleConfirm(t *testing.T) {
 	prompt := AgentSystemPrompt()
 	for _, want := range []string{
@@ -2678,6 +2662,22 @@ func TestAgentSystemPrompt_MentionsClientFlow(t *testing.T) {
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("AgentSystemPrompt missing %q", want)
+		}
+	}
+}
+
+func TestAgentSystemPrompt_ContainsOnlyStructuredInteractionGuidance(t *testing.T) {
+	prompt := AgentSystemPrompt()
+	for _, unwanted := range []string{
+		"You are running inside cc-connect",
+		"cc-connect send",
+		"cc-connect cron",
+		"cc-connect timer",
+		"cc-connect relay",
+		"NO_REPLY",
+	} {
+		if strings.Contains(prompt, unwanted) {
+			t.Errorf("AgentSystemPrompt contains removed guidance %q", unwanted)
 		}
 	}
 }
@@ -9486,8 +9486,8 @@ func TestSetupMemoryFile_WritesInstructions(t *testing.T) {
 	if !strings.Contains(string(content), ccConnectInstructionMarker) {
 		t.Error("expected instruction marker in file")
 	}
-	if !strings.Contains(string(content), "cc-connect cron add") {
-		t.Error("expected cron instructions in file")
+	if !strings.Contains(string(content), "mcp__ccconnect__cc_connect_ask_user") {
+		t.Error("expected structured interaction instructions in file")
 	}
 }
 
@@ -9531,8 +9531,8 @@ func TestSetupMemoryFile_RefreshesLegacyInstructions(t *testing.T) {
 	if strings.Contains(string(content), "legacy instructions") {
 		t.Fatalf("legacy instructions should be refreshed, got %q", string(content))
 	}
-	if !strings.Contains(string(content), "cc-connect send --image") {
-		t.Fatalf("expected refreshed attachment instructions, got %q", string(content))
+	if !strings.Contains(string(content), "mcp__ccconnect__cc_connect_client_flow") {
+		t.Fatalf("expected refreshed structured interaction instructions, got %q", string(content))
 	}
 }
 
@@ -17794,20 +17794,6 @@ func TestAudioFormatHint(t *testing.T) {
 				t.Errorf("audioFormatHint(%+v) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestAgentSystemPrompt_DocumentsAudioVideoFlags(t *testing.T) {
-	prompt := AgentSystemPrompt()
-	for _, want := range []string{"send --audio", "send --video"} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("AgentSystemPrompt missing %q", want)
-		}
-	}
-	// Make sure the surrounding guidance is also present so the agent
-	// doesn't silently downgrade --audio/--video to --file.
-	if !strings.Contains(prompt, "Do NOT downgrade") {
-		t.Error("AgentSystemPrompt missing the 'Do NOT downgrade' anti-regression line")
 	}
 }
 
