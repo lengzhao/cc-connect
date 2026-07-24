@@ -301,6 +301,14 @@ func (a *Agent) SetAskUserSupport(mcpURL string, hub *core.AskUserHub) {
 	a.askHub = hub
 }
 
+// AskUserSupport snapshots the runtime MCP ask-user wiring so Engine can
+// propagate it to lazily-created multi-workspace agent instances.
+func (a *Agent) AskUserSupport() (string, *core.AskUserHub) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.askMCPURL, a.askHub
+}
+
 // PrepareAskUserSession implements core.AskUserSessionPreparer.
 func (a *Agent) PrepareAskUserSession(sessionKey string) {
 	a.mu.Lock()

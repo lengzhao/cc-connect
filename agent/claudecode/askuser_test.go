@@ -41,6 +41,20 @@ func TestShouldUseMCPAsk(t *testing.T) {
 	}
 }
 
+func TestAgent_AskUserSupportSnapshot(t *testing.T) {
+	hub := core.NewAskUserHub()
+	a := &Agent{}
+	a.SetAskUserSupport("  http://127.0.0.1:12345/mcp  ", hub)
+
+	gotURL, gotHub := a.AskUserSupport()
+	if gotURL != "http://127.0.0.1:12345/mcp" {
+		t.Fatalf("AskUserSupport URL = %q", gotURL)
+	}
+	if gotHub != hub {
+		t.Fatalf("AskUserSupport hub = %p, want %p", gotHub, hub)
+	}
+}
+
 func TestEnsureToolListed(t *testing.T) {
 	got := ensureToolListed(nil, "AskUserQuestion")
 	if len(got) != 1 || got[0] != "AskUserQuestion" {

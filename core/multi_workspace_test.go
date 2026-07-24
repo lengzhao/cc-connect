@@ -491,6 +491,21 @@ func (a *runAsTestAgent) GetRunAsEnv() []string {
 	return out
 }
 
+type askUserSupportTestAgent struct {
+	*namedTestAgent
+	mcpURL string
+	hub    *AskUserHub
+}
+
+func (a *askUserSupportTestAgent) SetAskUserSupport(mcpURL string, hub *AskUserHub) {
+	a.mcpURL = mcpURL
+	a.hub = hub
+}
+
+func (a *askUserSupportTestAgent) AskUserSupport() (string, *AskUserHub) {
+	return a.mcpURL, a.hub
+}
+
 // TestMultiWorkspaceAgent_PropagatesRunAsUser is a regression guard for the
 // bug where Engine.getOrCreateWorkspaceAgent constructed per-workspace agents
 // with a fresh opts map that lost the run_as_user and run_as_env fields from
@@ -574,6 +589,45 @@ func TestMultiWorkspaceAgent_PropagatesRunAsUser(t *testing.T) {
 	// behaviour the fix must not break).
 	if gotDir, _ := opts["work_dir"].(string); gotDir != workspaceDir {
 		t.Errorf("work_dir propagated = %q, want %q", gotDir, workspaceDir)
+	}
+}
+
+func TestMultiWorkspaceAgent_PropagatesAskUserSupport(t *testing.T) {
+	baseDir := t.TempDir()
+	workspaceDir := filepath.Join(baseDir, "loader")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	agentName := "ask-user-propagation-test-agent"
+	var created *askUserSupportTestAgent
+	RegisterAgent(agentName, func(opts map[string]any) (Agent, error) {
+		created = &askUserSupportTestAgent{
+			namedTestAgent: &namedTestAgent{name: agentName},
+		}
+		return created, nil
+	})
+
+	hub := NewAskUserHub()
+	parent := &askUserSupportTestAgent{
+		namedTestAgent: &namedTestAgent{name: agentName},
+		mcpURL:         "http://127.0.0.1:12345/mcp",
+		hub:            hub,
+	}
+	e := NewEngine("test", parent, nil, "", LangEnglish)
+	e.SetMultiWorkspace(baseDir, filepath.Join(t.TempDir(), "bindings.json"))
+
+	if _, _, err := e.getOrCreateWorkspaceAgent(workspaceDir); err != nil {
+		t.Fatalf("getOrCreateWorkspaceAgent: %v", err)
+	}
+	if created == nil {
+		t.Fatal("expected workspace agent to be created")
+	}
+	if created.mcpURL != parent.mcpURL {
+		t.Fatalf("workspace ask MCP URL = %q, want %q", created.mcpURL, parent.mcpURL)
+	}
+	if created.hub != hub {
+		t.Fatalf("workspace ask hub = %p, want %p", created.hub, hub)
 	}
 }
 
