@@ -38,6 +38,7 @@ type chatInput struct {
 type chatRequest struct {
 	ConversationID   string         `json:"conversation_id"`
 	Query            string         `json:"query"`
+	RunID            string         `json:"run_id"`
 	Inputs           []chatInput    `json:"inputs"`
 	AutoGenerateName *bool          `json:"auto_generate_name"`
 	Metadata         map[string]any `json:"metadata"`
@@ -68,11 +69,6 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	channelKey = p.channelKeyForMessage(channelKey)
-	sessions := p.sessionsOrReload()
-	if sessions == nil {
-		writeErr(w, http.StatusInternalServerError, "internal error")
-		return
-	}
 	accept := r.Header.Get("Accept")
 	if accept != "" && !strings.Contains(accept, "text/event-stream") && !strings.Contains(accept, "*/*") {
 		writeErr(w, http.StatusBadRequest, "invalid request")
@@ -91,6 +87,16 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if runID := strings.TrimSpace(body.RunID); runID != "" {
+		p.handleChatResume(w, r, user, runID)
+		return
+	}
+
+	sessions := p.sessionsOrReload()
+	if sessions == nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	query := strings.TrimSpace(body.Query)
@@ -150,7 +156,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestDeadline := time.Now().Add(p.requestTimeout)
-	run := newRunState(runID, user, channelKey, engineSessionKey, session.ID, msgID, sse, requestDeadline)
+	run := newRunState(runID, user, channelKey, engineSessionKey, session.ID, msgID, p, sse, requestDeadline)
 	if !p.pending.create(run) {
 		_ = sse.Error("too many concurrent requests")
 		return
@@ -209,14 +215,67 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reqCtx := r.Context()
 	go func() {
 		handler(p, &msg)
 		p.finishPlainReplyIfNeeded(runID)
 	}()
 
-	deadline := time.NewTimer(p.requestTimeout)
-	defer deadline.Stop()
+	p.serveRunSSE(r.Context(), run, sse, engineSessionKey, user, channelKey, rc)
+}
+
+func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user, runID string) {
+	run := p.pending.get(runID)
+	if run == nil || run.user != user {
+		p.writeResumeMessageEnd(w)
+		return
+	}
+
+	if err := run.beginAttach(); err != nil {
+		writeErr(w, http.StatusConflict, "run already attached")
+		return
+	}
+
+	sse, err := newSSEWriter(w)
+	if err != nil {
+		run.cancelAttach()
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	run.finishAttach(sse)
+
+	if ev := run.peekLastRecoverable(); ev != nil {
+		if err := sse.Event(ev.name, ev.payload); err != nil {
+			run.detach()
+			return
+		}
+		run.clearLastRecoverable()
+	}
+
+	rc := run.replyContext()
+	p.serveRunSSE(r.Context(), run, sse, run.sessionKey, user, run.channelKey, rc)
+}
+
+func (p *Platform) writeResumeMessageEnd(w http.ResponseWriter) {
+	sse, err := newSSEWriter(w)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	_ = sse.Event("message_end", map[string]any{})
+}
+
+func (p *Platform) serveRunSSE(reqCtx context.Context, run *runState, sse *sseWriter, engineSessionKey, user, channelKey string, rc *replyContext) {
+	var deadlineC <-chan time.Time
+	var deadline *time.Timer
+	remaining := p.requestTimeout
+	if !run.requestDeadline.IsZero() {
+		remaining = time.Until(run.requestDeadline)
+	}
+	if remaining > 0 {
+		deadline = time.NewTimer(remaining)
+		defer deadline.Stop()
+		deadlineC = deadline.C
+	}
 
 	var pingTicker *time.Ticker
 	var pingC <-chan time.Time
@@ -234,15 +293,16 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		case result := <-run.done:
 			p.emitTerminalSSE(run, result)
+			p.pending.delete(run.id)
 			return
 		case <-pingC:
 			run.enqueueEvent("ping", map[string]any{
-				"run_id": runID,
+				"run_id": run.id,
 				"ts":     time.Now().Unix(),
 			})
-		case <-deadline.C:
+		case <-deadlineC:
 			p.dispatchStop(engineSessionKey, user, channelKey, rc)
-			p.pending.cancelTimeout(runID)
+			p.pending.cancelTimeout(run.id)
 			_ = sse.Error("request timed out")
 			return
 		case <-reqCtx.Done():
@@ -254,25 +314,25 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 
 func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 	run.mu.Lock()
-	sse := run.sse
+	sink := run.sink
 	msgID := run.messageID
 	conversationID := run.conversationID
 	run.mu.Unlock()
-	if sse == nil {
+	if sink == nil || !sink.Active() {
 		return
 	}
 	_ = run.flushDelta()
 
 	switch {
 	case result.queued:
-		_ = sse.Event("message_queued", map[string]any{
+		_ = sink.Event("message_queued", map[string]any{
 			"message_id":  msgID,
 			"queue_depth": result.queueDepth,
 		})
 	case result.queueFull:
-		_ = sse.Error(result.errMsg)
+		_ = sink.Event("error", map[string]string{"error": result.errMsg})
 	case result.userCanceled:
-		_ = sse.Error(errUserCanceled.Error())
+		_ = sink.Event("error", map[string]string{"error": errUserCanceled.Error()})
 	case result.interactionTimedOut || errors.Is(result.err, errInteractionTimedOut):
 		payload := map[string]any{
 			"error": errInteractionTimedOut.Error(),
@@ -280,9 +340,9 @@ func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 		if result.interactionTimeoutKind != "" {
 			payload["kind"] = result.interactionTimeoutKind
 		}
-		_ = sse.Event("error", payload)
+		_ = sink.Event("error", payload)
 	case result.err != nil:
-		_ = sse.Error(result.err.Error())
+		_ = sink.Event("error", map[string]string{"error": result.err.Error()})
 	default:
 		payload := map[string]string{
 			"message_id":      msgID,
@@ -293,7 +353,7 @@ func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 				payload["answer"] = ans
 			}
 		}
-		_ = sse.Event("message_end", payload)
+		_ = sink.Event("message_end", payload)
 	}
 }
 

@@ -126,7 +126,7 @@ func TestStructuredStreamAnswerReplace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", &Platform{}, sse, time.Time{})
 	card := &streamingCard{platform: &Platform{pending: newPendingStore(10, time.Hour)}, rc: &replyContext{runID: "run1"}}
 	card.platform.pending.create(run)
 

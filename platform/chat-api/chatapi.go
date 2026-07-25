@@ -15,13 +15,14 @@ import (
 )
 
 const (
-	defaultListenAddr             = ":8030"
-	defaultPath                   = "/v1/"
-	defaultTimeout                = 30 * time.Minute
-	autoGenerateNameModeHeuristic = "heuristic"
-	autoGenerateNameModeAI        = "ai"
-	defaultNameRequestTimeout     = 30 * time.Second
-	defaultNameProviderType       = "openai"
+	defaultListenAddr               = ":8030"
+	defaultPath                     = "/v1/"
+	defaultTimeout                  = 30 * time.Minute
+	autoGenerateNameModeHeuristic   = "heuristic"
+	autoGenerateNameModeAI          = "ai"
+	defaultNameRequestTimeout       = 30 * time.Second
+	defaultNameProviderType         = "openai"
+	defaultQuestionNotifyTimeout = 5 * time.Second
 )
 
 // Platform exposes a Dify-like HTTP + SSE API for custom apps and BFFs.
@@ -51,6 +52,9 @@ type Platform struct {
 	multiWorkspaceBaseDir     string
 	resolvedAddr              string
 	debugUI                   bool
+	questionNotifyURL     string
+	questionNotifySecret  string
+	questionNotifyTimeout time.Duration
 
 	server   *http.Server
 	handler  core.MessageHandler
@@ -98,6 +102,10 @@ func New(opts map[string]any) (core.Platform, error) {
 	if err != nil {
 		return nil, fmt.Errorf("chat-api: run_ttl: %w", err)
 	}
+	questionNotifyTimeout, err := durationOption(opts, "question_notify_timeout", defaultQuestionNotifyTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("chat-api: question_notify_timeout: %w", err)
+	}
 
 	userHeader, err := userHeaderOption(opts)
 	if err != nil {
@@ -143,10 +151,13 @@ func New(opts map[string]any) (core.Platform, error) {
 		nameProviderType:          strings.ToLower(stringOption(opts, "name_provider_type", defaultNameProviderType)),
 		nameModel:                 strings.TrimSpace(stringOption(opts, "name_model", "")),
 		projectName:               stringOption(opts, "cc_project", ""),
-		pending:                   newPendingStore(maxRuns, runTTL),
-		dataDir:                   stringOption(opts, "cc_data_dir", ""),
-		multiWorkspaceBaseDir:     multiWorkspaceBaseDirFromOpts(opts),
-		debugUI:                   boolOption(opts, "debug_ui", false),
+		pending:               newPendingStore(maxRuns, runTTL),
+		dataDir:               stringOption(opts, "cc_data_dir", ""),
+		multiWorkspaceBaseDir: multiWorkspaceBaseDirFromOpts(opts),
+		debugUI:               boolOption(opts, "debug_ui", false),
+		questionNotifyURL:     strings.TrimSpace(stringOption(opts, "question_notify_url", "")),
+		questionNotifySecret:  stringOption(opts, "question_notify_secret", ""),
+		questionNotifyTimeout: questionNotifyTimeout,
 	}
 	if p.autoGenerateNameMode != autoGenerateNameModeHeuristic && p.autoGenerateNameMode != autoGenerateNameModeAI {
 		return nil, errors.New("chat-api: auto_generate_name_mode must be heuristic or ai")

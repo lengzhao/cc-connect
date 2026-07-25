@@ -648,6 +648,7 @@ func TestInteractionAckUsesRespondedInteractionID(t *testing.T) {
 		"session",
 		"conv",
 		"conv:0",
+		p,
 		nil,
 		time.Now().Add(time.Minute),
 	)
@@ -1224,6 +1225,7 @@ func TestSendClientFlow_EmitsSSEWithoutInteraction(t *testing.T) {
 		"session",
 		"conv",
 		"conv:0",
+		p,
 		nil,
 		time.Now().Add(time.Minute),
 	)
@@ -1286,6 +1288,7 @@ func TestSendClientFlow_CoexistsWithQuestionRequest(t *testing.T) {
 		"session",
 		"conv",
 		"conv:1",
+		p,
 		nil,
 		time.Now().Add(time.Minute),
 	)
@@ -1366,6 +1369,7 @@ func TestSendClientFlow_InvalidInput(t *testing.T) {
 		"session",
 		"conv",
 		"conv:2",
+		p,
 		nil,
 		time.Now().Add(time.Minute),
 	)

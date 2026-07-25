@@ -58,6 +58,9 @@ func TestNewDefaults(t *testing.T) {
 	if p.ssePingInterval != defaultSSEPingInterval {
 		t.Fatalf("ssePingInterval = %v, want %v", p.ssePingInterval, defaultSSEPingInterval)
 	}
+	if p.questionNotifyTimeout != defaultQuestionNotifyTimeout {
+		t.Fatalf("questionNotifyTimeout = %v, want %v", p.questionNotifyTimeout, defaultQuestionNotifyTimeout)
+	}
 }
 
 func TestPairHistoryAndMessageID(t *testing.T) {
@@ -710,7 +713,7 @@ func TestDisconnectDoesNotRemoveRun(t *testing.T) {
 	close(release)
 	time.Sleep(50 * time.Millisecond)
 	if p.pending.get(runID) != nil {
-		t.Fatal("run should be removed after turn completes")
+		t.Fatal("detached finish must delete run immediately")
 	}
 }
 

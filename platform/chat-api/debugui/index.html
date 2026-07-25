@@ -555,6 +555,10 @@
           state.conversationId = cfg.conversationId;
           setConvLabel();
         }
+        if (cfg.activeRunId) {
+          state.runId = cfg.activeRunId;
+          setConvLabel();
+        }
       } catch {}
     }
 
@@ -562,7 +566,25 @@
       const cfg = {};
       for (const k of fields) cfg[k] = $(k).value.trim();
       cfg.conversationId = state.conversationId;
+      cfg.activeRunId = state.runId || null;
       localStorage.setItem(LS_KEY, JSON.stringify(cfg));
+    }
+
+    function setActiveRun(runId) {
+      if (!runId) return;
+      state.runId = runId;
+      setConvLabel();
+      saveConfig();
+      $("btnCancel").disabled = false;
+    }
+
+    function clearActiveRun() {
+      state.runId = null;
+      state.interactionRunId = null;
+      state.activeInteractionId = null;
+      setConvLabel();
+      saveConfig();
+      $("btnCancel").disabled = true;
     }
 
     function apiBase() {
@@ -702,7 +724,7 @@
 
     function newConversation() {
       state.conversationId = null;
-      state.runId = null;
+      clearActiveRun();
       setConvLabel();
       $("messages").innerHTML = "";
       saveConfig();
@@ -744,6 +766,7 @@
       });
       const json = await res.json().catch(() => ({}));
       logSSE("cancel", json, res.ok ? "" : "err");
+      if (res.ok) clearActiveRun();
       if (state.abort) state.abort.abort();
     }
 
@@ -766,12 +789,13 @@
       return rest;
     }
 
-    async function sendMessage() {
+    async function sendMessage(opts = {}) {
+      const resumeRunId = opts.resumeRunId || null;
       // Allow a parallel POST while a confirmation is open (hide modal → type in composer).
-      const parallel = state.sending && !!state.activeInteractionId;
+      const parallel = !resumeRunId && state.sending && !!state.activeInteractionId;
       if (state.sending && !parallel) return;
-      const query = $("query").value.trim();
-      if (!query) return;
+      const query = resumeRunId ? "" : $("query").value.trim();
+      if (!resumeRunId && !query) return;
 
       saveConfig();
       if (!parallel) {
@@ -780,17 +804,22 @@
         $("btnCancel").disabled = false;
       }
       state.activeStreams += 1;
-      $("query").value = "";
+      if (!resumeRunId) $("query").value = "";
 
       let thinking = "";
       let answer = "";
       let lastStreamBubble = null;
+      let gotTerminal = false;
       const interactionBubbles = new Map();
       const primaryRunId = state.runId;
 
-      addBubble("user", query, $("userId").value.trim() || "user");
-      if (parallel) {
-        addBubble("sys", "并行发送中（用于验证：question 期间新 POST chat-messages）");
+      if (resumeRunId) {
+        addBubble("sys", "页面刷新 · 自动重连 run=" + resumeRunId);
+      } else {
+        addBubble("user", query, $("userId").value.trim() || "user");
+        if (parallel) {
+          addBubble("sys", "并行发送中（用于验证：question 期间新 POST chat-messages）");
+        }
       }
 
       // Stream elements are created lazily. Consecutive events with the same
@@ -1101,12 +1130,14 @@
         showIxModal(kind, data);
       }
 
-      const body = {
-        query,
-        auto_generate_name: true,
-        metadata: { source: "chat-api-debug-ui" },
-      };
-      if (state.conversationId) body.conversation_id = state.conversationId;
+      const body = resumeRunId
+        ? { run_id: resumeRunId }
+        : {
+            query,
+            auto_generate_name: true,
+            metadata: { source: "chat-api-debug-ui" },
+          };
+      if (!resumeRunId && state.conversationId) body.conversation_id = state.conversationId;
 
       const controller = new AbortController();
       state.abort = controller;
@@ -1127,6 +1158,16 @@
           const text = await res.text();
           logSSE("http_error", text, "err");
           addBubble("sys", `HTTP ${res.status}: ${text}`);
+          if (resumeRunId && res.status === 404) {
+            clearActiveRun();
+          } else if (resumeRunId && res.status === 409) {
+            addBubble("sys", "run 仍占用中，2s 后重试重连…");
+            setTimeout(() => {
+              if (state.runId === resumeRunId && !state.sending) {
+                resumeActiveRun().catch(console.error);
+              }
+            }, 2000);
+          }
           return;
         }
 
@@ -1149,9 +1190,8 @@
               if (data.run_id) {
                 // Keep the run that owns an open interaction for respond/cancel.
                 if (!state.activeInteractionId || !state.runId || !parallel) {
-                  state.runId = data.run_id;
+                  setActiveRun(data.run_id);
                 }
-                setConvLabel();
               }
             } else if (event === "thinking_delta") {
               // Ensure bubble exists first — streamBubble resets thinking when creating a new one.
@@ -1195,8 +1235,10 @@
             } else if (event === "ping") {
               // keepalive only — already logged
             } else if (event === "message_queued") {
+              gotTerminal = true;
               addBubble("sys", `queued (depth=${data.queue_depth ?? "?"})`);
             } else if (event === "error") {
+              gotTerminal = true;
               const kind = data.kind ? ` kind=${data.kind}` : "";
               addBubble("sys", "error: " + (data.error || JSON.stringify(data)) + kind);
               if (!parallel) {
@@ -1205,6 +1247,7 @@
                 closeIxModal();
               }
             } else if (event === "message_end") {
+              gotTerminal = true;
               if (!parallel) {
                 state.activeInteractionId = null;
                 state.interactionRunId = null;
@@ -1222,17 +1265,20 @@
         if (e.name !== "AbortError") {
           logSSE("client_error", e.message, "err");
           addBubble("sys", e.message);
+        } else if (!gotTerminal) {
+          // Page refresh / network abort: keep activeRunId for auto-resume.
+          logSSE("detached", "SSE aborted; run kept for resume", "warn");
         }
       } finally {
         state.activeStreams = Math.max(0, state.activeStreams - 1);
         if (!parallel) {
           state.sending = false;
           state.abort = null;
-          if (!state.activeInteractionId) {
-            state.runId = null;
-            state.interactionRunId = null;
-          } else if (primaryRunId) {
+          if (gotTerminal) {
+            clearActiveRun();
+          } else if (state.activeInteractionId && primaryRunId) {
             state.runId = primaryRunId;
+            saveConfig();
           }
           $("btnSend").disabled = false;
           $("btnCancel").disabled = !state.runId && !state.interactionRunId;
@@ -1240,6 +1286,12 @@
         setConvLabel();
         refreshConversations().catch(() => {});
       }
+    }
+
+    async function resumeActiveRun() {
+      const runId = state.runId;
+      if (!runId) return;
+      await sendMessage({ resumeRunId: runId });
     }
 
     $("btnSave").addEventListener("click", () => { saveConfig(); ping(); });
@@ -1275,6 +1327,8 @@
       if (ok) return refreshConversations();
     }).then(() => {
       if (state.conversationId) return openConversation(state.conversationId);
+    }).then(() => {
+      if (state.runId) return resumeActiveRun();
     }).catch(console.error);
   </script>
 </body>

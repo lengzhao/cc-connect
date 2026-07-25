@@ -1,8 +1,9 @@
 # chat-api Platform — API v1
 
-> Version: **v1.2.6** (2026-07-23)
+> Version: **v1.2.7** (2026-07-24)
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
+> Disconnect resume: [plans/2026-07-24-chat-api-disconnect-resume-design.md](./plans/2026-07-24-chat-api-disconnect-resume-design.md)
 > AskUserQuestion card contract: [plans/2026-07-22-askuserquestion-rich-confirm-design.md](./plans/2026-07-22-askuserquestion-rich-confirm-design.md)
 > Ask User MCP (Claude Code source): [plans/2026-07-23-cc-connect-ask-user-mcp-design.md](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md)
 > Client flow MCP: [plans/2026-07-23-chat-api-client-flow-design.md](./plans/2026-07-23-chat-api-client-flow-design.md)
@@ -15,7 +16,7 @@
 
 `chat-api` is a cc-connect **Platform** — HTTP + SSE API for custom apps / BFFs.
 
-**v1**: SSE-only chat, implicit conversation create, default `busy_policy=queue`, tool SSE events, permission / AskUserQuestion confirm windows, and minimal non-blocking `client_flow` guides.
+**v1**: SSE-only chat, implicit conversation create, default `busy_policy=queue`, tool SSE events, permission / AskUserQuestion confirm windows, minimal non-blocking `client_flow` guides, and SSE disconnect resume via `POST /chat-messages` with `run_id`.
 
 > Agent-side source: Claude Code defaults to resident MCP tool `cc_connect_ask_user` so `event` / `value` / `tag` / `allow_custom_input` survive; see [Ask User MCP](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md).
 
@@ -29,7 +30,7 @@
 | `PATCH` | `/conversations/{id}` | Rename |
 | `DELETE` | `/conversations/{id}` | Delete |
 | `GET` | `/conversations/{id}/messages` | History |
-| `POST` | `/chat-messages` | Send (SSE) |
+| `POST` | `/chat-messages` | Send or resume SSE (`query` or `run_id`) |
 | `POST` | `/runs/{run_id}/cancel` | Cancel turn |
 | `POST` | `/conversations/messages/respond` | Respond to confirm (`answers[]` or `decision`) |
 
@@ -44,6 +45,8 @@
 - In `ai` mode, `name_model` selects a separate low-cost model while credentials and endpoint are reused from `name_provider` or the configured project provider; name generation never calls the main Agent and falls back to heuristic naming when no provider is available
 - `message_id`: `{conversation_id}:{turn_index}`
 - Client disconnect does not stop the agent; use cancel endpoint to abort
+- Resume: `POST /chat-messages` with `{"run_id":"..."}` replays the last recoverable event while the turn is still running; if the run is missing, not owned by the user, or already finished, resume returns `message_end` with an empty payload over SSE (no state kept)
+- Optional `question_notify_url` receives async webhook when `question_request` arrives while detached
 
 ## SSE events
 
@@ -76,6 +79,9 @@ name_model = "gpt-4o-mini"
 name_provider_type = "openai" # openai | openai-compatible | claude
 interaction_timeout = "10m"
 sse_ping_interval = "15s"
+# question_notify_url = "https://bff.example.com/cc-connect/question-notify"
+# question_notify_secret = "optional-shared-secret"
+# question_notify_timeout = "5s"
 # forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # hooks only (CC_HOOK_HEADERS_JSON); not agent prompt
 ```
 

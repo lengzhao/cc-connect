@@ -75,6 +75,12 @@ func TestDebugUIServesPage(t *testing.T) {
 	if !strings.Contains(html, `id="btnIxClose"`) || !strings.Contains(html, "unlockComposer") {
 		t.Fatalf("debug UI must allow hiding confirmation modal to send a parallel chat-messages")
 	}
+	if !strings.Contains(html, "activeRunId") ||
+		!strings.Contains(html, "resumeActiveRun") ||
+		!strings.Contains(html, "resumeRunId") ||
+		!strings.Contains(html, "自动重连") {
+		t.Fatalf("debug UI must persist activeRunId and auto-resume after refresh")
+	}
 	// Debug page itself must not require auth (otherwise hard to open).
 	if rec.Header().Get("Content-Type") == "" || !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("content-type = %q", rec.Header().Get("Content-Type"))

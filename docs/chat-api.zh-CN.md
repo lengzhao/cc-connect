@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.2.6**（2026-07-23）<br>
+> 版本：**v1.2.7**（2026-07-24）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [断链重连](./plans/2026-07-24-chat-api-disconnect-resume-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
 
 ## 1. 概述
 
@@ -221,12 +221,27 @@ message_id = "{conversation_id}:{turn_index}"
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `conversation_id` | 否 | 省略则隐式创建 |
-| `query` | 是 | 用户文本 |
-| `inputs` | 否 | 多模态附件（§3.4）；历史不 replay |
+| `query` | 普通发送必填 | 用户文本；与 `run_id` 互斥 |
+| `run_id` | 重连必填 | 断链重连：仅挂载已有 run 的 SSE，不投递新消息、不创建会话 |
+| `inputs` | 否 | 多模态附件（§3.4）；历史不 replay；resume 忽略 |
 | `auto_generate_name` | 否 | 默认 `true`；新会话收到首条 input 后按 `auto_generate_name_mode` 异步生成 name |
-| `metadata` | 否 | 传入 hooks，不进 prompt，不在响应中返回 |
+| `metadata` | 否 | 传入 hooks，不进 prompt，不在响应中返回；resume 忽略 |
 
 `user` 由 header 提供，不在 body 中。
+
+**断链重连（resume）**
+
+```json
+{ "run_id": "run_abc" }
+```
+
+- 断开 SSE **不**停止 agent；断线后切到虚拟 sink，只缓存**最后一条**可恢复事件（`text_delta` / `thinking_delta` / `question_request` / `permission_request`）。
+- 重连后：若有缓存则立即补发该事件；若 run 不存在、非归属 user、或 turn 已在断线期间结束，直接 SSE 返回 `message_end`；若重连时 turn 仍在跑、随后结束，正常收 `message_end`。
+- 普通正文缓存使用完整快照 + `replace:true`。
+- 同一 run 同时只允许一个活跃 SSE；已连接时 resume → `409 run already attached`。
+- 断线后产生 `question_request` 时，若配置了 `question_notify_url`，异步 POST 通知 BFF（失败不影响 turn）。
+
+详见 [断链重连设计](./plans/2026-07-24-chat-api-disconnect-resume-design.md)。
 
 `ai` 模式会在收到首条 input 后立即异步生成 name，不等待首轮回答；首轮处理结束时如果仍没有有效 name，则回退到首条 query 截断结果。
 
@@ -333,7 +348,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 | `interaction_superseded` | `interaction_id`, `replacement_id`, `run_id`, `message_id` | 同一 run 上新确认替换旧确认 |
 | `interaction_ack` | `interaction_id`, `message_id`, `text?` | 用户已响应确认的回执（可选） |
 | `ping` | `run_id`, `ts` | SSE 保活；可忽略 |
-| `message_end` | `message_id`, `conversation_id`, `answer?` | 轮次结束 |
+| `message_end` | `message_id`, `conversation_id`, `answer?` | 轮次结束；未匹配 resume 时 payload 为空对象 |
 | `message_queued` | `message_id`, `queue_depth` | 会话忙且 `busy_policy=queue` |
 | `error` | `error`, `kind?` | 错误（§2.6） |
 
@@ -348,7 +363,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 - 默认拼接 `text_delta.text`；若帧带 `replace:true`，应 `buf = text`（整体替换），否则进度句被终稿改写时会重复拼接
 - `thinking_delta` 同样支持可选 `replace`
 - `tool_call` / `tool_result` 单独渲染，勿并入正文
-- 断开 SSE **不**停止 agent，内容仍写入 history
+- 断开 SSE **不**停止 agent，内容仍写入 history；可用 `{"run_id":"..."}` 重连同一端点补收最后事件（turn 仍在跑时）；结束后 run 释放，再 resume 返回空 `message_end`
 - `message_queued` 后勿立即重开 SSE；等上轮结束或轮询 history
 - 收到 `permission_request` / `question_request` 时弹出确认窗口；用 `expires_at` 倒计时；优先 `POST /conversations/messages/respond`（`answers[]`），**不要**把确认结果当普通 `chat-messages`
 - 收到 `client_flow` 时保持 Streaming；App 可按 `type` 打开自有流程，但服务端不等待，也不要调用 respond
@@ -357,6 +372,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 - AskUserQuestion 超时后当前阻塞 turn 会取消；后续用户输入应重新 `POST /chat-messages`，作为普通对话
 - 结构化确认（`question_request`）在用户成功 respond 后会写入会话历史：可读问题文本作为 `assistant`，用户看到的选项 label（或自定义输入）作为 `user`，随后再接 Agent 最终回复；`pairHistory` 仍按普通 `query`/`answer` 配对。权限确认（`permission_request`）不写入历史
 - 取消：`POST /runs/{run_id}/cancel`（`run_id` 来自 `message` 事件）
+- 断线后确认卡：可配置 `question_notify_url` 收 webhook，再 `POST /chat-messages` + `run_id` 重连补卡或直接 respond
 
 ### 3.4 Input（多模态）
 
@@ -642,7 +658,7 @@ Accept: text/event-stream
 
 `X-Chat-API-Channel` 可选。省略时入口分配 `default_channel`（工作目录 `<base_dir>/default_channel`）；填写时写入 Engine `ChannelKey`。非法路径会被拒绝（400）。在 `mode = "multi-workspace"` 下，项目级 `base_dir` 会注入为 platform `cc_base_dir`（也可在 options 显式配置 `base_dir`）；chat-api 会自动创建 `<base_dir>/<channel>` 并持久化绑定。未拿到任何 base_dir 时，行为与 IM 平台一致：目录不存在则进入 workspace 初始化/绑定流程。cancel / interaction 使用 run 内保存的 channel，无需再传 header。
 
-请求体与 SSE 见 §3.3。
+请求体与 SSE 见 §3.3。`run_id` 存在时为断链重连（不要求 `query`）。
 
 | `busy_policy` | 行为 |
 |---------------|------|
@@ -650,6 +666,25 @@ Accept: text/event-stream
 | `reject` | `409`，`error`: `conversation busy` |
 
 不同 `conversation_id`（含省略时隐式新建）互不阻塞。`message_queued` 只表示该会话自己忙，不是按 user 排队。
+
+### 4.7.1 断链重连
+
+```http
+POST /chat-messages
+X-Chat-API-User: user_001
+Content-Type: application/json
+Accept: text/event-stream
+
+{"run_id":"run_abc"}
+```
+
+| 条件 | 响应 |
+|------|------|
+| run 仍在跑 + 有缓存事件 | 先补发最后一条可恢复事件，再继续 SSE |
+| run 仍在跑 + 无缓存 | 直接挂载后续增量 |
+| 断线期间已结束 / run 不存在 / 非归属 user | SSE 返回空 payload 的 `message_end` |
+| 已有活跃 SSE | `409 run already attached` |
+| TTL 过期 | SSE 返回空 payload 的 `message_end` |
 
 ### 4.8 取消轮次
 
@@ -781,7 +816,10 @@ task_id = "X-Task-ID"
 | `name_model` | 空 | `ai` 模式独立低成本模型。未配置独立 provider 时异步回退 query / history 截断，不调用主 Agent |
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
 | `max_runs` | `1000` | 内存 pending run 上限 |
-| `run_ttl` | `2h` | run 记录 TTL |
+| `run_ttl` | `2h` | 仍在跑的 pending run 记录 TTL |
+| `question_notify_url` | 空 | 断线后产生 `question_request` 时异步 POST 的 BFF URL；空则关闭 |
+| `question_notify_secret` | 空 | 可选；写入请求头 `X-Chat-API-Notify-Secret` |
+| `question_notify_timeout` | `5s` | webhook HTTP 超时 |
 
 会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态（确认窗口不支持多副本共享）。
 
@@ -791,6 +829,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.2.7 | 2026-07-24 | 断链重连：`POST /chat-messages` + `run_id`；虚拟 sink 缓存最后事件；`question_notify_url`；结束即释放 run |
 | v1.2.6 | 2026-07-23 | 新增独立 MCP `cc_connect_client_flow` 与非阻塞 `client_flow` SSE；三种 `type` 与 `question_request.event` 同源，不占 interaction 槽且无需 respond |
 | v1.2.5 | 2026-07-23 | `question_request` 对齐卡片契约：`card_group` + 信封 `event` + `tag`；统一 `POST .../conversations/messages/respond`（`answers[]` / `decision`） |
 | v1.2.3 | 2026-07-22 | AskUserQuestion 富交互过渡版（已由 v1.2.4 收敛为单确认） |
