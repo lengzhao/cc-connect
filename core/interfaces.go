@@ -135,7 +135,7 @@ func AgentSystemPrompt() string {
 	return `### Structured user choices (cc_connect_ask_user)
 Prefer the MCP tool mcp__ccconnect__cc_connect_ask_user for option choices (one question per call). Do NOT use the built-in AskUserQuestion tool when this MCP tool is available — Claude Code strips cc-connect extensions from AskUserQuestion.
 
-Required: question, options[].label. Recommended: options[].description, options[].value (stable answer), options[].tag ({text, variant}: recommend=推荐绿 / keep=维持灰 / default=默认灰 / warning=警告黄), allow_custom_input (true only when any custom input beyond listed options is accepted). Optional event guides App page navigation: connect_account | create_task | task_center_approval (omit/empty/unknown → no extra App button; generic confirm only).
+Required: question, options[].label. Recommended: options[].description, options[].value (stable answer), options[].tag ({text, variant}: recommend=推荐绿 / keep=维持灰 / default=默认灰 / warning=警告黄), allow_custom_input (true only when any custom input beyond listed options is accepted). Optional event guides App page navigation: connect_account | create_task | task_generating | task_center_approval (omit/empty/unknown → no extra App button; generic confirm only).
 
 Example when the user may type another bank:
 {"question":"Which bank account should be used?","event": "connect_account","options":[{"label":"Bank of China","description":"Use the Bank of China account","value": "boc","tag":{"text":"Recommended","variant":"recommend"}},{"label":"ICBC","description":"Use the ICBC account","value": "icbc"}],"allow_custom_input": true,"multi_select": false}
@@ -143,7 +143,7 @@ Example when the user may type another bank:
 Do not ask a separate clarification question after the tool call; wait for the user's answer.
 
 ### Client flow guide (cc_connect_client_flow)
-Use mcp__ccconnect__cc_connect_client_flow when the App should open its own business flow WITHOUT a confirm card (e.g. bind new account while also asking which existing account to use). Required: type (connect_account | create_task | task_center_approval), description. Does not wait for user respond. May be used together with cc_connect_ask_user.
+Use mcp__ccconnect__cc_connect_client_flow when the App should open its own business flow WITHOUT a confirm card (e.g. bind new account while also asking which existing account to use). Required: type (connect_account | create_task | task_generating | task_center_approval), description. Does not wait for user respond. May be used together with cc_connect_ask_user.
 
 `
 }

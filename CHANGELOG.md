@@ -9,6 +9,14 @@
 - **chat-api / core**: Streaming turns emit typed `TurnStreamEvent`s via optional `StructuredStreamingCard`. chat-api prefers structured events for SSE; Engine no longer `Reply`s 🧾 tool-result markdown to structured consumers. See `docs/plans/2026-07-21-structured-streaming-card-design.md`.
 - **a2a**: Implements `StructuredStreamingCard` so task artifacts stream answer (or thinking) text only, not Engine markdown cards with thinking/tool markers.
 
+## v9.1.2 (2026-07-26)
+
+### Added
+- **ask-user / client_flow**: new `task_generating` navigation event for triggering sub-agent task generation; `cc_connect_client_flow` MCP tool enum now covers all four flow types (`connect_account`, `create_task`, `task_generating`, `task_center_approval`).
+
+### Changed
+- **MCP tool descriptors**: refine `cc_connect_ask_user` and `cc_connect_client_flow` field descriptions; ask-user confirm cards keep `event=connect_account` only, while non-blocking client flows carry the full enum.
+
 ## v9.1.1 (2026-07-25)
 
 ### Added

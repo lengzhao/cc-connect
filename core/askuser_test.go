@@ -27,6 +27,9 @@ func TestNormalizeAskUserEvent(t *testing.T) {
 	if got := NormalizeAskUserEvent("create_task"); got != AskEventCreateTask {
 		t.Fatalf("got %q", got)
 	}
+	if got := NormalizeAskUserEvent("task_generating"); got != AskEventTaskGenerating {
+		t.Fatalf("got %q", got)
+	}
 	if got := NormalizeAskUserEvent("  "); got != "" {
 		t.Fatalf("blank got %q", got)
 	}

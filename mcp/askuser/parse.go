@@ -14,6 +14,7 @@ const (
 	EventConnectAccount     = core.AskEventConnectAccount
 	EventCreateTask         = core.AskEventCreateTask
 	EventTaskCenterApproval = core.AskEventTaskCenterApproval
+	EventTaskGenerating     = core.AskEventTaskGenerating
 )
 
 // Tag variant enums for option badges.
@@ -102,7 +103,7 @@ func ParseClientFlowArguments(raw json.RawMessage) (ClientFlowArgs, error) {
 	}
 	typ := NormalizeEvent(strField(m, "type"))
 	if typ == "" {
-		return ClientFlowArgs{}, fmt.Errorf("invalid type: must be connect_account, create_task, or task_center_approval")
+		return ClientFlowArgs{}, fmt.Errorf("invalid type: must be connect_account, create_task, task_center_approval, or task_generating")
 	}
 	desc := strField(m, "description")
 	if desc == "" {

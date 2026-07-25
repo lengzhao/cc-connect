@@ -78,7 +78,7 @@ func TestToolDescriptor_HasDescriptionsAndEnums(t *testing.T) {
 	schema, _ := desc["inputSchema"].(map[string]any)
 	props, _ := schema["properties"].(map[string]any)
 	event, _ := props["event"].(map[string]any)
-	if !strings.Contains(fmt.Sprint(event["description"]), "引导应用进行页面跳转") {
+	if !strings.Contains(fmt.Sprint(event["description"]), "connect_account") {
 		t.Fatalf("event description=%v", event["description"])
 	}
 	options, _ := props["options"].(map[string]any)
@@ -191,8 +191,8 @@ func TestClientFlowToolDescriptor(t *testing.T) {
 	props, _ := schema["properties"].(map[string]any)
 	typ, _ := props["type"].(map[string]any)
 	enum, _ := typ["enum"].([]any)
-	if len(enum) != 3 {
-		t.Fatalf("type enum must be exactly 3 values, got %v", enum)
+	if len(enum) != 4 {
+		t.Fatalf("type enum must be exactly 4 values, got %v", enum)
 	}
 	for _, v := range enum {
 		s, _ := v.(string)

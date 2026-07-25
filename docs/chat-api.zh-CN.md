@@ -451,7 +451,7 @@ data: {
 | `run_id` | string | 是 | 所属轮次 ID |
 | `message_id` | string | 是 | 所属消息 ID |
 | `expires_at` | integer | 是 | Unix 秒 |
-| `event` | string | 否 | 导航引导：`connect_account` / `create_task` / `task_center_approval`。缺省、空或未匹配时不出现该字段，前端不渲染额外功能按钮，走通用发送/确认 |
+| `event` | string | 否 | 导航引导：`connect_account` / `create_task` / `task_generating` / `task_center_approval`。缺省、空或未匹配时不出现该字段，前端不渲染额外功能按钮，走通用发送/确认 |
 | `card_group` | Card[] | 是 | 卡片数组；Claude/Engine 路径长度恒为 1 |
 
 `Card`：`type`（`single_select`\|`multi_select`）、`title`、`description?`、`options`、`others.custom_input.enabled?`。
@@ -499,7 +499,7 @@ data: {
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `flow_id` | string | 本次流程引导 ID，仅用于客户端关联 |
-| `type` | string | 三枚举之一：`connect_account` / `create_task` / `task_center_approval`；与 `question_request.event` 复用同一组枚举及语义 |
+| `type` | string | 四枚举之一：`connect_account` / `create_task` / `task_generating` / `task_center_approval`；与 `question_request.event` 复用同一组枚举及语义 |
 | `description` | string | 必填非空的用户引导文案 |
 | `run_id` | string | 所属轮次 ID |
 | `message_id` | string | 所属消息 ID |

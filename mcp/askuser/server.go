@@ -177,19 +177,16 @@ func toolDescriptor() map[string]any {
 				},
 				"event": map[string]any{
 					"type": "string",
-					"description": "发送事件，引导应用进行页面跳转（可选）。" +
-						"枚举：connect_account（连接账户）、create_task（创建任务）、task_center_approval（去任务中心审批）。" +
-						"缺省、空、null 或未匹配时不渲染额外按钮，走通用发送/确认逻辑。",
+					"description": "发送事件（可选）。" +
+						"枚举：connect_account（有连接新账户需求时）",
 					"enum": []any{
 						EventConnectAccount,
-						EventCreateTask,
-						EventTaskCenterApproval,
 						"",
 					},
 				},
 				"allow_custom_input": map[string]any{
 					"type":        "boolean",
-					"description": "是否允许用户输入列表以外的自定义内容。仅当确实接受自由输入时设为 true。",
+					"description": "仅当确实接受自由输入时设为 true。",
 				},
 				"multi_select": map[string]any{
 					"type":        "boolean",
@@ -246,18 +243,20 @@ func clientFlowToolDescriptor() map[string]any {
 	return map[string]any{
 		"name": core.ToolCCConnectClientFlow,
 		"description": "非阻塞地引导 App 打开自有业务流程（如绑定账户、创建任务、去任务中心审批）。" +
-			"不用于普通确认问答，也不等待用户 respond；可与 cc_connect_ask_user 同时使用。",
+			"不用于普通确认问答，也不等待用户 respond。",
 		"inputSchema": map[string]any{
 			"type":     "object",
 			"required": []string{"type", "description"},
 			"properties": map[string]any{
 				"type": map[string]any{
 					"type": "string",
-					"description": "流程类型枚举：connect_account（连接账户）、create_task（创建任务）、" +
-						"task_center_approval（去任务中心审批）。",
+					"description": "发送事件（可选）。" +
+						"枚举：connect_account（有连接新账户需求时）、create_task（任务保存的时候）、" +
+						"task_generating（触发子Agent生成任务时）、task_center_approval（任务修改/保存后需要去任务中心审批）。",
 					"enum": []any{
 						EventConnectAccount,
 						EventCreateTask,
+						EventTaskGenerating,
 						EventTaskCenterApproval,
 					},
 				},

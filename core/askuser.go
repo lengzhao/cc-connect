@@ -30,13 +30,14 @@ const (
 	AskEventConnectAccount     = "connect_account"
 	AskEventCreateTask         = "create_task"
 	AskEventTaskCenterApproval = "task_center_approval"
+	AskEventTaskGenerating     = "task_generating"
 )
 
 // NormalizeAskUserEvent keeps only known navigation events.
 // Empty / null / unmatched → "" (no extra App action button; generic confirm).
 func NormalizeAskUserEvent(raw string) string {
 	switch strings.TrimSpace(raw) {
-	case AskEventConnectAccount, AskEventCreateTask, AskEventTaskCenterApproval:
+	case AskEventConnectAccount, AskEventCreateTask, AskEventTaskCenterApproval, AskEventTaskGenerating:
 		return strings.TrimSpace(raw)
 	default:
 		return ""
@@ -212,7 +213,7 @@ func (h *AskUserHub) EmitClientFlow(sessionKey, flowType, description string) er
 	}
 	flowType = NormalizeAskUserEvent(flowType)
 	if flowType == "" {
-		return fmt.Errorf("invalid type: must be connect_account, create_task, or task_center_approval")
+		return fmt.Errorf("invalid type: must be connect_account, create_task, task_center_approval, or task_generating")
 	}
 
 	evt := Event{
