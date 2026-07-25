@@ -132,7 +132,7 @@ Pagination: unified `cursor` + `next_cursor` + `has_more`.
 | `auto_generate_name` | Truncate first `query` (32 runes), no LLM |
 | Blocking JSON | BFF aggregates SSE or wait for v1.1 |
 | `owner_id` | Not exposed; owner implied by list membership |
-| `max_runs` / `run_ttl` | In-memory pending run limits (default 1000 / 2h) |
+| `max_runs` | In-memory pending run limit (default 1000) |
 | Horizontal scale | Single-process pending store; no multi-replica run sharing in v1 |
 
 ## Package layout

@@ -306,7 +306,7 @@ func TestResumeOnlyKeepsLastRecoverableEvent(t *testing.T) {
 	}
 }
 
-func TestResumeAfterFinishedReturnsMessageEnd(t *testing.T) {
+func TestResumeAfterFinishedReturnsNotFound(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
 	bindTestSessions(t, p)
 
@@ -343,15 +343,12 @@ func TestResumeAfterFinishedReturnsMessageEnd(t *testing.T) {
 	resumeReq.Header.Set("Accept", "text/event-stream")
 	resumeRec := httptest.NewRecorder()
 	p.routes().ServeHTTP(resumeRec, resumeReq)
-	if resumeRec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200 SSE for unmatched resume", resumeRec.Code, resumeRec.Body.String())
-	}
-	if !hasEvent(parseSSE(resumeRec.Body.String()), "message_end") {
-		t.Fatalf("missing message_end: %s", resumeRec.Body.String())
+	if resumeRec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404 after finished run deleted", resumeRec.Code, resumeRec.Body.String())
 	}
 }
 
-func TestResumeUnknownRunReturnsMessageEnd(t *testing.T) {
+func TestResumeUnknownRunReturnsNotFound(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages",
 		strings.NewReader(`{"run_id":"run_does_not_exist"}`))
@@ -361,15 +358,12 @@ func TestResumeUnknownRunReturnsMessageEnd(t *testing.T) {
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200 SSE", rec.Code, rec.Body.String())
-	}
-	if !hasEvent(parseSSE(rec.Body.String()), "message_end") {
-		t.Fatalf("missing message_end: %s", rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
 	}
 }
 
-func TestResumeForeignRunReturnsMessageEnd(t *testing.T) {
+func TestResumeForeignRunReturnsNotFound(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	run := newRunState("run_foreign", "other_user", "ch", "sk", "c", "c:0", p, nil, time.Now().Add(time.Minute))
 	if !p.pending.create(run) {
@@ -385,35 +379,8 @@ func TestResumeForeignRunReturnsMessageEnd(t *testing.T) {
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200 SSE", rec.Code, rec.Body.String())
-	}
-	if !hasEvent(parseSSE(rec.Body.String()), "message_end") {
-		t.Fatalf("missing message_end: %s", rec.Body.String())
-	}
-}
-
-func TestResumeExpiredRunReturnsMessageEnd(t *testing.T) {
-	p := newTestPlatform(t, map[string]any{"token": "secret", "run_ttl": "1ns"})
-	run := newRunState("run_expired", "user_001", "ch", "sk", "c", "c:0", p, nil, time.Now().Add(time.Minute))
-	if !p.pending.create(run) {
-		t.Fatal("create")
-	}
-	time.Sleep(time.Millisecond)
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages",
-		strings.NewReader(`{"run_id":"run_expired"}`))
-	req.Header.Set("Authorization", "Bearer secret")
-	req.Header.Set("X-Chat-API-User", "user_001")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
-	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200 SSE", rec.Code, rec.Body.String())
-	}
-	if !hasEvent(parseSSE(rec.Body.String()), "message_end") {
-		t.Fatalf("missing message_end: %s", rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
 	}
 }
 

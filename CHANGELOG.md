@@ -9,6 +9,20 @@
 - **chat-api / core**: Streaming turns emit typed `TurnStreamEvent`s via optional `StructuredStreamingCard`. chat-api prefers structured events for SSE; Engine no longer `Reply`s 🧾 tool-result markdown to structured consumers. See `docs/plans/2026-07-21-structured-streaming-card-design.md`.
 - **a2a**: Implements `StructuredStreamingCard` so task artifacts stream answer (or thinking) text only, not Engine markdown cards with thinking/tool markers.
 
+## v9.1.1 (2026-07-25)
+
+### Added
+- **chat-api SSE resume**: disconnected clients can reconnect with `POST /chat-messages` + `run_id`; active turns replay the last recoverable event and continue streaming. Unmatched resume (run missing, wrong user, or already finished) returns `404 not found`. Optional `question_notify_url` webhook for detached `question_request`. See `docs/plans/2026-07-24-chat-api-disconnect-resume-design.md`.
+
+### Fixed
+- **multi-workspace AskUser support**: lazy workspace agents now receive the configured `AskUserSupport`, keeping structured question handling available outside the initial workspace.
+- **unix process-group kill**: treat Darwin `EPERM` as gone when force-killing detached agent process groups, fixing flaky `TestForceKillCmd_KillsGrandchild`.
+- **codex session close**: stabilize force-kill regression test when grandchild holds stdout.
+
+### Changed
+- **core agent system prompt**: trims legacy prompt content in favor of structured MCP guidance.
+- **chat-api pending runs**: remove `run_ttl`; in-memory runs are deleted only on normal completion/cancel, with `max_runs` still capping concurrency.
+
 ## v9.1.0 (2026-07-24)
 
 ### Added

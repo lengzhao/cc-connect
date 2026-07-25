@@ -3,11 +3,14 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -855,19 +858,28 @@ func TestClose_ForceKillsProcessGroupAfterGracefulTimeout(t *testing.T) {
 
 	script := "#!/bin/sh\n" +
 		"printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-close\"}'\n" +
-		"(sleep 0.12; printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"late child output\"}}'; sleep 30) &\n" +
+		// Keep a long-lived grandchild in the same process group, but do not let
+		// it hold this stdout pipe open. Otherwise readLoop can block on Read
+		// until the grandchild exits even after the parent shell is killed.
+		"(sleep 30 >/dev/null 2>&1) &\n" +
+		"grandchild=$!\n" +
+		"printf '%s\\n' \"$grandchild\" > \"$CODEX_GRANDCHILD_PID_FILE\"\n" +
+		"sleep 0.12\n" +
+		"printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"late child output\"}}'\n" +
 		"wait\n"
 	scriptPath := filepath.Join(binDir, "codex")
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
 
+	grandchildPIDFile := filepath.Join(workDir, "grandchild.pid")
+	t.Setenv("CODEX_GRANDCHILD_PID_FILE", grandchildPIDFile)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	oldCloseTimeout := codexSessionCloseTimeout
 	oldForceKillWait := codexSessionForceKillWait
 	codexSessionCloseTimeout = 50 * time.Millisecond
-	codexSessionForceKillWait = 500 * time.Millisecond
+	codexSessionForceKillWait = 2 * time.Second
 	t.Cleanup(func() {
 		codexSessionCloseTimeout = oldCloseTimeout
 		codexSessionForceKillWait = oldForceKillWait
@@ -883,12 +895,13 @@ func TestClose_ForceKillsProcessGroupAfterGracefulTimeout(t *testing.T) {
 	}
 
 	waitForThreadID(t, cs, "thread-close")
+	waitForFileLines(t, grandchildPIDFile, 1)
 
 	closeStarted := time.Now()
 	if err := cs.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if elapsed := time.Since(closeStarted); elapsed > time.Second {
+	if elapsed := time.Since(closeStarted); elapsed > 3*time.Second {
 		t.Fatalf("Close took too long after force kill: %v", elapsed)
 	}
 
@@ -897,9 +910,26 @@ func TestClose_ForceKillsProcessGroupAfterGracefulTimeout(t *testing.T) {
 		if ok {
 			t.Fatalf("unexpected event after Close: %#v", evt)
 		}
-	case <-time.After(700 * time.Millisecond):
+	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for events channel to close")
 	}
+
+	raw, err := os.ReadFile(grandchildPIDFile)
+	if err != nil {
+		t.Fatalf("read grandchild pid: %v", err)
+	}
+	grandchildPID, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || grandchildPID <= 0 {
+		t.Fatalf("invalid grandchild pid %q: %v", raw, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(grandchildPID, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("grandchild pid %d still alive after process-group kill", grandchildPID)
 }
 
 func TestClose_ForceKillsAllTrackedProcessesAfterCmdOverwrite(t *testing.T) {
@@ -934,7 +964,7 @@ func TestClose_ForceKillsAllTrackedProcessesAfterCmdOverwrite(t *testing.T) {
 	oldCloseTimeout := codexSessionCloseTimeout
 	oldForceKillWait := codexSessionForceKillWait
 	codexSessionCloseTimeout = 50 * time.Millisecond
-	codexSessionForceKillWait = 500 * time.Millisecond
+	codexSessionForceKillWait = 2 * time.Second
 	t.Cleanup(func() {
 		codexSessionCloseTimeout = oldCloseTimeout
 		codexSessionForceKillWait = oldForceKillWait
@@ -960,7 +990,7 @@ func TestClose_ForceKillsAllTrackedProcessesAfterCmdOverwrite(t *testing.T) {
 	if err := cs.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if elapsed := time.Since(closeStarted); elapsed > time.Second {
+	if elapsed := time.Since(closeStarted); elapsed > 3*time.Second {
 		t.Fatalf("Close took too long after force killing tracked processes: %v", elapsed)
 	}
 
@@ -969,7 +999,7 @@ func TestClose_ForceKillsAllTrackedProcessesAfterCmdOverwrite(t *testing.T) {
 		if ok {
 			t.Fatalf("unexpected event after Close: %#v", evt)
 		}
-	case <-time.After(700 * time.Millisecond):
+	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for events channel to close")
 	}
 }

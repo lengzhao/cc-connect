@@ -30,7 +30,9 @@ func forceKillCmd(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+	// Darwin may return EPERM (instead of ESRCH) when the process group is
+	// already gone; treat both as success for idempotent kill.
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) && !errors.Is(err, syscall.EPERM) {
 		return err
 	}
 	return nil

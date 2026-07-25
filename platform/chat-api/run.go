@@ -107,27 +107,21 @@ type pendingStore struct {
 	mu   sync.Mutex
 	runs map[string]*runState
 	max  int
-	ttl  time.Duration
 }
 
-func newPendingStore(max int, ttl time.Duration) *pendingStore {
+func newPendingStore(max int) *pendingStore {
 	if max <= 0 {
 		max = defaultMaxRuns
-	}
-	if ttl <= 0 {
-		ttl = defaultRunTTL
 	}
 	return &pendingStore{
 		runs: make(map[string]*runState),
 		max:  max,
-		ttl:  ttl,
 	}
 }
 
 func (s *pendingStore) create(run *runState) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cleanupLocked(time.Now())
 	if len(s.runs) >= s.max {
 		return false
 	}
@@ -138,7 +132,6 @@ func (s *pendingStore) create(run *runState) bool {
 func (s *pendingStore) get(id string) *runState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cleanupLocked(time.Now())
 	return s.runs[id]
 }
 
@@ -149,16 +142,6 @@ func (s *pendingStore) delete(id string) {
 		run.stopInteractionTimer()
 	}
 	delete(s.runs, id)
-}
-
-func (s *pendingStore) cleanupLocked(now time.Time) {
-	for id, run := range s.runs {
-		if now.Sub(run.created) > s.ttl {
-			run.stopInteractionTimer()
-			run.complete(pendingResult{err: context.DeadlineExceeded})
-			delete(s.runs, id)
-		}
-	}
 }
 
 func newRunState(id, user, channelKey, sessionKey, conversationID, messageID string, p *Platform, sse *sseWriter, requestDeadline time.Time) *runState {

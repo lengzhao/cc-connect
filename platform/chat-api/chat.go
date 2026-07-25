@@ -20,7 +20,6 @@ import (
 const (
 	maxRequestBody            = 10 << 20 // 10 MiB
 	defaultMaxRuns            = 1000
-	defaultRunTTL             = 2 * time.Hour
 	defaultInteractionTimeout = 10 * time.Minute
 	defaultSSEPingInterval    = 15 * time.Second
 	busyPolicyQueue           = "queue"
@@ -226,7 +225,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user, runID string) {
 	run := p.pending.get(runID)
 	if run == nil || run.user != user {
-		p.writeResumeMessageEnd(w)
+		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 
@@ -253,15 +252,6 @@ func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user
 
 	rc := run.replyContext()
 	p.serveRunSSE(r.Context(), run, sse, run.sessionKey, user, run.channelKey, rc)
-}
-
-func (p *Platform) writeResumeMessageEnd(w http.ResponseWriter) {
-	sse, err := newSSEWriter(w)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	_ = sse.Event("message_end", map[string]any{})
 }
 
 func (p *Platform) serveRunSSE(reqCtx context.Context, run *runState, sse *sseWriter, engineSessionKey, user, channelKey string, rc *replyContext) {

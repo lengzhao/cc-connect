@@ -27,15 +27,23 @@ func prepareCmdForKill(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
+// isProcessGroupGone reports whether err means the target process group is
+// already gone. Darwin may return EPERM (instead of ESRCH) when signaling a
+// vanished process group, so treat both as success for idempotent kill.
+func isProcessGroupGone(err error) bool {
+	return err == nil ||
+		errors.Is(err, os.ErrProcessDone) ||
+		errors.Is(err, syscall.ESRCH) ||
+		errors.Is(err, syscall.EPERM)
+}
+
 // signalProcessGroup sends sig to the entire process group rooted at cmd.
 // Returns nil if the group is already gone.
 func signalProcessGroup(cmd *exec.Cmd, sig syscall.Signal) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, sig); err != nil &&
-		!errors.Is(err, os.ErrProcessDone) &&
-		!errors.Is(err, syscall.ESRCH) {
+	if err := syscall.Kill(-cmd.Process.Pid, sig); !isProcessGroupGone(err) {
 		return err
 	}
 	return nil

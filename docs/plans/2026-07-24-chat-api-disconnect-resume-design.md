@@ -10,7 +10,7 @@
 1. 客户端 SSE 断链后可用同一端点 `POST /chat-messages` 带 `run_id` 重连。
 2. 断链期间只缓存**最后一条**可恢复事件（普通 `text_delta`/`thinking_delta` 或 `question_request`），重连后补发。
 3. 断链后若产生 `question_request`，异步通知配置的外部 webhook。
-4. 断链期间 turn 仍在跑时可 resume；若 turn 已在断线期间结束（run 已删除）或 run 不存在/非归属 user，resume 直接 SSE 返回 `message_end`。重连已挂上后 turn 结束仍正常发 `message_end`。
+4. 断链期间 turn 仍在跑时可 resume；若 turn 已在断线期间结束（run 已删除）或 run 不存在/非归属 user，resume → `404`（改查 history）。重连已挂上后 turn 结束仍正常发 `message_end`。
 
 ## Non-goals
 
@@ -28,7 +28,7 @@
 | 连接抽象 | `runEventSink`：`sseEventSink` / `detachedEventSink` |
 | 外部通知 | `question_notify_url`；仅断线后 `question_request` |
 | 终态处理 | live / detached 一律 `complete()` + 立刻 `delete`；已挂上的 resume SSE 仍可通过 `done` 收到 `message_end` |
-| 未匹配 resume | run 不存在 / 非归属 user → SSE `message_end`，payload 为空对象（不保留状态） |
+| 未匹配 resume | run 不存在 / 非归属 user → `404 not found` |
 | 缓存消费 | resume 先 `peek`，SSE 写成功后再 `clear`；写失败则 `detach` 并保留缓存 |
 | 未决确认 | 断线后 `question_request`/`permission_request` 不被后续 `text_delta`/`thinking_delta` 覆盖 |
 | 并发 | 同一 run 同时只允许一个活跃 SSE；已 attached 时 resume → `409` |
@@ -112,7 +112,7 @@ question_notify_timeout = "5s"
 - 断线后 text → resume 补发 `replace:true` text_delta
 - 断线后 question → webhook + resume 补发 question_request
 - 多事件覆盖，只补最后一条
-- 断线后 finish → 再 resume → 空 payload 的 `message_end`（run 已删除，不查 history）
+- 断线后 finish → 再 resume → `404`（查 history）
 - attached 重复 resume → 409
 - webhook 失败不阻塞 turn
 - resume 已挂上后 finish → message_end

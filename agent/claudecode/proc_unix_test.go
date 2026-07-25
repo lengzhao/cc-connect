@@ -3,7 +3,10 @@
 package claudecode
 
 import (
+	"errors"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -48,6 +51,21 @@ func TestForceKillCmd_NilCmd(t *testing.T) {
 	}
 }
 
+func TestIsProcessGroupGone(t *testing.T) {
+	if !isProcessGroupGone(nil) {
+		t.Fatal("nil should be gone")
+	}
+	if !isProcessGroupGone(syscall.ESRCH) {
+		t.Fatal("ESRCH should be gone")
+	}
+	if !isProcessGroupGone(syscall.EPERM) {
+		t.Fatal("EPERM should be gone on Darwin vanished groups")
+	}
+	if isProcessGroupGone(syscall.EINVAL) {
+		t.Fatal("EINVAL should not be treated as gone")
+	}
+}
+
 // TestForceKillCmd_KillsGrandchild is the regression test for the original
 // bug: spawning a shell that backgrounds a long-running grandchild, then
 // proving that forceKillCmd reaps the grandchild along with the direct
@@ -84,19 +102,32 @@ func TestForceKillCmd_KillsGrandchild(t *testing.T) {
 		_ = cmd.Wait()
 		t.Fatal("did not receive grandchild PID")
 	}
+	grandchildPID, err := strconv.Atoi(strings.TrimSpace(grandchildPidStr))
+	if err != nil || grandchildPID <= 0 {
+		_ = forceKillCmd(cmd)
+		_ = cmd.Wait()
+		t.Fatalf("invalid grandchild PID %q: %v", grandchildPidStr, err)
+	}
 
 	if err := forceKillCmd(cmd); err != nil {
 		t.Fatalf("forceKillCmd: %v", err)
 	}
 	_ = cmd.Wait()
 
-	// Verify the grandchild is gone by checking that signaling it with 0
-	// (no-op, just checks existence) returns ESRCH within a short window.
-	// We can't easily parse the PID without strconv import bloat in tests,
-	// so we rely on `pgrep` semantics: re-kill the group should be a no-op.
+	// Darwin may return EPERM (not ESRCH) for a second kill of a vanished
+	// process group; forceKillCmd must treat that as a no-op.
 	if err := forceKillCmd(cmd); err != nil {
 		t.Errorf("second forceKillCmd should be no-op, got %v", err)
 	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(grandchildPID, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("grandchild pid %d still alive after process-group kill", grandchildPID)
 }
 
 func TestSignalProcessGroup_NoProcess(t *testing.T) {

@@ -236,9 +236,10 @@ message_id = "{conversation_id}:{turn_index}"
 ```
 
 - 断开 SSE **不**停止 agent；断线后切到虚拟 sink，只缓存**最后一条**可恢复事件（`text_delta` / `thinking_delta` / `question_request` / `permission_request`）。
-- 重连后：若有缓存则立即补发该事件；若 run 不存在、非归属 user、或 turn 已在断线期间结束，直接 SSE 返回 `message_end`；若重连时 turn 仍在跑、随后结束，正常收 `message_end`。
+- 重连后：若有缓存则立即补发该事件；若 run 不存在、非归属 user、或 turn 已在断线期间结束，返回 `404 not found`（改查 history）；若重连时 turn 仍在跑、随后结束，正常收 `message_end`。
 - 普通正文缓存使用完整快照 + `replace:true`。
 - 同一 run 同时只允许一个活跃 SSE；已连接时 resume → `409 run already attached`。
+- run 不存在 / 非归属 user → `404 not found`（改查 history）。
 - 断线后产生 `question_request` 时，若配置了 `question_notify_url`，异步 POST 通知 BFF（失败不影响 turn）。
 
 详见 [断链重连设计](./plans/2026-07-24-chat-api-disconnect-resume-design.md)。
@@ -348,7 +349,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 | `interaction_superseded` | `interaction_id`, `replacement_id`, `run_id`, `message_id` | 同一 run 上新确认替换旧确认 |
 | `interaction_ack` | `interaction_id`, `message_id`, `text?` | 用户已响应确认的回执（可选） |
 | `ping` | `run_id`, `ts` | SSE 保活；可忽略 |
-| `message_end` | `message_id`, `conversation_id`, `answer?` | 轮次结束；未匹配 resume 时 payload 为空对象 |
+| `message_end` | `message_id`, `conversation_id`, `answer?` | 轮次结束 |
 | `message_queued` | `message_id`, `queue_depth` | 会话忙且 `busy_policy=queue` |
 | `error` | `error`, `kind?` | 错误（§2.6） |
 
@@ -363,7 +364,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 - 默认拼接 `text_delta.text`；若帧带 `replace:true`，应 `buf = text`（整体替换），否则进度句被终稿改写时会重复拼接
 - `thinking_delta` 同样支持可选 `replace`
 - `tool_call` / `tool_result` 单独渲染，勿并入正文
-- 断开 SSE **不**停止 agent，内容仍写入 history；可用 `{"run_id":"..."}` 重连同一端点补收最后事件（turn 仍在跑时）；结束后 run 释放，再 resume 返回空 `message_end`
+- 断开 SSE **不**停止 agent，内容仍写入 history；可用 `{"run_id":"..."}` 重连同一端点补收最后事件（turn 仍在跑时）；结束后 run 释放，改查 history
 - `message_queued` 后勿立即重开 SSE；等上轮结束或轮询 history
 - 收到 `permission_request` / `question_request` 时弹出确认窗口；用 `expires_at` 倒计时；优先 `POST /conversations/messages/respond`（`answers[]`），**不要**把确认结果当普通 `chat-messages`
 - 收到 `client_flow` 时保持 Streaming；App 可按 `type` 打开自有流程，但服务端不等待，也不要调用 respond
@@ -682,9 +683,8 @@ Accept: text/event-stream
 |------|------|
 | run 仍在跑 + 有缓存事件 | 先补发最后一条可恢复事件，再继续 SSE |
 | run 仍在跑 + 无缓存 | 直接挂载后续增量 |
-| 断线期间已结束 / run 不存在 / 非归属 user | SSE 返回空 payload 的 `message_end` |
+| 断线期间已结束 / run 不存在 / 非归属 user | `404 not found`（改查 history） |
 | 已有活跃 SSE | `409 run already attached` |
-| TTL 过期 | SSE 返回空 payload 的 `message_end` |
 
 ### 4.8 取消轮次
 
@@ -782,7 +782,6 @@ auto_generate_name_mode = "heuristic"
 # name_model = "gpt-4o-mini"       # 独立低成本 name 模型
 include_answer_in_message_end = false
 max_runs = 1000
-run_ttl = "2h"
 # forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # hooks-only; not agent prompt
 
 # Optional embedded debug console (same origin): http://127.0.0.1:8030/debug/
@@ -816,7 +815,6 @@ task_id = "X-Task-ID"
 | `name_model` | 空 | `ai` 模式独立低成本模型。未配置独立 provider 时异步回退 query / history 截断，不调用主 Agent |
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
 | `max_runs` | `1000` | 内存 pending run 上限 |
-| `run_ttl` | `2h` | 仍在跑的 pending run 记录 TTL |
 | `question_notify_url` | 空 | 断线后产生 `question_request` 时异步 POST 的 BFF URL；空则关闭 |
 | `question_notify_secret` | 空 | 可选；写入请求头 `X-Chat-API-Notify-Secret` |
 | `question_notify_timeout` | `5s` | webhook HTTP 超时 |
