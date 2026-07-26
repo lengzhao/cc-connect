@@ -1,6 +1,6 @@
 # chat-api Platform — API v1
 
-> Version: **v1.2.7** (2026-07-24)
+> Version: **v1.2.8** (2026-07-26)
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
 > Disconnect resume: [plans/2026-07-24-chat-api-disconnect-resume-design.md](./plans/2026-07-24-chat-api-disconnect-resume-design.md)
@@ -16,7 +16,7 @@
 
 `chat-api` is a cc-connect **Platform** — HTTP + SSE API for custom apps / BFFs.
 
-**v1**: SSE-only chat, implicit conversation create, default `busy_policy=queue`, tool SSE events, permission / AskUserQuestion confirm windows, minimal non-blocking `client_flow` guides, and SSE disconnect resume via `POST /chat-messages` with `run_id`.
+**v1**: SSE-only chat, implicit or explicit conversation create, default `busy_policy=queue`, tool SSE events, permission / AskUserQuestion confirm windows, minimal non-blocking `client_flow` guides, and SSE disconnect resume via `POST /chat-messages` with `run_id`.
 
 > Agent-side source: Claude Code defaults to resident MCP tool `cc_connect_ask_user` so `event` / `value` / `tag` / `allow_custom_input` survive; see [Ask User MCP](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md).
 
@@ -24,6 +24,7 @@
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `POST` | `/conversations` | Create empty conversation |
 | `GET` | `/conversations` | List |
 | `GET` | `/conversations/{id}` | Conversation detail |
 | `POST` | `/conversations/{id}/name/generate` | Generate name asynchronously |

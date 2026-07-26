@@ -9,6 +9,11 @@
 - **chat-api / core**: Streaming turns emit typed `TurnStreamEvent`s via optional `StructuredStreamingCard`. chat-api prefers structured events for SSE; Engine no longer `Reply`s 🧾 tool-result markdown to structured consumers. See `docs/plans/2026-07-21-structured-streaming-card-design.md`.
 - **a2a**: Implements `StructuredStreamingCard` so task artifacts stream answer (or thinking) text only, not Engine markdown cards with thinking/tool markers.
 
+## v9.1.3 (2026-07-26)
+
+### Added
+- **chat-api**: `POST /conversations` creates an empty conversation with optional `name` before the first message. See `docs/plans/2026-07-26-chat-api-create-conversation-design.md`.
+
 ## v9.1.2 (2026-07-26)
 
 ### Added

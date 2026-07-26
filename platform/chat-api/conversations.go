@@ -2,6 +2,7 @@ package chatapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -36,9 +37,46 @@ func (p *Platform) handleConversations(w http.ResponseWriter, r *http.Request) {
 			data["next_cursor"] = nextCursor
 		}
 		writeOK(w, http.StatusOK, data)
+	case http.MethodPost:
+		p.handleCreateConversation(w, r, user)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 	}
+}
+
+func (p *Platform) handleCreateConversation(w http.ResponseWriter, r *http.Request, user string) {
+	sessions := p.sessionsOrReload()
+	if sessions == nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = "default"
+	}
+
+	id, err := newConversationID()
+	if err != nil {
+		slog.Error("chat-api: conversation id", "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	session, err := sessions.NewSessionWithID(sessionKeyForUser(user), id, name)
+	if err != nil {
+		slog.Error("chat-api: create session", "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeOK(w, http.StatusCreated, toConversationView(session))
 }
 
 func (p *Platform) handleConversationSub(w http.ResponseWriter, r *http.Request) {

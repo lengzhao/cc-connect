@@ -375,6 +375,111 @@ func TestListConversationsHTTP(t *testing.T) {
 	}
 }
 
+func TestCreateConversationHTTP(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+
+	body := `{"name":"预创建会话"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/conversations", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OK   bool             `json:"ok"`
+		Data conversationView `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.OK || resp.Data.Name != "预创建会话" || resp.Data.ID == "" {
+		t.Fatalf("resp = %+v", resp)
+	}
+	if resp.Data.LastMessagePreview != "" {
+		t.Fatalf("empty conversation should not have preview: %+v", resp.Data)
+	}
+	if !isOpaqueConversationID(resp.Data.ID) {
+		t.Fatalf("id = %q, want opaque conv_*", resp.Data.ID)
+	}
+	s := sm.FindByID(resp.Data.ID)
+	if s == nil {
+		t.Fatal("session not persisted")
+	}
+	if s.GetName() != "预创建会话" {
+		t.Fatalf("stored name = %q", s.GetName())
+	}
+	if len(s.GetHistory(0)) != 0 {
+		t.Fatalf("history = %+v, want empty", s.GetHistory(0))
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/conversations?limit=10", nil)
+	listReq.Header.Set("Authorization", "Bearer secret")
+	listReq.Header.Set("X-Chat-API-User", "user_001")
+	listRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d", listRec.Code)
+	}
+	var listResp struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Conversations []conversationView `json:"conversations"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("list decode: %v", err)
+	}
+	if len(listResp.Data.Conversations) != 1 || listResp.Data.Conversations[0].ID != resp.Data.ID {
+		t.Fatalf("list = %+v", listResp.Data.Conversations)
+	}
+}
+
+func TestCreateConversationDefaultName(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	bindTestSessions(t, p)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/conversations", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OK   bool             `json:"ok"`
+		Data conversationView `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Data.Name != "default" {
+		t.Fatalf("name = %q, want default", resp.Data.Name)
+	}
+}
+
+func TestCreateConversationRequiresUser(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	bindTestSessions(t, p)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/conversations", strings.NewReader(`{"name":"x"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
 func TestChatMessagesSSEStreaming(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	sm := bindTestSessions(t, p)

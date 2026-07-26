@@ -1,6 +1,6 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.2.7**（2026-07-24）<br>
+> 版本：**v1.2.8**（2026-07-26）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
 > 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [断链重连](./plans/2026-07-24-chat-api-disconnect-resume-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
@@ -16,7 +16,7 @@
 - 发送消息：**SSE 流式**（`message` → `thinking_delta?` → `tool_call?` / `tool_result?` → `text_delta` → `message_end`）
 - 用户确认窗口：权限 / AskUserQuestion（单确认可扩展）；公共 respond 字段、`ping` 保活、单槽 supersede
 - 极简 `client_flow`：通过独立 MCP 非阻塞引导 App 打开自有业务流程
-- 隐式创建会话（首条 `chat-messages` 不带 `conversation_id`）
+- 隐式创建会话（首条 `chat-messages` 不带 `conversation_id`），或显式 `POST /conversations` 创建空会话
 - 会话忙时排队（默认 `busy_policy=queue`，复用 Engine 队列）
 
 ```mermaid
@@ -83,7 +83,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 
 | 概念 | 行为 |
 |------|------|
-| 创建 | 首条 `POST /chat-messages` 不带 `conversation_id` |
+| 创建 | 首条 `POST /chat-messages` 不带 `conversation_id`，或 `POST /conversations` 显式创建空会话 |
 | 列表 | `GET /conversations` 仅返回该 user **创建**的会话 |
 | 参与 | 持有 `conversation_id` 即可发消息、读历史（不必在列表中） |
 | Engine | `session_key = chat-api:{channel}:{conversation_id}`（`channel` 省略时入口分配 `default_channel`；`conversation_id` 仍为 API 侧的 `conv_*`） |
@@ -99,6 +99,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | 场景 | 需要 `user`？ | 方式 |
 |------|---------------|------|
 | `GET /conversations` | 是 | `user_header` 或 `?user=` |
+| `POST /conversations` | 是 | `user_header` |
 | `GET …/messages` | 否 | `api_token` + `conversation_id` |
 | `POST /chat-messages` | 是 | `user_header` |
 | `PATCH` / `DELETE` | 是（须 owner） | `user_header` |
@@ -539,7 +540,35 @@ stateDiagram-v2
 
 示例省略 `Authorization: Bearer <api_token>`。
 
-### 4.1 会话列表
+### 4.1 创建空会话
+
+```http
+POST /conversations
+X-Chat-API-User: user_001
+Content-Type: application/json
+
+{"name": "我的新会话"}
+```
+
+- `name` 可选；省略或空白时为 `"default"`
+- 不启动 Agent，响应 `201 Created`
+- 返回字段与详情一致；空会话无 `last_message_preview`
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": "conv_abc123",
+    "name": "我的新会话",
+    "created_at": 1780000000,
+    "updated_at": 1780000000
+  }
+}
+```
+
+后续在该会话发消息时，`POST /chat-messages` 携带返回的 `conversation_id`。
+
+### 4.2 会话列表
 
 ```http
 GET /conversations?limit=20
@@ -568,7 +597,7 @@ X-Chat-API-User: user_001
 }
 ```
 
-### 4.2 会话详情
+### 4.3 会话详情
 
 ```http
 GET /conversations/{conversation_id}
@@ -577,7 +606,7 @@ X-Chat-API-User: user_001
 
 须 owner。响应字段与列表项一致，包含 `id`、`name`、`last_message_preview`、`created_at`、`updated_at`。
 
-### 4.3 生成会话 Name
+### 4.4 生成会话 Name
 
 ```http
 POST /conversations/{conversation_id}/name/generate
@@ -595,7 +624,7 @@ Content-Type: application/json
 
 前端可轮询会话详情读取最新 name。
 
-### 4.4 重命名
+### 4.5 重命名
 
 ```http
 PATCH /conversations/{conversation_id}
@@ -607,7 +636,7 @@ Content-Type: application/json
 
 须 owner。响应 `data`：`id`、`name`、`updated_at`。
 
-### 4.5 删除
+### 4.6 删除
 
 ```http
 DELETE /conversations/{conversation_id}
@@ -616,7 +645,7 @@ X-Chat-API-User: user_001
 
 须 owner。`{"ok": true, "data": {"result": "success"}}`
 
-### 4.6 历史消息
+### 4.7 历史消息
 
 ```http
 GET /conversations/{conversation_id}/messages?limit=20
@@ -646,7 +675,7 @@ GET /conversations/{conversation_id}/messages?cursor=s1a2b3c:5&limit=20
 ```
 
 
-### 4.7 发送消息
+### 4.8 发送消息
 
 ```http
 POST /chat-messages
@@ -668,7 +697,7 @@ Accept: text/event-stream
 
 不同 `conversation_id`（含省略时隐式新建）互不阻塞。`message_queued` 只表示该会话自己忙，不是按 user 排队。
 
-### 4.7.1 断链重连
+### 4.8.1 断链重连
 
 ```http
 POST /chat-messages
@@ -686,7 +715,7 @@ Accept: text/event-stream
 | 断线期间已结束 / run 不存在 / 非归属 user | `404 not found`（改查 history） |
 | 已有活跃 SSE | `409 run already attached` |
 
-### 4.8 取消轮次
+### 4.9 取消轮次
 
 ```http
 POST /runs/{run_id}/cancel
@@ -701,7 +730,7 @@ X-Chat-API-User: user_001
 
 SSE 仍连接时发送 `event: error`，`data.error` 为 `canceled by user`。
 
-### 4.9 响应确认窗口
+### 4.10 响应确认窗口
 
 #### `POST /conversations/messages/respond`
 
@@ -744,6 +773,7 @@ Content-Type: application/json
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| `POST` | `/conversations` | 创建空会话 |
 | `GET` | `/conversations` | 列表 |
 | `GET` | `/conversations/{id}` | 会话详情 |
 | `POST` | `/conversations/{id}/name/generate` | 异步生成 name |
@@ -754,7 +784,7 @@ Content-Type: application/json
 | `POST` | `/runs/{run_id}/cancel` | 取消轮次 |
 | `POST` | `/conversations/messages/respond` | 确认回传（`answers[]` 或 `decision`） |
 
-**v1 不提供**：`POST /conversations`、`response_mode=blocking`、历史附件 replay、`/health`。
+**v1 不提供**：`response_mode=blocking`、历史附件 replay、`/health`。
 
 ---
 
@@ -827,6 +857,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.2.8 | 2026-07-26 | 新增 `POST /conversations` 显式创建空会话并指定 `name` |
 | v1.2.7 | 2026-07-24 | 断链重连：`POST /chat-messages` + `run_id`；虚拟 sink 缓存最后事件；`question_notify_url`；结束即释放 run |
 | v1.2.6 | 2026-07-23 | 新增独立 MCP `cc_connect_client_flow` 与非阻塞 `client_flow` SSE；三种 `type` 与 `question_request.event` 同源，不占 interaction 槽且无需 respond |
 | v1.2.5 | 2026-07-23 | `question_request` 对齐卡片契约：`card_group` + 信封 `event` + `tag`；统一 `POST .../conversations/messages/respond`（`answers[]` / `decision`） |
