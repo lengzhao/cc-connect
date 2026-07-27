@@ -191,15 +191,33 @@ func TestResumeReplaysLastQuestionAndNotifies(t *testing.T) {
 	if notifyHits.Load() == 0 {
 		t.Fatal("expected question_notify webhook")
 	}
-	raw, _ := notifyBody.Load().(string)
-	if !strings.Contains(raw, `"event":"question_request"`) {
-		t.Fatalf("notify body = %s", raw)
-	}
-
 	run := p.pending.get(runID)
 	if run == nil {
 		t.Fatal("run missing")
 	}
+	raw, _ := notifyBody.Load().(string)
+	var got map[string]string
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("notify body = %s err=%v", raw, err)
+	}
+	want := map[string]string{
+		"conversation_id": run.conversationID,
+		"message_id":      run.messageID,
+		"run_id":          runID,
+		"user_id":         "user_001",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("notify body[%q]=%q want %q body=%s", k, got[k], v, raw)
+		}
+	}
+	if _, ok := got["payload"]; ok {
+		t.Fatalf("notify body must not include payload: %s", raw)
+	}
+	if _, ok := got["resume"]; ok {
+		t.Fatalf("notify body must not include resume: %s", raw)
+	}
+
 	run.mu.Lock()
 	ev := run.lastRecoverableEvent
 	run.mu.Unlock()

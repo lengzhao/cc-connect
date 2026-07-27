@@ -43,7 +43,7 @@ func (d *detachedEventSink) Event(name string, payload any) error {
 		d.run.setLastRecoverable(name, payload)
 	}
 	if name == "question_request" && d.p != nil {
-		d.p.notifyQuestionAsync(d.run, payload)
+		d.p.notifyQuestionAsync(d.run)
 	}
 	return nil
 }
@@ -94,31 +94,31 @@ func (r *runState) clearLastRecoverable() {
 	r.mu.Unlock()
 }
 
-func (p *Platform) notifyQuestionAsync(run *runState, payload any) {
+func questionNotifyBody(run *runState) map[string]string {
+	if run == nil {
+		return nil
+	}
+	return map[string]string{
+		"conversation_id": run.conversationID,
+		"message_id":      run.messageID,
+		"run_id":          run.id,
+		"user_id":         run.user,
+		"channel":         run.channelKey,
+	}
+}
+
+func (p *Platform) notifyQuestionAsync(run *runState) {
 	url := strings.TrimSpace(p.questionNotifyURL)
 	if url == "" || run == nil {
 		return
 	}
-	body := map[string]any{
-		"event":           "question_request",
-		"run_id":          run.id,
-		"conversation_id": run.conversationID,
-		"message_id":      run.messageID,
-		"user_id":         run.user,
-		"channel":         run.channelKey,
-		"resume": map[string]any{
-			"method": http.MethodPost,
-			"path":   strings.TrimSuffix(p.path, "/") + "/chat-messages",
-			"body":   map[string]string{"run_id": run.id},
-		},
-		"payload": payload,
-	}
-	raw, err := json.Marshal(body)
+	raw, err := json.Marshal(questionNotifyBody(run))
 	if err != nil {
 		slog.Warn("chat-api: question notify marshal", "error", err)
 		return
 	}
 	secret := p.questionNotifySecret
+	headers := p.questionNotifyHeaders
 	timeout := p.questionNotifyTimeout
 	if timeout <= 0 {
 		timeout = defaultQuestionNotifyTimeout
@@ -130,11 +130,7 @@ func (p *Platform) notifyQuestionAsync(run *runState, payload any) {
 			slog.Warn("chat-api: question notify request", "error", err)
 			return
 		}
-		req.Header.Set("Content-Type", "application/json")
-		if secret != "" {
-			req.Header.Set("X-Chat-API-Notify-Secret", secret)
-		}
-		req.Header.Set("X-Chat-API-Event", "question_request")
+		applyQuestionNotifyHeaders(req, headers, secret)
 		resp, err := client.Do(req)
 		if err != nil {
 			slog.Warn("chat-api: question notify failed", "url", url, "error", err)
@@ -145,4 +141,22 @@ func (p *Platform) notifyQuestionAsync(run *runState, payload any) {
 			slog.Warn("chat-api: question notify non-2xx", "url", url, "status", resp.StatusCode)
 		}
 	}()
+}
+
+func applyQuestionNotifyHeaders(req *http.Request, headers map[string]string, secret string) {
+	if req == nil {
+		return
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if secret != "" && req.Header.Get("X-Chat-API-Notify-Secret") == "" {
+		req.Header.Set("X-Chat-API-Notify-Secret", secret)
+	}
+	if req.Header.Get("X-Chat-API-Event") == "" {
+		req.Header.Set("X-Chat-API-Event", "question_request")
+	}
 }

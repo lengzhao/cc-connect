@@ -82,22 +82,15 @@ type runEventSink interface {
 
 ```json
 {
-  "event": "question_request",
-  "run_id": "run_abc",
   "conversation_id": "conv_xxx",
   "message_id": "conv_xxx:1",
+  "run_id": "run_abc",
   "user_id": "user_001",
-  "channel": "default_channel",
-  "resume": {
-    "method": "POST",
-    "path": "/v1/chat-messages",
-    "body": { "run_id": "run_abc" }
-  },
-  "payload": { }
+  "channel": "default_channel"
 }
 ```
 
-Header：可选 `X-Chat-API-Notify-Secret`。
+Header：可选 `question_notify_headers` 自定义（如 ambre 的 `access_token` / `origin_channel` / `client_platform`）；未设置时默认 `Content-Type: application/json`、`X-Chat-API-Event: question_request`；`question_notify_secret` 为 `X-Chat-API-Notify-Secret` 的 shorthand。
 
 ### Config
 
@@ -105,6 +98,11 @@ Header：可选 `X-Chat-API-Notify-Secret`。
 question_notify_url = ""
 question_notify_secret = ""
 question_notify_timeout = "5s"
+
+# [projects.platforms.options.question_notify_headers]
+# access_token = "service-token"
+# origin_channel = "BACKEND"
+# client_platform = "WEB"
 ```
 
 ## Testing

@@ -241,7 +241,7 @@ message_id = "{conversation_id}:{turn_index}"
 - 普通正文缓存使用完整快照 + `replace:true`。
 - 同一 run 同时只允许一个活跃 SSE；已连接时 resume → `409 run already attached`。
 - run 不存在 / 非归属 user → 空的 `message_end`（客户端可改查 history）。
-- 断线后产生 `question_request` 时，若配置了 `question_notify_url`，异步 POST 通知 BFF（失败不影响 turn）。
+- 断线后产生 `question_request` 时，若配置了 `question_notify_url`，异步 POST 通知 BFF（失败不影响 turn）。Body 仅含 `conversation_id`、`message_id`、`run_id`、`user_id`、`channel`；事件类型见 header `X-Chat-API-Event`。
 
 详见 [断链重连设计](./plans/2026-07-24-chat-api-disconnect-resume-design.md)。
 
@@ -846,7 +846,8 @@ task_id = "X-Task-ID"
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
 | `max_runs` | `1000` | 内存 pending run 上限 |
 | `question_notify_url` | 空 | 断线后产生 `question_request` 时异步 POST 的 BFF URL；空则关闭 |
-| `question_notify_secret` | 空 | 可选；写入请求头 `X-Chat-API-Notify-Secret` |
+| `question_notify_headers` | 空 | 可选；webhook 自定义请求头（如 `access_token`、`origin_channel`） |
+| `question_notify_secret` | 空 | 可选 shorthand；未在 `question_notify_headers` 中设置时写入 `X-Chat-API-Notify-Secret` |
 | `question_notify_timeout` | `5s` | webhook HTTP 超时 |
 
 会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态（确认窗口不支持多副本共享）。

@@ -47,7 +47,7 @@
 - `message_id`: `{conversation_id}:{turn_index}`
 - Client disconnect does not stop the agent; use cancel endpoint to abort
 - Resume: `POST /chat-messages` with `{"run_id":"..."}` replays the last recoverable event while the turn is still running; if the run is missing, not owned by the user, or already finished, resume returns an empty `message_end` (client may query history)
-- Optional `question_notify_url` receives async webhook when `question_request` arrives while detached
+- Optional `question_notify_url` receives async webhook when `question_request` arrives while detached. Body fields: `conversation_id`, `message_id`, `run_id`, `user_id`, `channel`; event type is sent in `X-Chat-API-Event`.
 
 ## SSE events
 

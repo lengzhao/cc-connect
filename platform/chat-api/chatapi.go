@@ -54,6 +54,7 @@ type Platform struct {
 	debugUI                   bool
 	questionNotifyURL         string
 	questionNotifySecret      string
+	questionNotifyHeaders     map[string]string
 	questionNotifyTimeout     time.Duration
 
 	server   *http.Server
@@ -153,6 +154,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		debugUI:                   boolOption(opts, "debug_ui", false),
 		questionNotifyURL:         strings.TrimSpace(stringOption(opts, "question_notify_url", "")),
 		questionNotifySecret:      stringOption(opts, "question_notify_secret", ""),
+		questionNotifyHeaders:     stringStringMapOption(opts, "question_notify_headers"),
 		questionNotifyTimeout:     questionNotifyTimeout,
 	}
 	if p.autoGenerateNameMode != autoGenerateNameModeHeuristic && p.autoGenerateNameMode != autoGenerateNameModeAI {

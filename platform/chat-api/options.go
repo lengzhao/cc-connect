@@ -171,3 +171,47 @@ func boolOption(opts map[string]any, key string, fallback bool) bool {
 		return fallback
 	}
 }
+
+func stringStringMapOption(opts map[string]any, key string) map[string]string {
+	if opts == nil {
+		return nil
+	}
+	raw, ok := opts[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	src := map[string]any{}
+	switch v := raw.(type) {
+	case map[string]any:
+		src = v
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for k, val := range v {
+			name := strings.TrimSpace(k)
+			value := strings.TrimSpace(val)
+			if name == "" || value == "" {
+				continue
+			}
+			out[name] = value
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		name := strings.TrimSpace(k)
+		value := strings.TrimSpace(fmt.Sprint(v))
+		if name == "" || value == "" {
+			continue
+		}
+		out[name] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
