@@ -23,11 +23,13 @@ flowchart TB
   subgraph daemon [cc-connect]
     Eng[Engine]
     Hub[AskUserHub]
-    MCP[HTTP MCP Server]
+    MCP[Unix HTTP MCP Server]
     Spawn[claude stream-json]
   end
+  Bridge[cc-connect askuser-mcp-stdio]
   App[App]
-  Spawn -->|"tools/call mcp__ccconnect__cc_connect_ask_user"| MCP
+  Spawn -->|"stdio MCP tools/call"| Bridge
+  Bridge -->|"HTTP over Unix socket"| MCP
   MCP --> Hub
   Hub -->|"EventPermissionRequest + Questions"| Eng
   Eng -->|"SendAskQuestion"| App
@@ -72,18 +74,21 @@ Single question per call (matches Engine single-confirm). Multi-question remains
 
 ## Session routing
 
-- Daemon listens MCP on `<data_dir>/run/askuser-mcp.sock` (Unix socket; Claude Code connects via `socketPath`).
-- Per Claude spawn, write mcp config:
+- Daemon listens MCP on `<data_dir>/run/askuser-mcp.sock` (Unix socket).
+- Per Claude spawn, write a stdio MCP config. Claude talks to `cc-connect askuser-mcp-stdio`; the bridge forwards MCP JSON-RPC to the daemon over the Unix socket. This avoids relying on Claude Code `socketPath` support.
 
 ```json
 {
   "mcpServers": {
     "ccconnect": {
-      "type": "http",
-      "url": "http://localhost/mcp",
-      "socketPath": "<data_dir>/run/askuser-mcp.sock",
-      "headers": {
-        "X-CC-Session-Key": "<session_key>"
+      "type": "stdio",
+      "command": "cc-connect",
+      "args": [
+        "askuser-mcp-stdio"
+      ],
+      "env": {
+        "CC_CONNECT_ASKUSER_SOCKET": "<data_dir>/run/askuser-mcp.sock",
+        "CC_CONNECT_SESSION_KEY": "<session_key>"
       },
       "timeout": 3600000
     }

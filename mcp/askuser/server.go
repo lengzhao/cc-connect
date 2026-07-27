@@ -22,13 +22,13 @@ import (
 )
 
 const (
-	serverName       = "ccconnect"
-	protocolVers     = "2024-11-05"
-	toolName         = core.ToolCCConnectAskUser
-	defaultListen    = "127.0.0.1:0"
-	askUserMCPSocket   = "askuser-mcp.sock"
-	unixMCPHost        = "http://localhost"
-	maxUnixSocketPath  = 100 // conservative limit for macOS sun_path
+	serverName        = "ccconnect"
+	protocolVers      = "2024-11-05"
+	toolName          = core.ToolCCConnectAskUser
+	defaultListen     = "127.0.0.1:0"
+	askUserMCPSocket  = "askuser-mcp.sock"
+	unixMCPHost       = "http://localhost"
+	maxUnixSocketPath = 100 // conservative limit for macOS sun_path
 )
 
 func askUserSocketPath(dataDir string) (string, error) {
@@ -50,7 +50,6 @@ func askUserSocketPath(dataDir string) (string, error) {
 type Server struct {
 	hub        *core.AskUserHub
 	http       *http.Server
-	ln         net.Listener
 	baseURL    string
 	socketPath string
 	mu         sync.Mutex
@@ -98,7 +97,7 @@ func StartOn(hub *core.AskUserHub, addr string) (*Server, error) {
 }
 
 func serve(hub *core.AskUserHub, ln net.Listener, baseURL, socketPath string) (*Server, error) {
-	s := &Server{hub: hub, ln: ln, baseURL: baseURL, socketPath: socketPath}
+	s := &Server{hub: hub, baseURL: baseURL, socketPath: socketPath}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", s.handleMCP)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -119,7 +118,7 @@ func serve(hub *core.AskUserHub, ln net.Listener, baseURL, socketPath string) (*
 	return s, nil
 }
 
-// MCPURL is the Streamable HTTP endpoint Claude should call.
+// MCPURL is the Streamable HTTP endpoint path used by local bridge clients.
 func (s *Server) MCPURL() string {
 	if s == nil {
 		return ""

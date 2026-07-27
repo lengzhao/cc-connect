@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.5 (2026-07-27)
+
+### Fixed
+- **ask-user MCP**: Claude Code now receives a stdio MCP config (`cc-connect askuser-mcp-stdio`), and the bridge forwards tool calls to cc-connect over the Unix socket. This avoids relying on Claude Code `socketPath` support while keeping the daemon's local interface on Unix socket; the bridge session key is passed via MCP env and config files are written `0600`.
+
 ## v9.1.4 (2026-07-27)
 
 ### Fixed

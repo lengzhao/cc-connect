@@ -881,10 +881,11 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "auto" | "bypassP
 
 # Structured ask source for Claude Code (chat-api SSE question_request unchanged).
 # Claude Code 结构化提问来源（chat-api SSE question_request 契约不变）：
-#   mcp    (default) — resident HTTP MCP tool cc_connect_ask_user on Unix socket
-#                      <data_dir>/run/askuser-mcp.sock; preserves event / value /
-#                      tag / allow_custom_input. Disallows native AskUserQuestion
-#                      (Claude strips cc-connect extensions there).
+#   mcp    (default) — stdio MCP tool cc_connect_ask_user. The stdio bridge
+#                      forwards calls to cc-connect over
+#                      <data_dir>/run/askuser-mcp.sock, preserving event /
+#                      value / tag / allow_custom_input. Disallows native
+#                      AskUserQuestion (Claude strips cc-connect extensions there).
 #   native — legacy AskUserQuestion permission path (extensions may be dropped).
 #   hybrid — prefer MCP; if MCP/session unavailable at spawn, fall back to native.
 # ask_user_mode = "mcp"

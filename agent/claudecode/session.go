@@ -234,7 +234,7 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		rootDowngradeWarning = "⚠️ Running as root: bypassPermissions mode is not supported and has been downgraded to auto. The agent may still pause on high-risk operations."
 	}
 
-	useMCPAsk := shouldUseMCPAsk(askUserMode, askMCPURL, askSessionKey, askHub)
+	useMCPAsk := shouldUseMCPAsk(askUserMode, askMCPURL, askMCPSocketPath, askSessionKey, askHub)
 	if useMCPAsk {
 		disallowedTools = ensureToolListed(disallowedTools, "AskUserQuestion")
 		// Only extend an existing allowlist; an empty allowlist means "all tools".
@@ -320,7 +320,7 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 			base = os.TempDir()
 		}
 		mcpConfigPath = filepath.Join(base, "agent-prompts", "mcp-ask-"+sanitizeSessionFile(askSessionKey)+".json")
-		if err := writeAskUserMCPConfig(mcpConfigPath, askMCPURL, askMCPSocketPath, askSessionKey); err != nil {
+		if err := writeAskUserMCPConfig(mcpConfigPath, askMCPSocketPath, askSessionKey); err != nil {
 			cancel()
 			return nil, fmt.Errorf("claudeSession: write mcp config: %w", err)
 		}
@@ -483,8 +483,8 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 	return cs, nil
 }
 
-func shouldUseMCPAsk(mode, mcpURL, sessionKey string, hub *core.AskUserHub) bool {
-	ready := mcpURL != "" && sessionKey != "" && hub != nil
+func shouldUseMCPAsk(mode, mcpURL, socketPath, sessionKey string, hub *core.AskUserHub) bool {
+	ready := strings.TrimSpace(socketPath) != "" && sessionKey != "" && hub != nil
 	switch mode {
 	case "native":
 		return false
@@ -519,8 +519,12 @@ func sanitizeSessionFile(key string) string {
 	return s
 }
 
-func writeAskUserMCPConfig(path, mcpURL, socketPath, sessionKey string) error {
-	return askuser.WriteMCPConfig(path, mcpURL, socketPath, sessionKey)
+func writeAskUserMCPConfig(path, socketPath, sessionKey string) error {
+	command, err := os.Executable()
+	if err != nil || strings.TrimSpace(command) == "" {
+		command = "cc-connect"
+	}
+	return askuser.WriteMCPConfig(path, command, socketPath, sessionKey)
 }
 
 // EmitAskUser implements core.AskUserEmitter for MCP-backed asks.

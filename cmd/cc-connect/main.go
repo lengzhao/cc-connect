@@ -241,6 +241,9 @@ func main() {
 		case "agent-sid":
 			runAgentSID(os.Args[2:])
 			return
+		case "askuser-mcp-stdio":
+			runAskUserMCPStdio(os.Args[2:])
+			return
 		case "daemon":
 			runDaemon(os.Args[2:])
 			return

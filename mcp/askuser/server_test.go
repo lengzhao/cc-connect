@@ -104,46 +104,6 @@ func TestToolDescriptor_HasDescriptionsAndEnums(t *testing.T) {
 	}
 }
 
-func TestWriteMCPConfig_SessionHeader(t *testing.T) {
-	dir := t.TempDir()
-	path := dir + "/mcp.json"
-	if err := WriteMCPConfig(path, "http://127.0.0.1:9/mcp", "", "proj:chat:u1"); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(b, []byte(core.SessionKeyHeader)) || !bytes.Contains(b, []byte("proj:chat:u1")) {
-		t.Fatalf("config=%s", b)
-	}
-	if !bytes.Contains(b, []byte(`"timeout": 3600000`)) {
-		t.Fatalf("missing timeout: %s", b)
-	}
-	if bytes.Contains(b, []byte("socketPath")) {
-		t.Fatalf("tcp config must not include socketPath: %s", b)
-	}
-}
-
-func TestWriteMCPConfig_UnixSocket(t *testing.T) {
-	dir := t.TempDir()
-	path := dir + "/mcp.json"
-	sock := dir + "/askuser-mcp.sock"
-	if err := WriteMCPConfig(path, "http://localhost/mcp", sock, "proj:chat:u1"); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(b, []byte(`"url": "http://localhost/mcp"`)) {
-		t.Fatalf("config=%s", b)
-	}
-	if !bytes.Contains(b, []byte(`"socketPath": "`+sock+`"`)) {
-		t.Fatalf("missing socketPath: %s", b)
-	}
-}
-
 func TestStartUnix_ServesMCP(t *testing.T) {
 	hub := core.NewAskUserHub()
 	dir := t.TempDir()

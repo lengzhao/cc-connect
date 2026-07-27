@@ -1,6 +1,8 @@
 package claudecode
 
 import (
+	"bytes"
+	"os"
 	"testing"
 
 	"github.com/chenhg5/cc-connect/core"
@@ -24,20 +26,38 @@ func TestNormalizeAskUserMode(t *testing.T) {
 
 func TestShouldUseMCPAsk(t *testing.T) {
 	hub := core.NewAskUserHub()
-	if shouldUseMCPAsk("native", "http://x/mcp", "sk", hub) {
+	if shouldUseMCPAsk("native", "http://x/mcp", "/tmp/ask.sock", "sk", hub) {
 		t.Fatal("native must not use MCP")
 	}
-	if !shouldUseMCPAsk("mcp", "http://x/mcp", "sk", hub) {
+	if !shouldUseMCPAsk("mcp", "http://x/mcp", "/tmp/ask.sock", "sk", hub) {
 		t.Fatal("mcp ready should use MCP")
 	}
-	if shouldUseMCPAsk("mcp", "", "sk", hub) {
-		t.Fatal("mcp without URL must not use MCP")
+	if !shouldUseMCPAsk("mcp", "", "/tmp/ask.sock", "sk", hub) {
+		t.Fatal("mcp with unix socket should use MCP")
 	}
-	if !shouldUseMCPAsk("hybrid", "http://x/mcp", "sk", hub) {
+	if shouldUseMCPAsk("mcp", "http://x/mcp", "", "sk", hub) {
+		t.Fatal("stdio mcp without socket must not use MCP")
+	}
+	if !shouldUseMCPAsk("hybrid", "http://x/mcp", "/tmp/ask.sock", "sk", hub) {
 		t.Fatal("hybrid ready should use MCP")
 	}
-	if shouldUseMCPAsk("hybrid", "http://x/mcp", "", hub) {
+	if shouldUseMCPAsk("hybrid", "http://x/mcp", "/tmp/ask.sock", "", hub) {
 		t.Fatal("hybrid without session key falls back to native")
+	}
+}
+
+func TestWriteAskUserMCPConfig_Stdio(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/mcp.json"
+	if err := writeAskUserMCPConfig(path, "/tmp/x.sock", "sk"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if !bytes.Contains(b, []byte(`"type": "stdio"`)) || !bytes.Contains(b, []byte(`"askuser-mcp-stdio"`)) {
+		t.Fatalf("stdio config=%s", b)
+	}
+	if bytes.Contains(b, []byte("socketPath")) || bytes.Contains(b, []byte(`"url"`)) {
+		t.Fatalf("stdio config must not use http/socketPath: %s", b)
 	}
 }
 
