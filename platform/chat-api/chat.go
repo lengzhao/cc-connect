@@ -225,7 +225,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user, runID string) {
 	run := p.pending.get(runID)
 	if run == nil || run.user != user {
-		writeErr(w, http.StatusNotFound, "not found")
+		p.writeResumeMessageEnd(w)
 		return
 	}
 
@@ -252,6 +252,15 @@ func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user
 
 	rc := run.replyContext()
 	p.serveRunSSE(r.Context(), run, sse, run.sessionKey, user, run.channelKey, rc)
+}
+
+func (p *Platform) writeResumeMessageEnd(w http.ResponseWriter) {
+	sse, err := newSSEWriter(w)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	_ = sse.Event("message_end", map[string]any{})
 }
 
 func (p *Platform) serveRunSSE(reqCtx context.Context, run *runState, sse *sseWriter, engineSessionKey, user, channelKey string, rc *replyContext) {

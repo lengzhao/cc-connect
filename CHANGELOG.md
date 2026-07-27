@@ -1,5 +1,13 @@
 ﻿# Changelog
 
+## v9.1.4 (2026-07-27)
+
+### Fixed
+- **chat-api SSE resume**: when a reconnect target is missing, not owned by the user, or already finished, resume returns an empty `message_end` instead of `404 not found`, so clients can close the SSE stream cleanly and fall back to history. See `docs/plans/2026-07-24-chat-api-disconnect-resume-design.md`.
+
+### Changed
+- **ask-user MCP**: the resident `cc_connect_ask_user` server now listens on `<data_dir>/run/askuser-mcp.sock` (Unix socket) instead of ephemeral `127.0.0.1:<port>`. Claude Code MCP config includes `socketPath`; long `data_dir` paths fall back to a short temp socket on macOS. See `docs/plans/2026-07-23-cc-connect-ask-user-mcp-design.md`.
+
 ## v10.1.33 (2026-07-21)
 
 ### Fixed

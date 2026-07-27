@@ -4102,14 +4102,14 @@ func (e *Engine) getOrCreateWorkspaceAgent(workspace string) (Agent, *SessionMan
 	// Propagate runtime MCP ask-user wiring. Workspace agents are created
 	// lazily from config options, but the MCP URL/Hub are injected at startup.
 	if src, ok := e.agent.(interface {
-		AskUserSupport() (string, *AskUserHub)
+		AskUserSupport() (string, string, *AskUserHub)
 	}); ok {
 		if dst, ok := agent.(interface {
-			SetAskUserSupport(string, *AskUserHub)
+			SetAskUserSupport(string, string, *AskUserHub)
 		}); ok {
-			mcpURL, hub := src.AskUserSupport()
+			mcpURL, socketPath, hub := src.AskUserSupport()
 			if mcpURL != "" && hub != nil {
-				dst.SetAskUserSupport(mcpURL, hub)
+				dst.SetAskUserSupport(mcpURL, socketPath, hub)
 			}
 		}
 	}

@@ -237,10 +237,10 @@ message_id = "{conversation_id}:{turn_index}"
 ```
 
 - 断开 SSE **不**停止 agent；断线后切到虚拟 sink，只缓存**最后一条**可恢复事件（`text_delta` / `thinking_delta` / `question_request` / `permission_request`）。
-- 重连后：若有缓存则立即补发该事件；若 run 不存在、非归属 user、或 turn 已在断线期间结束，返回 `404 not found`（改查 history）；若重连时 turn 仍在跑、随后结束，正常收 `message_end`。
+- 重连后：若有缓存则立即补发该事件；若 run 不存在、非归属 user、或 turn 已在断线期间结束，返回空的 `message_end`（客户端可改查 history）；若重连时 turn 仍在跑、随后结束，正常收 `message_end`。
 - 普通正文缓存使用完整快照 + `replace:true`。
 - 同一 run 同时只允许一个活跃 SSE；已连接时 resume → `409 run already attached`。
-- run 不存在 / 非归属 user → `404 not found`（改查 history）。
+- run 不存在 / 非归属 user → 空的 `message_end`（客户端可改查 history）。
 - 断线后产生 `question_request` 时，若配置了 `question_notify_url`，异步 POST 通知 BFF（失败不影响 turn）。
 
 详见 [断链重连设计](./plans/2026-07-24-chat-api-disconnect-resume-design.md)。
@@ -712,7 +712,7 @@ Accept: text/event-stream
 |------|------|
 | run 仍在跑 + 有缓存事件 | 先补发最后一条可恢复事件，再继续 SSE |
 | run 仍在跑 + 无缓存 | 直接挂载后续增量 |
-| 断线期间已结束 / run 不存在 / 非归属 user | `404 not found`（改查 history） |
+| 断线期间已结束 / run 不存在 / 非归属 user | 空的 `message_end`（客户端可改查 history） |
 | 已有活跃 SSE | `409 run already attached` |
 
 ### 4.9 取消轮次

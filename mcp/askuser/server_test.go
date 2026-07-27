@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -106,7 +107,7 @@ func TestToolDescriptor_HasDescriptionsAndEnums(t *testing.T) {
 func TestWriteMCPConfig_SessionHeader(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/mcp.json"
-	if err := WriteMCPConfig(path, "http://127.0.0.1:9/mcp", "proj:chat:u1"); err != nil {
+	if err := WriteMCPConfig(path, "http://127.0.0.1:9/mcp", "", "proj:chat:u1"); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(path)
@@ -119,6 +120,52 @@ func TestWriteMCPConfig_SessionHeader(t *testing.T) {
 	if !bytes.Contains(b, []byte(`"timeout": 3600000`)) {
 		t.Fatalf("missing timeout: %s", b)
 	}
+	if bytes.Contains(b, []byte("socketPath")) {
+		t.Fatalf("tcp config must not include socketPath: %s", b)
+	}
+}
+
+func TestWriteMCPConfig_UnixSocket(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/mcp.json"
+	sock := dir + "/askuser-mcp.sock"
+	if err := WriteMCPConfig(path, "http://localhost/mcp", sock, "proj:chat:u1"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"url": "http://localhost/mcp"`)) {
+		t.Fatalf("config=%s", b)
+	}
+	if !bytes.Contains(b, []byte(`"socketPath": "`+sock+`"`)) {
+		t.Fatalf("missing socketPath: %s", b)
+	}
+}
+
+func TestStartUnix_ServesMCP(t *testing.T) {
+	hub := core.NewAskUserHub()
+	dir := t.TempDir()
+	srv, err := StartUnix(hub, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close(context.Background())
+
+	if srv.SocketPath() == "" {
+		t.Fatal("expected socket path")
+	}
+	if srv.MCPURL() != "http://localhost/mcp" {
+		t.Fatalf("MCPURL=%q", srv.MCPURL())
+	}
+	if _, err := os.Stat(srv.SocketPath()); err != nil {
+		t.Fatalf("socket missing: %v", err)
+	}
+
+	postRPCUnix(t, srv.SocketPath(), "", map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{},
+	})
 }
 
 func TestParseClientFlowArguments(t *testing.T) {
@@ -371,7 +418,24 @@ func TestServer_ToolsCallAsk(t *testing.T) {
 	}
 }
 
+func postRPCUnix(t *testing.T, socketPath, sessionKey string, body any) []byte {
+	t.Helper()
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
+		},
+	}
+	return postRPCWithClient(t, client, "http://localhost/mcp", sessionKey, body)
+}
+
 func postRPC(t *testing.T, url, sessionKey string, body any) []byte {
+	t.Helper()
+	return postRPCWithClient(t, http.DefaultClient, url, sessionKey, body)
+}
+
+func postRPCWithClient(t *testing.T, client *http.Client, url, sessionKey string, body any) []byte {
 	t.Helper()
 	b, _ := json.Marshal(body)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
@@ -383,7 +447,7 @@ func postRPC(t *testing.T, url, sessionKey string, body any) []byte {
 	if sessionKey != "" {
 		req.Header.Set(core.SessionKeyHeader, sessionKey)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

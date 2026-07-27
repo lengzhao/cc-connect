@@ -4,12 +4,16 @@ package askuser
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,24 +22,67 @@ import (
 )
 
 const (
-	serverName    = "ccconnect"
-	protocolVers  = "2024-11-05"
-	toolName      = core.ToolCCConnectAskUser
-	defaultListen = "127.0.0.1:0"
+	serverName       = "ccconnect"
+	protocolVers     = "2024-11-05"
+	toolName         = core.ToolCCConnectAskUser
+	defaultListen    = "127.0.0.1:0"
+	askUserMCPSocket   = "askuser-mcp.sock"
+	unixMCPHost        = "http://localhost"
+	maxUnixSocketPath  = 100 // conservative limit for macOS sun_path
 )
+
+func askUserSocketPath(dataDir string) (string, error) {
+	primary := filepath.Join(dataDir, "run", askUserMCPSocket)
+	if len(primary) <= maxUnixSocketPath {
+		return primary, nil
+	}
+	sum := sha256.Sum256([]byte(primary))
+	short := filepath.Join(os.TempDir(), "cc-connect-askuser-"+hex.EncodeToString(sum[:8])+".sock")
+	if len(short) > maxUnixSocketPath {
+		return "", fmt.Errorf("askuser: cannot derive unix socket path under %q", dataDir)
+	}
+	slog.Warn("askuser mcp: data_dir path too long for run/askuser-mcp.sock, using temp socket",
+		"data_dir", dataDir, "socket", short)
+	return short, nil
+}
 
 // Server is a resident MCP HTTP endpoint bound to an AskUserHub.
 type Server struct {
-	hub     *core.AskUserHub
-	http    *http.Server
-	ln      net.Listener
-	baseURL string
-	mu      sync.Mutex
+	hub        *core.AskUserHub
+	http       *http.Server
+	ln         net.Listener
+	baseURL    string
+	socketPath string
+	mu         sync.Mutex
 }
 
-// Start listens on 127.0.0.1:0 and serves /mcp.
+// Start listens on 127.0.0.1:0 and serves /mcp (tests only).
 func Start(hub *core.AskUserHub) (*Server, error) {
 	return StartOn(hub, defaultListen)
+}
+
+// StartUnix listens on <dataDir>/run/askuser-mcp.sock and serves /mcp.
+func StartUnix(hub *core.AskUserHub, dataDir string) (*Server, error) {
+	if dataDir == "" {
+		return nil, fmt.Errorf("askuser: data dir required")
+	}
+	sockPath, err := askUserSocketPath(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(sockPath), 0o755); err != nil {
+		return nil, fmt.Errorf("askuser: create socket dir: %w", err)
+	}
+	_ = os.Remove(sockPath)
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		return nil, fmt.Errorf("askuser: listen unix: %w", err)
+	}
+	if err := os.Chmod(sockPath, 0o600); err != nil {
+		_ = ln.Close()
+		return nil, fmt.Errorf("askuser: chmod socket: %w", err)
+	}
+	return serve(hub, ln, unixMCPHost, sockPath)
 }
 
 // StartOn listens on addr (e.g. "127.0.0.1:0").
@@ -47,7 +94,11 @@ func StartOn(hub *core.AskUserHub, addr string) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("askuser: listen: %w", err)
 	}
-	s := &Server{hub: hub, ln: ln}
+	return serve(hub, ln, "http://"+ln.Addr().String(), "")
+}
+
+func serve(hub *core.AskUserHub, ln net.Listener, baseURL, socketPath string) (*Server, error) {
+	s := &Server{hub: hub, ln: ln, baseURL: baseURL, socketPath: socketPath}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", s.handleMCP)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -55,13 +106,16 @@ func StartOn(hub *core.AskUserHub, addr string) (*Server, error) {
 		_, _ = w.Write([]byte("ok"))
 	})
 	s.http = &http.Server{Handler: mux}
-	s.baseURL = "http://" + ln.Addr().String()
 	go func() {
 		if err := s.http.Serve(ln); err != nil && err != http.ErrServerClosed {
 			slog.Error("askuser mcp: serve error", "error", err)
 		}
 	}()
-	slog.Info("askuser mcp: listening", "url", s.MCPURL())
+	if socketPath != "" {
+		slog.Info("askuser mcp: listening", "socket", socketPath, "url", s.MCPURL())
+	} else {
+		slog.Info("askuser mcp: listening", "url", s.MCPURL())
+	}
 	return s, nil
 }
 
@@ -79,6 +133,14 @@ func (s *Server) BaseURL() string {
 		return ""
 	}
 	return s.baseURL
+}
+
+// SocketPath returns the Unix socket path when listening on unix; empty for TCP.
+func (s *Server) SocketPath() string {
+	if s == nil {
+		return ""
+	}
+	return s.socketPath
 }
 
 // Close shuts down the HTTP server.

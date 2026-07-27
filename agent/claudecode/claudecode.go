@@ -76,6 +76,7 @@ type Agent struct {
 	// Ask-user MCP support (ask_user_mode = mcp|native|hybrid).
 	askUserMode          string
 	askMCPURL            string
+	askMCPSocketPath     string
 	askHub               *core.AskUserHub
 	pendingAskSessionKey string
 
@@ -294,19 +295,20 @@ func normalizeAskUserMode(raw string) string {
 }
 
 // SetAskUserSupport configures MCP-backed structured ask (called from main).
-func (a *Agent) SetAskUserSupport(mcpURL string, hub *core.AskUserHub) {
+func (a *Agent) SetAskUserSupport(mcpURL, socketPath string, hub *core.AskUserHub) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.askMCPURL = strings.TrimSpace(mcpURL)
+	a.askMCPSocketPath = strings.TrimSpace(socketPath)
 	a.askHub = hub
 }
 
 // AskUserSupport snapshots the runtime MCP ask-user wiring so Engine can
 // propagate it to lazily-created multi-workspace agent instances.
-func (a *Agent) AskUserSupport() (string, *core.AskUserHub) {
+func (a *Agent) AskUserSupport() (string, string, *core.AskUserHub) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.askMCPURL, a.askHub
+	return a.askMCPURL, a.askMCPSocketPath, a.askHub
 }
 
 // PrepareAskUserSession implements core.AskUserSessionPreparer.
@@ -573,12 +575,13 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	disableVerbose := a.routerURL != ""
 	askMode := a.askUserMode
 	askURL := a.askMCPURL
+	askSocket := a.askMCPSocketPath
 	askHub := a.askHub
 	askSessionKey := a.pendingAskSessionKey
 	a.pendingAskSessionKey = ""
 	a.mu.Unlock()
 
-	return newClaudeSession(ctx, workDir, a.cmd, a.cliExtraArgs, a.cmdArgsFlag, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt, tools, disTools, pluginDirs, extraEnv, platformPrompt, disableVerbose, a.spawnOpts, maxTok, a.ccDataDir, askMode, askURL, askSessionKey, askHub)
+	return newClaudeSession(ctx, workDir, a.cmd, a.cliExtraArgs, a.cmdArgsFlag, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt, tools, disTools, pluginDirs, extraEnv, platformPrompt, disableVerbose, a.spawnOpts, maxTok, a.ccDataDir, askMode, askURL, askSocket, askSessionKey, askHub)
 }
 
 func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, error) {

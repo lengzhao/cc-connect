@@ -493,17 +493,19 @@ func (a *runAsTestAgent) GetRunAsEnv() []string {
 
 type askUserSupportTestAgent struct {
 	*namedTestAgent
-	mcpURL string
-	hub    *AskUserHub
+	mcpURL     string
+	socketPath string
+	hub        *AskUserHub
 }
 
-func (a *askUserSupportTestAgent) SetAskUserSupport(mcpURL string, hub *AskUserHub) {
+func (a *askUserSupportTestAgent) SetAskUserSupport(mcpURL, socketPath string, hub *AskUserHub) {
 	a.mcpURL = mcpURL
+	a.socketPath = socketPath
 	a.hub = hub
 }
 
-func (a *askUserSupportTestAgent) AskUserSupport() (string, *AskUserHub) {
-	return a.mcpURL, a.hub
+func (a *askUserSupportTestAgent) AskUserSupport() (string, string, *AskUserHub) {
+	return a.mcpURL, a.socketPath, a.hub
 }
 
 // TestMultiWorkspaceAgent_PropagatesRunAsUser is a regression guard for the
@@ -611,7 +613,8 @@ func TestMultiWorkspaceAgent_PropagatesAskUserSupport(t *testing.T) {
 	hub := NewAskUserHub()
 	parent := &askUserSupportTestAgent{
 		namedTestAgent: &namedTestAgent{name: agentName},
-		mcpURL:         "http://127.0.0.1:12345/mcp",
+		mcpURL:         "http://localhost/mcp",
+		socketPath:     "/tmp/askuser-mcp.sock",
 		hub:            hub,
 	}
 	e := NewEngine("test", parent, nil, "", LangEnglish)
@@ -625,6 +628,9 @@ func TestMultiWorkspaceAgent_PropagatesAskUserSupport(t *testing.T) {
 	}
 	if created.mcpURL != parent.mcpURL {
 		t.Fatalf("workspace ask MCP URL = %q, want %q", created.mcpURL, parent.mcpURL)
+	}
+	if created.socketPath != parent.socketPath {
+		t.Fatalf("workspace ask MCP socket = %q, want %q", created.socketPath, parent.socketPath)
 	}
 	if created.hub != hub {
 		t.Fatalf("workspace ask hub = %p, want %p", created.hub, hub)

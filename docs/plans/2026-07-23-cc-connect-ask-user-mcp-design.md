@@ -72,7 +72,7 @@ Single question per call (matches Engine single-confirm). Multi-question remains
 
 ## Session routing
 
-- Daemon listens MCP on `127.0.0.1:<ephemeral>` (or `data_dir` unix-friendly TCP).
+- Daemon listens MCP on `<data_dir>/run/askuser-mcp.sock` (Unix socket; Claude Code connects via `socketPath`).
 - Per Claude spawn, write mcp config:
 
 ```json
@@ -80,7 +80,8 @@ Single question per call (matches Engine single-confirm). Multi-question remains
   "mcpServers": {
     "ccconnect": {
       "type": "http",
-      "url": "http://127.0.0.1:PORT/mcp",
+      "url": "http://localhost/mcp",
+      "socketPath": "<data_dir>/run/askuser-mcp.sock",
       "headers": {
         "X-CC-Session-Key": "<session_key>"
       },

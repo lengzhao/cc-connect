@@ -44,11 +44,14 @@ func TestShouldUseMCPAsk(t *testing.T) {
 func TestAgent_AskUserSupportSnapshot(t *testing.T) {
 	hub := core.NewAskUserHub()
 	a := &Agent{}
-	a.SetAskUserSupport("  http://127.0.0.1:12345/mcp  ", hub)
+	a.SetAskUserSupport("  http://127.0.0.1:12345/mcp  ", "/tmp/ask.sock", hub)
 
-	gotURL, gotHub := a.AskUserSupport()
+	gotURL, gotSocket, gotHub := a.AskUserSupport()
 	if gotURL != "http://127.0.0.1:12345/mcp" {
 		t.Fatalf("AskUserSupport URL = %q", gotURL)
+	}
+	if gotSocket != "/tmp/ask.sock" {
+		t.Fatalf("AskUserSupport socket = %q", gotSocket)
 	}
 	if gotHub != hub {
 		t.Fatalf("AskUserSupport hub = %p, want %p", gotHub, hub)

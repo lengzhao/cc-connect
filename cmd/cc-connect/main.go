@@ -376,7 +376,7 @@ func main() {
 	effectiveWorkDirs := make([]string, 0, len(cfg.Projects))
 
 	askHub := core.NewAskUserHub()
-	askMCP, err := askuser.Start(askHub)
+	askMCP, err := askuser.StartUnix(askHub, cfg.DataDir)
 	if err != nil {
 		slog.Error("failed to start ask-user MCP server", "error", err)
 		os.Exit(1)
@@ -406,9 +406,9 @@ func main() {
 			os.Exit(1)
 		}
 		if cfgAsk, ok := agent.(interface {
-			SetAskUserSupport(mcpURL string, hub *core.AskUserHub)
+			SetAskUserSupport(mcpURL, socketPath string, hub *core.AskUserHub)
 		}); ok {
-			cfgAsk.SetAskUserSupport(askMCP.MCPURL(), askHub)
+			cfgAsk.SetAskUserSupport(askMCP.MCPURL(), askMCP.SocketPath(), askHub)
 		}
 
 		providerWiring := wireAgentProviders(agent, proj.Agent)

@@ -306,7 +306,7 @@ func TestResumeOnlyKeepsLastRecoverableEvent(t *testing.T) {
 	}
 }
 
-func TestResumeAfterFinishedReturnsNotFound(t *testing.T) {
+func TestResumeAfterFinishedReturnsMessageEnd(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
 	bindTestSessions(t, p)
 
@@ -343,12 +343,15 @@ func TestResumeAfterFinishedReturnsNotFound(t *testing.T) {
 	resumeReq.Header.Set("Accept", "text/event-stream")
 	resumeRec := httptest.NewRecorder()
 	p.routes().ServeHTTP(resumeRec, resumeReq)
-	if resumeRec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d body=%s, want 404 after finished run deleted", resumeRec.Code, resumeRec.Body.String())
+	if resumeRec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200 after finished run deleted", resumeRec.Code, resumeRec.Body.String())
+	}
+	if !hasEvent(parseSSE(resumeRec.Body.String()), "message_end") {
+		t.Fatalf("missing message_end: %s", resumeRec.Body.String())
 	}
 }
 
-func TestResumeUnknownRunReturnsNotFound(t *testing.T) {
+func TestResumeUnknownRunReturnsMessageEnd(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages",
 		strings.NewReader(`{"run_id":"run_does_not_exist"}`))
@@ -358,12 +361,15 @@ func TestResumeUnknownRunReturnsNotFound(t *testing.T) {
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if !hasEvent(parseSSE(rec.Body.String()), "message_end") {
+		t.Fatalf("missing message_end: %s", rec.Body.String())
 	}
 }
 
-func TestResumeForeignRunReturnsNotFound(t *testing.T) {
+func TestResumeForeignRunReturnsMessageEnd(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	run := newRunState("run_foreign", "other_user", "ch", "sk", "c", "c:0", p, nil, time.Now().Add(time.Minute))
 	if !p.pending.create(run) {
@@ -379,8 +385,11 @@ func TestResumeForeignRunReturnsNotFound(t *testing.T) {
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if !hasEvent(parseSSE(rec.Body.String()), "message_end") {
+		t.Fatalf("missing message_end: %s", rec.Body.String())
 	}
 }
 

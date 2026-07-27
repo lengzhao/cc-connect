@@ -10,21 +10,26 @@ import (
 )
 
 // WriteMCPConfig writes a Claude Code mcp config JSON for one session.
-func WriteMCPConfig(path, mcpURL, sessionKey string) error {
+// When socketPath is set, Claude Code connects via Unix socket (url host is ignored).
+func WriteMCPConfig(path, mcpURL, socketPath, sessionKey string) error {
 	if path == "" || mcpURL == "" || sessionKey == "" {
 		return fmt.Errorf("askuser: path, url, and session key required")
 	}
+	entry := map[string]any{
+		"type": "http",
+		"url":  mcpURL,
+		"headers": map[string]string{
+			core.SessionKeyHeader: sessionKey,
+		},
+		// 1 hour — user may take long on confirm cards.
+		"timeout": 3600000,
+	}
+	if socketPath != "" {
+		entry["socketPath"] = socketPath
+	}
 	cfg := map[string]any{
 		"mcpServers": map[string]any{
-			serverName: map[string]any{
-				"type": "http",
-				"url":  mcpURL,
-				"headers": map[string]string{
-					core.SessionKeyHeader: sessionKey,
-				},
-				// 1 hour — user may take long on confirm cards.
-				"timeout": 3600000,
-			},
+			serverName: entry,
 		},
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
