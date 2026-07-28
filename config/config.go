@@ -86,6 +86,9 @@ var ConfigPath string
 
 type Config struct {
 	DataDir        string `toml:"data_dir"` // session store directory, default ~/.cc-connect
+	// AskUserMCPSocket overrides the resident ask-user MCP Unix socket path.
+	// Empty uses <data_dir>/run/askuser-mcp.sock (with a short temp fallback when the path is too long for macOS).
+	AskUserMCPSocket string `toml:"ask_user_mcp_socket,omitempty"`
 	AttachmentSend string `toml:"attachment_send"`
 	// Quiet is legacy: when true and [display] does not set thinking_messages / tool_messages,
 	// engines behave as if those flags were false. Per-project quiet overrides when set.

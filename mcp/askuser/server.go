@@ -31,7 +31,17 @@ const (
 	maxUnixSocketPath = 100 // conservative limit for macOS sun_path
 )
 
-func askUserSocketPath(dataDir string) (string, error) {
+// ResolveSocketPath returns the Unix socket path for the resident ask-user MCP server.
+// When configured is non-empty it is used as-is; otherwise the default is
+// <dataDir>/run/askuser-mcp.sock with a short temp fallback when that path is too long.
+func ResolveSocketPath(dataDir, configured string) (string, error) {
+	configured = strings.TrimSpace(configured)
+	if configured != "" {
+		if len(configured) > maxUnixSocketPath {
+			return "", fmt.Errorf("askuser: configured socket path too long (%d > %d): %q", len(configured), maxUnixSocketPath, configured)
+		}
+		return configured, nil
+	}
 	primary := filepath.Join(dataDir, "run", askUserMCPSocket)
 	if len(primary) <= maxUnixSocketPath {
 		return primary, nil
@@ -60,12 +70,13 @@ func Start(hub *core.AskUserHub) (*Server, error) {
 	return StartOn(hub, defaultListen)
 }
 
-// StartUnix listens on <dataDir>/run/askuser-mcp.sock and serves /mcp.
-func StartUnix(hub *core.AskUserHub, dataDir string) (*Server, error) {
+// StartUnix listens on the resolved Unix socket path and serves /mcp.
+// When configuredSocket is empty, the default is <dataDir>/run/askuser-mcp.sock.
+func StartUnix(hub *core.AskUserHub, dataDir, configuredSocket string) (*Server, error) {
 	if dataDir == "" {
 		return nil, fmt.Errorf("askuser: data dir required")
 	}
-	sockPath, err := askUserSocketPath(dataDir)
+	sockPath, err := ResolveSocketPath(dataDir, configuredSocket)
 	if err != nil {
 		return nil, err
 	}

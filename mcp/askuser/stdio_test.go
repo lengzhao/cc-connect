@@ -50,7 +50,7 @@ func TestWriteMCPConfig_StdioBridge(t *testing.T) {
 
 func TestServeStdio_ProxiesToolsListOverUnixSocket(t *testing.T) {
 	hub := core.NewAskUserHub()
-	srv, err := StartUnix(hub, t.TempDir())
+	srv, err := StartUnix(hub, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestServeStdio_ProxiesToolsListOverUnixSocket(t *testing.T) {
 
 func TestServeStdio_ProxiesContentLengthFramedMessage(t *testing.T) {
 	hub := core.NewAskUserHub()
-	srv, err := StartUnix(hub, t.TempDir())
+	srv, err := StartUnix(hub, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestServeStdio_ProxiesContentLengthFramedMessage(t *testing.T) {
 
 func TestServeStdio_ProxiesAskUserToolCall(t *testing.T) {
 	hub := core.NewAskUserHub()
-	srv, err := StartUnix(hub, t.TempDir())
+	srv, err := StartUnix(hub, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

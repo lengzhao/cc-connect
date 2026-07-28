@@ -74,7 +74,8 @@ Single question per call (matches Engine single-confirm). Multi-question remains
 
 ## Session routing
 
-- Daemon listens MCP on `<data_dir>/run/askuser-mcp.sock` (Unix socket).
+- Daemon listens MCP on `<data_dir>/run/askuser-mcp.sock` (Unix socket) by default.
+- Optional top-level `ask_user_mcp_socket` in `config.toml` overrides the socket path; when unset, the default above applies (with a short temp fallback when `data_dir` is too long for macOS `sun_path`).
 - Per Claude spawn, write a stdio MCP config. Claude talks to `cc-connect askuser-mcp-stdio`; the bridge forwards MCP JSON-RPC to the daemon over the Unix socket. This avoids relying on Claude Code `socketPath` support.
 
 ```json

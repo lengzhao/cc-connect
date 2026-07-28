@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -107,7 +108,7 @@ func TestToolDescriptor_HasDescriptionsAndEnums(t *testing.T) {
 func TestStartUnix_ServesMCP(t *testing.T) {
 	hub := core.NewAskUserHub()
 	dir := t.TempDir()
-	srv, err := StartUnix(hub, dir)
+	srv, err := StartUnix(hub, dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +125,52 @@ func TestStartUnix_ServesMCP(t *testing.T) {
 	}
 
 	postRPCUnix(t, srv.SocketPath(), "", map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{},
+	})
+}
+
+func TestResolveSocketPath_Default(t *testing.T) {
+	got, err := ResolveSocketPath("/tmp/cc-connect-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join("/tmp/cc-connect-test", "run", askUserMCPSocket)
+	if got != want {
+		t.Fatalf("ResolveSocketPath() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveSocketPath_Configured(t *testing.T) {
+	custom := "/tmp/cc-connect-custom-ask.sock"
+	got, err := ResolveSocketPath("/tmp/cc-connect-test", custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != custom {
+		t.Fatalf("ResolveSocketPath() = %q, want %q", got, custom)
+	}
+}
+
+func TestStartUnix_UsesConfiguredSocket(t *testing.T) {
+	hub := core.NewAskUserHub()
+	custom := filepath.Join(t.TempDir(), "x.sock")
+	if len(custom) > maxUnixSocketPath {
+		custom = "/tmp/cc-connect-configured-ask.sock"
+	}
+	srv, err := StartUnix(hub, "/tmp/cc-connect-test", custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close(context.Background())
+
+	if srv.SocketPath() != custom {
+		t.Fatalf("SocketPath() = %q, want %q", srv.SocketPath(), custom)
+	}
+	if _, err := os.Stat(custom); err != nil {
+		t.Fatalf("configured socket missing: %v", err)
+	}
+
+	postRPCUnix(t, custom, "", map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{},
 	})
 }

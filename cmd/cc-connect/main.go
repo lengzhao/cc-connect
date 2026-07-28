@@ -379,7 +379,7 @@ func main() {
 	effectiveWorkDirs := make([]string, 0, len(cfg.Projects))
 
 	askHub := core.NewAskUserHub()
-	askMCP, err := askuser.StartUnix(askHub, cfg.DataDir)
+	askMCP, err := askuser.StartUnix(askHub, cfg.DataDir, cfg.AskUserMCPSocket)
 	if err != nil {
 		slog.Error("failed to start ask-user MCP server", "error", err)
 		os.Exit(1)
