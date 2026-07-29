@@ -56,6 +56,7 @@ type Platform struct {
 	questionNotifySecret      string
 	questionNotifyHeaders     map[string]string
 	questionNotifyTimeout     time.Duration
+	toolSSETransforms         *toolSSETransformRegistry
 
 	server   *http.Server
 	handler  core.MessageHandler
@@ -167,6 +168,11 @@ func New(opts map[string]any) (core.Platform, error) {
 		slog.Warn("chat-api: name_model configured but provider credentials are unavailable; name generation will fall back to heuristic",
 			"name_model", p.nameModel)
 	}
+	transforms, err := loadToolSSETransforms(stringOption(opts, "tool_sse_transforms_file", ""))
+	if err != nil {
+		return nil, err
+	}
+	p.toolSSETransforms = transforms
 	p.sessionStorePath = sessionStorePathFromOpts(opts)
 	return p, nil
 }

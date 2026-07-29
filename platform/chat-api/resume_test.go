@@ -389,7 +389,7 @@ func TestResumeUnknownRunReturnsMessageEnd(t *testing.T) {
 
 func TestResumeForeignRunReturnsMessageEnd(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
-	run := newRunState("run_foreign", "other_user", "ch", "sk", "c", "c:0", p, nil, time.Now().Add(time.Minute))
+	run := newRunState("run_foreign", "other_user", "ch", "sk", "c", "c:0", "", p, nil, time.Now().Add(time.Minute))
 	if !p.pending.create(run) {
 		t.Fatal("create")
 	}
@@ -449,7 +449,7 @@ func TestResumeWhileAttachedReturnsConflict(t *testing.T) {
 
 func TestResumeAttachReservationReturnsConflictBeforeSSEStarts(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
-	run := newRunState("run_race", "user_001", "ch", "sk", "c", "c:0", p, nil, time.Now().Add(time.Minute))
+	run := newRunState("run_race", "user_001", "ch", "sk", "c", "c:0", "", p, nil, time.Now().Add(time.Minute))
 	if !p.pending.create(run) {
 		t.Fatal("create")
 	}
@@ -572,7 +572,7 @@ func TestQuestionNotifyFailureDoesNotBreakTurn(t *testing.T) {
 
 func TestDetachedFinishDeletesImmediately(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
-	run := newRunState("run_done", "u", "ch", "sk", "c", "c:0", p, nil, time.Now().Add(time.Minute))
+	run := newRunState("run_done", "u", "ch", "sk", "c", "c:0", "", p, nil, time.Now().Add(time.Minute))
 	if !p.pending.create(run) {
 		t.Fatal("create")
 	}
@@ -651,7 +651,7 @@ func TestResumeWakesWhenFinishAfterAttach(t *testing.T) {
 
 func TestReplayFailureKeepsLastRecoverable(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
-	run := newRunState("run_keep", "u", "ch", "sk", "c", "c:0", p, nil, time.Now().Add(time.Minute))
+	run := newRunState("run_keep", "u", "ch", "sk", "c", "c:0", "", p, nil, time.Now().Add(time.Minute))
 	run.detach()
 	run.setLastRecoverable("text_delta", map[string]any{"message_id": "c:0", "text": "keep-me", "replace": true})
 

@@ -3,7 +3,7 @@
 > 版本：**v1.2.8**（2026-07-26）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [断链重连](./plans/2026-07-24-chat-api-disconnect-resume-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [断链重连](./plans/2026-07-24-chat-api-disconnect-resume-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [Tool SSE 转换](./plans/2026-07-28-chat-api-tool-sse-transform-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
 
 ## 1. 概述
 
@@ -355,6 +355,8 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 | `error` | `error`, `kind?` | 错误（§2.6） |
 
 `tool_call` / `tool_result` 不写入历史（与 `thinking_delta` 相同）。详见 [Tool SSE 设计](./plans/2026-07-15-chat-api-tool-sse-design.md)。
+
+**Tool SSE 转换（可选）**：`tool_sse_transforms_file` 指向外部 JSON。按 **tool name** 匹配 `transforms[]`；未命中时使用可选顶层 `default`（`text` 支持 `{tool}` 占位符）。在 `tool_call` 阶段转为 `thinking_delta` 或 `client_flow`；`suppress=true` 时不再发原始 `tool_call` / 配对 `tool_result`。示例见 `config/chat-api-tool-sse-transforms.example.json`；设计见 [Tool SSE 转换](./plans/2026-07-28-chat-api-tool-sse-transform-design.md)。
 
 `message_end.answer` 默认省略（`include_answer_in_message_end = true` 时附带）。
 
@@ -849,6 +851,7 @@ task_id = "X-Task-ID"
 | `question_notify_headers` | 空 | 可选；webhook 自定义请求头（如 `access_token`、`origin_channel`） |
 | `question_notify_secret` | 空 | 可选 shorthand；未在 `question_notify_headers` 中设置时写入 `X-Chat-API-Notify-Secret` |
 | `question_notify_timeout` | `5s` | webhook HTTP 超时 |
+| `tool_sse_transforms_file` | 空 | 外部 JSON：将指定 tool 的 `tool_call` 转为 `thinking_delta` / `client_flow`（见 §3.3） |
 
 会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态（确认窗口不支持多副本共享）。
 
@@ -858,6 +861,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.2.9 | 2026-07-28 | 可选 `tool_sse_transforms_file`：外部 JSON 将 tool_call 转为 thinking/client_flow |
 | v1.2.8 | 2026-07-26 | 新增 `POST /conversations` 显式创建空会话并指定 `name` |
 | v1.2.7 | 2026-07-24 | 断链重连：`POST /chat-messages` + `run_id`；虚拟 sink 缓存最后事件；`question_notify_url`；结束即释放 run |
 | v1.2.6 | 2026-07-23 | 新增独立 MCP `cc_connect_client_flow` 与非阻塞 `client_flow` SSE；三种 `type` 与 `question_request.event` 同源，不占 interaction 槽且无需 respond |

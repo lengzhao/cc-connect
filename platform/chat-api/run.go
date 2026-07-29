@@ -77,26 +77,28 @@ type runState struct {
 	requestDeadline time.Time
 	platform        *Platform
 
-	mu                   sync.Mutex
-	flushMu              sync.Mutex // serializes attach/detach/flushDelta
-	latestThinking       string
-	sentThinking         string
-	answerText           string
-	sentAnswer           string
-	toolCalls            []streamToolCall
-	sentToolCallIDs      map[string]bool
-	pendingToolResults   []streamToolResult
-	toolResultMatchIndex int
-	finalized            bool
-	streamingCardCreated bool
-	structuredPrimary    bool // true after first TurnStreamEvent; skip markdown re-parse
-	sink                 runEventSink
-	detached             bool
-	attaching            bool
-	pendingEvents        []pendingSSEEvent
-	interaction          *interactionState
-	interactionTimer     *time.Timer
-	lastRecoverableEvent *recoverableEvent
+	mu                    sync.Mutex
+	flushMu               sync.Mutex // serializes attach/detach/flushDelta
+	latestThinking        string
+	sentThinking          string
+	answerText            string
+	sentAnswer            string
+	toolCalls             []streamToolCall
+	sentToolCallIDs       map[string]bool
+	suppressedToolCallIDs map[string]bool
+	pendingToolResults    []streamToolResult
+	toolResultMatchIndex  int
+	language              string
+	finalized             bool
+	streamingCardCreated  bool
+	structuredPrimary     bool // true after first TurnStreamEvent; skip markdown re-parse
+	sink                  runEventSink
+	detached              bool
+	attaching             bool
+	pendingEvents         []pendingSSEEvent
+	interaction           *interactionState
+	interactionTimer      *time.Timer
+	lastRecoverableEvent  *recoverableEvent
 
 	notify chan struct{}
 	done   chan pendingResult
@@ -144,21 +146,23 @@ func (s *pendingStore) delete(id string) {
 	delete(s.runs, id)
 }
 
-func newRunState(id, user, channelKey, sessionKey, conversationID, messageID string, p *Platform, sse *sseWriter, requestDeadline time.Time) *runState {
+func newRunState(id, user, channelKey, sessionKey, conversationID, messageID, language string, p *Platform, sse *sseWriter, requestDeadline time.Time) *runState {
 	run := &runState{
-		id:              id,
-		user:            user,
-		channelKey:      channelKey,
-		sessionKey:      sessionKey,
-		conversationID:  conversationID,
-		messageID:       messageID,
-		created:         time.Now(),
-		requestDeadline: requestDeadline,
-		platform:        p,
-		sink:            &sseEventSink{w: sse},
-		sentToolCallIDs: make(map[string]bool),
-		notify:          make(chan struct{}, 1),
-		done:            make(chan pendingResult, 1),
+		id:                    id,
+		user:                  user,
+		channelKey:            channelKey,
+		sessionKey:            sessionKey,
+		conversationID:        conversationID,
+		messageID:             messageID,
+		language:              resolveRunLanguage(language),
+		created:               time.Now(),
+		requestDeadline:       requestDeadline,
+		platform:              p,
+		sink:                  &sseEventSink{w: sse},
+		sentToolCallIDs:       make(map[string]bool),
+		suppressedToolCallIDs: make(map[string]bool),
+		notify:                make(chan struct{}, 1),
+		done:                  make(chan pendingResult, 1),
 	}
 	return run
 }
@@ -193,6 +197,22 @@ func (r *runState) setThinking(text string) {
 	r.signal()
 }
 
+func (r *runState) appendThinkingLine(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	r.mu.Lock()
+	r.structuredPrimary = true
+	if prev := strings.TrimSpace(r.latestThinking); prev != "" {
+		r.latestThinking = prev + "\n" + text
+	} else {
+		r.latestThinking = text
+	}
+	r.mu.Unlock()
+	r.signal()
+}
+
 func (r *runState) appendAnswer(suffix string) {
 	if suffix == "" {
 		return
@@ -217,7 +237,38 @@ func (r *runState) upsertStructuredTool(id, name, input string) {
 	r.structuredPrimary = true
 	r.mergeToolCallsLocked([]streamToolCall{{ID: id, Name: name, Input: input}})
 	r.mu.Unlock()
+	r.applyToolCallTransformAtIngest(id, name)
 	r.signal()
+}
+
+func (r *runState) applyToolCallTransformAtIngest(id, toolName string) {
+	reg := r.platform.toolSSETransforms
+	rule, ok := reg.lookup(toolName)
+	if !ok {
+		return
+	}
+	text := formatTransformText(rule.Text, r.language, toolName)
+	switch rule.Emit {
+	case toolSSEEmitThinking:
+		if text != "" {
+			r.appendThinkingLine(text)
+		}
+	case toolSSEEmitClientFlow:
+		if text != "" {
+			r.enqueueEvent("client_flow", map[string]any{
+				"flow_id":     newFlowID(),
+				"type":        rule.FlowType,
+				"description": text,
+				"run_id":      r.id,
+				"message_id":  r.messageID,
+			})
+		}
+	}
+	if rule.Suppress {
+		r.mu.Lock()
+		r.suppressedToolCallIDs[id] = true
+		r.mu.Unlock()
+	}
 }
 
 func (r *runState) enqueueStructuredToolResult(res streamToolResult) {
@@ -290,14 +341,6 @@ func (r *runState) detachUnderFlush() {
 	r.sink = &detachedEventSink{run: r, p: r.platform}
 }
 
-func (r *runState) attach(sse *sseWriter) error {
-	if err := r.beginAttach(); err != nil {
-		return err
-	}
-	r.finishAttach(sse)
-	return nil
-}
-
 func (r *runState) beginAttach() error {
 	r.flushMu.Lock()
 	defer r.flushMu.Unlock()
@@ -324,12 +367,6 @@ func (r *runState) cancelAttach() {
 	r.mu.Lock()
 	r.attaching = false
 	r.mu.Unlock()
-}
-
-func (r *runState) sinkActive() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.attaching || (r.sink != nil && r.sink.Active())
 }
 
 func (r *runState) flushDelta() error {
@@ -432,6 +469,15 @@ func (r *runState) flushToolCallEvents() error {
 	r.mu.Unlock()
 
 	for _, tc := range pending {
+		r.mu.Lock()
+		suppressed := r.suppressedToolCallIDs[tc.ID]
+		r.mu.Unlock()
+		if suppressed {
+			r.mu.Lock()
+			r.sentToolCallIDs[tc.ID] = true
+			r.mu.Unlock()
+			continue
+		}
 		payload := map[string]any{
 			"message_id":   messageID,
 			"tool_call_id": tc.ID,
@@ -467,7 +513,11 @@ func (r *runState) flushToolResultEvents() error {
 		r.mu.Lock()
 		toolCallID := r.nextToolCallIDLocked(res.Name)
 		r.toolResultMatchIndex++
+		suppressed := r.suppressedToolCallIDs[toolCallID]
 		r.mu.Unlock()
+		if suppressed {
+			continue
+		}
 
 		payload := map[string]any{
 			"message_id":   messageID,

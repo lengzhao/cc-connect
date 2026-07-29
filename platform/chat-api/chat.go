@@ -155,7 +155,8 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestDeadline := time.Now().Add(p.requestTimeout)
-	run := newRunState(runID, user, channelKey, engineSessionKey, session.ID, msgID, p, sse, requestDeadline)
+	agentCtx := p.agentContextHeaders.collectAgentContext(r)
+	run := newRunState(runID, user, channelKey, engineSessionKey, session.ID, msgID, agentCtx.Language, p, sse, requestDeadline)
 	if !p.pending.create(run) {
 		_ = sse.Error("too many concurrent requests")
 		return
@@ -200,7 +201,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		Files:        files,
 		Audio:        audio,
 		ReplyCtx:     rc,
-		AgentContext: p.agentContextHeaders.collectAgentContext(r),
+		AgentContext: agentCtx,
 	}
 
 	if implicitCreate && autoName {

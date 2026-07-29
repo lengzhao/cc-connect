@@ -1376,6 +1376,10 @@ app_secret = "your-feishu-app-secret"
 # name_model = "gpt-4o-mini"             # Separate low-cost model for AI name generation
 # include_answer_in_message_end = false
 # max_runs = 1000                      # Max concurrent SSE runs in memory
+# debug_ui = false                     # Serve embedded debug console at /debug/ (local only)
+# interaction_timeout = "10m"          # Confirm window timeout (permission auto-deny; ask-question cancels turn)
+# sse_ping_interval = "15s"            # SSE keepalive while waiting (0s disables)
+# tool_sse_transforms_file = "/path/to/tool-sse-transforms.json"  # External JSON: tool_call → thinking_delta / client_flow; see config/chat-api-tool-sse-transforms.example.json
 # question_notify_url = "https://bff.example.com/internal/v1/ai/conversations/notify"  # Async webhook when question_request arrives while SSE detached; body: conversation_id, message_id, run_id, user_id, channel
 # question_notify_secret = ""          # Optional shorthand for X-Chat-API-Notify-Secret when not set in question_notify_headers
 # question_notify_timeout = "5s"
@@ -1383,9 +1387,6 @@ app_secret = "your-feishu-app-secret"
 # access_token = "service-token"
 # origin_channel = "BACKEND"
 # client_platform = "WEB"
-# debug_ui = false                     # Serve embedded debug console at /debug/ (local only)
-# interaction_timeout = "10m"          # Confirm window timeout (permission auto-deny; ask-question cancels turn)
-# sse_ping_interval = "15s"            # SSE keepalive while waiting (0s disables)
 #
 # Map HTTP headers into Message.AgentContext (agent-visible when project
 # inject_context allowlists the same fields). Body metadata stays hooks-only.
