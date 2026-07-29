@@ -1,5 +1,11 @@
 ﻿# Changelog
 
+## v9.1.6 (2026-07-29)
+
+### Added
+- **chat-api tool SSE transforms**: optional `tool_sse_transforms_file` loads external JSON to map `tool_call` SSE into `thinking_delta` or `client_flow`, with per-rule i18n text, optional top-level `default` fallback (`{tool}` placeholder), and `suppress` to hide raw tool SSE. See `docs/plans/2026-07-28-chat-api-tool-sse-transform-design.md` and `config/chat-api-tool-sse-transforms.example.json`.
+- **ask-user MCP socket path**: top-level `ask_user_mcp_socket` in `config.toml` overrides the default `<data_dir>/run/askuser-mcp.sock` without changing `data_dir`.
+
 ## v9.1.5 (2026-07-27)
 
 ### Fixed
