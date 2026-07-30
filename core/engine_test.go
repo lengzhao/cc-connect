@@ -2657,8 +2657,6 @@ func TestAgentSystemPrompt_MentionsClientFlow(t *testing.T) {
 		"cc_connect_client_flow",
 		"mcp__ccconnect__cc_connect_client_flow",
 		"connect_account",
-		"create_task",
-		"task_center_approval",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("AgentSystemPrompt missing %q", want)
@@ -7658,7 +7656,7 @@ func TestProcessInteractiveEvents_ClientFlow_DoesNotBlock(t *testing.T) {
 	if len(flows) != 1 {
 		t.Fatalf("SendClientFlow calls = %d, want 1; flows=%v", len(flows), flows)
 	}
-	if flows[0].typ != AskEventConnectAccount || flows[0].desc != "请绑定账户" {
+	if flows[0].typ != "connect_account" || flows[0].desc != "请绑定账户" {
 		t.Fatalf("SendClientFlow got typ=%q desc=%q", flows[0].typ, flows[0].desc)
 	}
 }
@@ -7693,7 +7691,7 @@ func TestProcessInteractiveEvents_ClientFlow_UnsupportedPlatform(t *testing.T) {
 		ToolName:  ToolCCConnectClientFlow,
 		ToolInput: "打开任务中心",
 		ToolInputRaw: map[string]any{
-			"type":        AskEventCreateTask,
+			"type":        "create_task",
 			"description": "打开任务中心",
 		},
 	}
@@ -7742,7 +7740,7 @@ func TestProcessInteractiveEvents_ClientFlow_InvalidPayload(t *testing.T) {
 		ToolName:  ToolCCConnectClientFlow,
 		ToolInput: "x",
 		ToolInputRaw: map[string]any{
-			"type":        "not_a_real_flow",
+			"type":        "  ",
 			"description": "x",
 		},
 	}
@@ -7751,7 +7749,7 @@ func TestProcessInteractiveEvents_ClientFlow_InvalidPayload(t *testing.T) {
 		ToolName:  ToolCCConnectClientFlow,
 		ToolInput: "   ",
 		ToolInputRaw: map[string]any{
-			"type":        AskEventConnectAccount,
+			"type":        "connect_account",
 			"description": "   ",
 		},
 	}
@@ -7830,7 +7828,7 @@ func TestProcessInteractiveEvents_ClientFlow_DuringPendingAsk(t *testing.T) {
 		ToolName:  ToolCCConnectClientFlow,
 		ToolInput: "绑定新账户",
 		ToolInputRaw: map[string]any{
-			"type":        AskEventConnectAccount,
+			"type":        "connect_account",
 			"description": "绑定新账户",
 		},
 	}
@@ -7877,7 +7875,7 @@ func TestProcessInteractiveEvents_ClientFlow_DuringPendingAsk(t *testing.T) {
 	}
 
 	flows := p.getFlows()
-	if len(flows) != 1 || flows[0].typ != AskEventConnectAccount || flows[0].desc != "绑定新账户" {
+	if len(flows) != 1 || flows[0].typ != "connect_account" || flows[0].desc != "绑定新账户" {
 		t.Fatalf("SendClientFlow during pending ask got %v", flows)
 	}
 }

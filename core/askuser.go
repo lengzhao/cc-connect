@@ -25,23 +25,10 @@ const MCPQualifiedClientFlowTool = "mcp__ccconnect__cc_connect_client_flow"
 // SessionKeyHeader routes MCP tools/call to the correct agent session.
 const SessionKeyHeader = "X-CC-Session-Key"
 
-// Known AskUser envelope events that guide App page navigation.
-const (
-	AskEventConnectAccount     = "connect_account"
-	AskEventCreateTask         = "create_task"
-	AskEventTaskCenterApproval = "task_center_approval"
-	AskEventTaskGenerating     = "task_generating"
-)
-
-// NormalizeAskUserEvent keeps only known navigation events.
-// Empty / null / unmatched → "" (no extra App action button; generic confirm).
+// NormalizeAskUserEvent trims navigation / client_flow event strings.
+// Values are passed through as-is (no allowlist); empty after trim → "".
 func NormalizeAskUserEvent(raw string) string {
-	switch strings.TrimSpace(raw) {
-	case AskEventConnectAccount, AskEventCreateTask, AskEventTaskCenterApproval, AskEventTaskGenerating:
-		return strings.TrimSpace(raw)
-	default:
-		return ""
-	}
+	return strings.TrimSpace(raw)
 }
 
 // IsStructuredAsk reports whether an event should use the AskUserQuestion UI
@@ -213,7 +200,7 @@ func (h *AskUserHub) EmitClientFlow(sessionKey, flowType, description string) er
 	}
 	flowType = NormalizeAskUserEvent(flowType)
 	if flowType == "" {
-		return fmt.Errorf("invalid type: must be connect_account, create_task, task_center_approval, or task_generating")
+		return fmt.Errorf("type required")
 	}
 
 	evt := Event{

@@ -24,17 +24,17 @@ func TestIsMCPAskTool(t *testing.T) {
 }
 
 func TestNormalizeAskUserEvent(t *testing.T) {
-	if got := NormalizeAskUserEvent("create_task"); got != AskEventCreateTask {
+	if got := NormalizeAskUserEvent("create_task"); got != "create_task" {
 		t.Fatalf("got %q", got)
 	}
-	if got := NormalizeAskUserEvent("task_generating"); got != AskEventTaskGenerating {
+	if got := NormalizeAskUserEvent("  credits_insufficient  "); got != "credits_insufficient" {
 		t.Fatalf("got %q", got)
 	}
 	if got := NormalizeAskUserEvent("  "); got != "" {
 		t.Fatalf("blank got %q", got)
 	}
-	if got := NormalizeAskUserEvent("foo"); got != "" {
-		t.Fatalf("unknown got %q", got)
+	if got := NormalizeAskUserEvent("foo"); got != "foo" {
+		t.Fatalf("unknown must pass through, got %q", got)
 	}
 }
 
@@ -115,11 +115,26 @@ func TestAskUserHub_EmitClientFlow(t *testing.T) {
 	}
 }
 
-func TestAskUserHub_EmitClientFlow_InvalidType(t *testing.T) {
+func TestAskUserHub_EmitClientFlow_EmptyType(t *testing.T) {
 	h := NewAskUserHub()
 	h.Bind("s1", askEmitterFunc(func(e Event) error { return nil }))
-	if err := h.EmitClientFlow("s1", "account_bind", "x"); err == nil {
-		t.Fatal("expected error for unknown type")
+	if err := h.EmitClientFlow("s1", "  ", "x"); err == nil {
+		t.Fatal("expected error for empty type")
+	}
+}
+
+func TestAskUserHub_EmitClientFlow_CustomType(t *testing.T) {
+	h := NewAskUserHub()
+	var got Event
+	h.Bind("s1", askEmitterFunc(func(e Event) error {
+		got = e
+		return nil
+	}))
+	if err := h.EmitClientFlow("s1", "credits_insufficient", "请充值"); err != nil {
+		t.Fatal(err)
+	}
+	if typ, _ := got.ToolInputRaw["type"].(string); typ != "credits_insufficient" {
+		t.Fatalf("type=%q", typ)
 	}
 }
 

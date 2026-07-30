@@ -9,12 +9,15 @@ import (
 	"github.com/chenhg5/cc-connect/core"
 )
 
-// Known envelope event values for App navigation guidance.
+// Known envelope event / client_flow type values for App navigation guidance.
+// Runtime accepts any non-empty string; these constants document common types
+// and populate MCP tool schemas.
 const (
-	EventConnectAccount     = core.AskEventConnectAccount
-	EventCreateTask         = core.AskEventCreateTask
-	EventTaskCenterApproval = core.AskEventTaskCenterApproval
-	EventTaskGenerating     = core.AskEventTaskGenerating
+	EventConnectAccount      = "connect_account"
+	EventCreateTask          = "create_task"
+	EventTaskCenterApproval  = "task_center_approval"
+	EventTaskGenerating      = "task_generating"
+	EventCreditsInsufficient = "credits_insufficient"
 )
 
 // Tag variant enums for option badges.
@@ -25,7 +28,7 @@ const (
 	TagVariantWarning   = "warning"   // 警告（黄）
 )
 
-// NormalizeEvent keeps only known navigation events; empty/null/unmatched → "".
+// NormalizeEvent trims event / client_flow type strings (passthrough, no allowlist).
 func NormalizeEvent(raw string) string {
 	return core.NormalizeAskUserEvent(raw)
 }
@@ -88,8 +91,7 @@ type ClientFlowArgs struct {
 }
 
 // ParseClientFlowArguments validates type + description for client_flow.
-// type must be one of the three known enums (after trim); unknown/empty → error.
-// description must be non-empty after trim.
+// type and description must be non-empty after trim; type is not allowlisted.
 func ParseClientFlowArguments(raw json.RawMessage) (ClientFlowArgs, error) {
 	if len(raw) == 0 {
 		return ClientFlowArgs{}, fmt.Errorf("arguments required")
@@ -103,7 +105,7 @@ func ParseClientFlowArguments(raw json.RawMessage) (ClientFlowArgs, error) {
 	}
 	typ := NormalizeEvent(strField(m, "type"))
 	if typ == "" {
-		return ClientFlowArgs{}, fmt.Errorf("invalid type: must be connect_account, create_task, task_center_approval, or task_generating")
+		return ClientFlowArgs{}, fmt.Errorf("type required")
 	}
 	desc := strField(m, "description")
 	if desc == "" {

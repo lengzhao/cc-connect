@@ -324,12 +324,14 @@ func clientFlowToolDescriptor() map[string]any {
 					"type": "string",
 					"description": "发送事件（可选）。" +
 						"枚举：connect_account（有连接新账户需求时）、create_task（任务保存的时候）、" +
-						"task_generating（触发子Agent生成任务时）、task_center_approval（任务修改/保存后需要去任务中心审批）。",
+						"task_generating（触发子Agent生成任务时）、task_center_approval（任务修改/保存后需要去任务中心审批）、" +
+						"credits_insufficient（LLM 额度不足时引导充值）。",
 					"enum": []any{
 						EventConnectAccount,
 						EventCreateTask,
 						EventTaskGenerating,
 						EventTaskCenterApproval,
+						EventCreditsInsufficient,
 					},
 				},
 				"description": map[string]any{

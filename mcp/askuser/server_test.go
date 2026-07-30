@@ -41,25 +41,25 @@ func TestParseToolArguments_RichFields(t *testing.T) {
 	}
 }
 
-func TestNormalizeEvent_AllowsEmptyAndDropsUnknown(t *testing.T) {
+func TestNormalizeEvent_Passthrough(t *testing.T) {
 	if got := NormalizeEvent("connect_account"); got != EventConnectAccount {
 		t.Fatalf("got %q", got)
 	}
 	if got := NormalizeEvent(""); got != "" {
 		t.Fatalf("empty got %q", got)
 	}
-	if got := NormalizeEvent("unknown_flow"); got != "" {
-		t.Fatalf("unknown got %q", got)
+	if got := NormalizeEvent("unknown_flow"); got != "unknown_flow" {
+		t.Fatalf("unknown must pass through, got %q", got)
 	}
 	q, err := ParseToolArguments(json.RawMessage(`{
-		"question":"Q","event":"not_a_real_event",
+		"question":"Q","event":"custom_nav",
 		"options":[{"label":"A"}]
 	}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q.Event != "" {
-		t.Fatalf("unmatched event must clear, got %q", q.Event)
+	if q.Event != "custom_nav" {
+		t.Fatalf("event must pass through, got %q", q.Event)
 	}
 }
 
@@ -186,13 +186,14 @@ func TestParseClientFlowArguments(t *testing.T) {
 		t.Fatalf("trim: %+v %v", in, err)
 	}
 
-	_, err = ParseClientFlowArguments(json.RawMessage(`{"type":"account_bind","description":"x"}`))
-	if err == nil {
-		t.Fatal("account_bind must fail")
+	in, err = ParseClientFlowArguments(json.RawMessage(`{"type":"credits_insufficient","description":"额度不足，请充值后继续"}`))
+	if err != nil || in.Type != EventCreditsInsufficient || in.Description != "额度不足，请充值后继续" {
+		t.Fatalf("credits_insufficient: %+v %v", in, err)
 	}
-	_, err = ParseClientFlowArguments(json.RawMessage(`{"type":"unknown_flow","description":"x"}`))
-	if err == nil {
-		t.Fatal("unknown type must fail")
+
+	in, err = ParseClientFlowArguments(json.RawMessage(`{"type":"account_bind","description":"x"}`))
+	if err != nil || in.Type != "account_bind" {
+		t.Fatalf("custom type must pass through: %+v %v", in, err)
 	}
 	_, err = ParseClientFlowArguments(json.RawMessage(`{"type":"connect_account","description":"  "}`))
 	if err == nil {
@@ -245,8 +246,8 @@ func TestClientFlowToolDescriptor(t *testing.T) {
 	props, _ := schema["properties"].(map[string]any)
 	typ, _ := props["type"].(map[string]any)
 	enum, _ := typ["enum"].([]any)
-	if len(enum) != 4 {
-		t.Fatalf("type enum must be exactly 4 values, got %v", enum)
+	if len(enum) != 5 {
+		t.Fatalf("type enum must be exactly 5 values, got %v", enum)
 	}
 	for _, v := range enum {
 		s, _ := v.(string)

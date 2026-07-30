@@ -1392,7 +1392,6 @@ func TestSendClientFlow_InvalidInput(t *testing.T) {
 		{name: "nil reply", replyTo: nil, flowType: "connect_account", description: "x", wantSubstr: "reply context"},
 		{name: "wrong type", replyTo: "not-rc", flowType: "connect_account", description: "x", wantSubstr: "reply context"},
 		{name: "empty runID", replyTo: &replyContext{}, flowType: "connect_account", description: "x", wantSubstr: "reply context"},
-		{name: "invalid type", replyTo: rc, flowType: "account_bind", description: "x", wantSubstr: "invalid client_flow"},
 		{name: "empty type", replyTo: rc, flowType: "  ", description: "x", wantSubstr: "invalid client_flow"},
 		{name: "empty description", replyTo: rc, flowType: "connect_account", description: "  ", wantSubstr: "invalid client_flow"},
 		{name: "missing pending", replyTo: &replyContext{runID: "missing_run"}, flowType: "connect_account", description: "x", wantSubstr: "not pending"},
