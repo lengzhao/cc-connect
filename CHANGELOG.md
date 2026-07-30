@@ -1,5 +1,13 @@
 ﻿# Changelog
 
+## v9.1.7 (2026-07-31)
+
+### Added
+- **ask-user / client_flow**: `credits_insufficient` is documented as a common `client_flow.type` for LLM credit/top-up guidance.
+
+### Changed
+- **client_flow / ask-user event**: `type` and `event` are no longer allowlisted in core; non-empty values pass through after trim. MCP tool schemas still list common values as Agent hints.
+
 ## v9.1.6 (2026-07-29)
 
 ### Added
