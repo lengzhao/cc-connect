@@ -70,14 +70,53 @@ func TestPairHistoryAndMessageID(t *testing.T) {
 		{Role: "user", Content: "q2", Timestamp: time.Unix(200, 0)},
 	}
 	pairs := pairHistory("s1", entries)
-	if len(pairs) != 1 {
-		t.Fatalf("pairs len = %d, want 1 (incomplete turn excluded)", len(pairs))
+	if len(pairs) != 2 {
+		t.Fatalf("pairs len = %d, want 2 (in-progress turn included)", len(pairs))
 	}
-	if pairs[0].ID != "s1:0" {
-		t.Fatalf("id = %q, want s1:0", pairs[0].ID)
+	if pairs[0].ID != "s1:0" || pairs[0].Answer != "a1" {
+		t.Fatalf("first pair = %+v, want completed turn s1:0", pairs[0])
+	}
+	if pairs[1].ID != "s1:1" || pairs[1].Query != "q2" || pairs[1].Answer != "" {
+		t.Fatalf("second pair = %+v, want in-progress q2 with empty answer", pairs[1])
 	}
 	if countCompletedTurns(entries) != 1 {
 		t.Fatalf("completed turns = %d, want 1", countCompletedTurns(entries))
+	}
+}
+
+func TestMessagesHTTPReturnsInProgressTurn(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+	s, err := sm.NewSessionWithID("chat-api:user_001", "conv_in_progress", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.AddUserHistory("still waiting for agent", "uid_a", "Alice")
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+s.ID+"/messages?limit=10", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Messages []map[string]any `json:"messages"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Messages) != 1 {
+		t.Fatalf("messages = %+v, want 1 in-progress turn", resp.Data.Messages)
+	}
+	if resp.Data.Messages[0]["query"] != "still waiting for agent" {
+		t.Fatalf("query = %v", resp.Data.Messages[0]["query"])
+	}
+	if ans, _ := resp.Data.Messages[0]["answer"].(string); ans != "" {
+		t.Fatalf("answer = %q, want empty for in-progress turn", ans)
 	}
 }
 

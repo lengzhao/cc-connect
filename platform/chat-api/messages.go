@@ -53,7 +53,18 @@ func pairHistory(conversationID string, entries []core.HistoryEntry) []pairedMes
 		user := entries[i]
 		i++
 		if i >= len(entries) || entries[i].Role != "assistant" {
-			continue
+			// User message is persisted as soon as the turn starts; include
+			// in-progress turns so refresh/disconnect can reload via GET /messages.
+			out = append(out, pairedMessage{
+				ID:        messageID(conversationID, turn),
+				Query:     user.Content,
+				Answer:    "",
+				UserID:    user.UserID,
+				UserName:  user.UserName,
+				CreatedAt: user.Timestamp.Unix(),
+				TurnIndex: turn,
+			})
+			break
 		}
 		assistant := entries[i]
 		i++
@@ -72,7 +83,20 @@ func pairHistory(conversationID string, entries []core.HistoryEntry) []pairedMes
 }
 
 func countCompletedTurns(entries []core.HistoryEntry) int {
-	return len(pairHistory("", entries))
+	n := 0
+	for i := 0; i < len(entries); {
+		if entries[i].Role != "user" {
+			i++
+			continue
+		}
+		i++
+		if i >= len(entries) || entries[i].Role != "assistant" {
+			break
+		}
+		n++
+		i++
+	}
+	return n
 }
 
 func truncateRunes(s string, max int) string {
