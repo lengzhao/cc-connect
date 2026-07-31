@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.11 (2026-07-31)
+
+### Added
+- **`run_dir` config**: optional runtime directory for Unix sockets and ephemeral files (default `<data_dir>/run`). Set a pod-specific path when multiple instances share the same `data_dir` mount to avoid socket conflicts (`api.sock`, `askuser-mcp.sock`, restart notify, QQ Bot message cache).
+
 ## v9.1.10 (2026-07-31)
 
 ### Fixed
