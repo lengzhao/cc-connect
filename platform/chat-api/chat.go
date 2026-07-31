@@ -89,7 +89,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if runID := strings.TrimSpace(body.RunID); runID != "" {
-		p.handleChatResume(w, r, user, runID)
+		p.handleChatResume(w, r, user, runID, strings.TrimSpace(body.ConversationID))
 		return
 	}
 
@@ -223,10 +223,10 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	p.serveRunSSE(r.Context(), run, sse, engineSessionKey, user, channelKey, rc)
 }
 
-func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user, runID string) {
+func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user, runID, conversationID string) {
 	run := p.pending.get(runID)
 	if run == nil || run.user != user {
-		p.writeResumeMessageEnd(w)
+		p.writeResumeMessageEnd(w, conversationID)
 		return
 	}
 
@@ -255,13 +255,17 @@ func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user
 	p.serveRunSSE(r.Context(), run, sse, run.sessionKey, user, run.channelKey, rc)
 }
 
-func (p *Platform) writeResumeMessageEnd(w http.ResponseWriter) {
+func (p *Platform) writeResumeMessageEnd(w http.ResponseWriter, conversationID string) {
 	sse, err := newSSEWriter(w)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	_ = sse.Event("message_end", map[string]any{})
+	payload := map[string]any{}
+	if conversationID != "" {
+		payload["conversation_id"] = conversationID
+	}
+	_ = sse.Event("message_end", payload)
 }
 
 func (p *Platform) serveRunSSE(reqCtx context.Context, run *runState, sse *sseWriter, engineSessionKey, user, channelKey string, rc *replyContext) {

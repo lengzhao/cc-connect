@@ -324,6 +324,73 @@ func TestResumeOnlyKeepsLastRecoverableEvent(t *testing.T) {
 	}
 }
 
+func TestResumeReplaysPingWhenIdleAfterDisconnect(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
+	bindTestSessions(t, p)
+
+	block := make(chan struct{})
+	p.setHandler(func(_ core.Platform, _ *core.Message) {
+		<-block
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(`{"query":"hi"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+	go func() {
+		p.routes().ServeHTTP(httptest.NewRecorder(), req)
+	}()
+
+	runID := waitRunID(t, p)
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	time.Sleep(30 * time.Millisecond)
+
+	run := p.pending.get(runID)
+	if run == nil {
+		t.Fatal("run should remain after disconnect while turn active")
+	}
+	ev := run.peekLastRecoverable()
+	if ev == nil || ev.name != "ping" {
+		t.Fatalf("expected ping cached on disconnect, got %#v", ev)
+	}
+
+	resumeReq := httptest.NewRequest(http.MethodPost, "/v1/chat-messages",
+		strings.NewReader(`{"run_id":`+jsonQuote(runID)+`}`))
+	resumeReq.Header.Set("Authorization", "Bearer secret")
+	resumeReq.Header.Set("X-Chat-API-User", "user_001")
+	resumeReq.Header.Set("Content-Type", "application/json")
+	resumeReq.Header.Set("Accept", "text/event-stream")
+	resumeRec := httptest.NewRecorder()
+	go func() {
+		p.routes().ServeHTTP(resumeRec, resumeReq)
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	events := parseSSE(resumeRec.Body.String())
+	foundPing := false
+	for _, e := range events {
+		if e.Name != "ping" {
+			continue
+		}
+		foundPing = true
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(e.Data), &payload); err != nil {
+			t.Fatalf("ping payload: %v", err)
+		}
+		if payload["run_id"] != runID {
+			t.Fatalf("ping run_id=%#v want %q", payload["run_id"], runID)
+		}
+	}
+	if !foundPing {
+		t.Fatalf("missing ping on resume: %#v body=%s", events, resumeRec.Body.String())
+	}
+	close(block)
+}
+
 func TestResumeAfterFinishedReturnsMessageEnd(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
 	bindTestSessions(t, p)
@@ -385,6 +452,39 @@ func TestResumeUnknownRunReturnsMessageEnd(t *testing.T) {
 	if !hasEvent(parseSSE(rec.Body.String()), "message_end") {
 		t.Fatalf("missing message_end: %s", rec.Body.String())
 	}
+}
+
+func TestResumeUnknownRunWithConversationIDIncludesItInMessageEnd(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	body := `{"run_id":"run_does_not_exist","conversation_id":"conv_resume_hint"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	events := parseSSE(rec.Body.String())
+	if !hasEvent(events, "message_end") {
+		t.Fatalf("missing message_end: %s", rec.Body.String())
+	}
+	for _, e := range events {
+		if e.Name != "message_end" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(e.Data), &payload); err != nil {
+			t.Fatalf("message_end payload: %v", err)
+		}
+		if payload["conversation_id"] != "conv_resume_hint" {
+			t.Fatalf("message_end conversation_id=%#v, want conv_resume_hint payload=%#v", payload["conversation_id"], payload)
+		}
+		return
+	}
+	t.Fatal("message_end event not found")
 }
 
 func TestResumeForeignRunReturnsMessageEnd(t *testing.T) {

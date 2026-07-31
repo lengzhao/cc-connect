@@ -233,14 +233,16 @@ message_id = "{conversation_id}:{turn_index}"
 **断链重连（resume）**
 
 ```json
-{ "run_id": "run_abc" }
+{ "run_id": "run_abc", "conversation_id": "conv_xxx" }
 ```
 
-- 断开 SSE **不**停止 agent；断线后切到虚拟 sink，只缓存**最后一条**可恢复事件（`text_delta` / `thinking_delta` / `question_request` / `permission_request`）。
+`conversation_id` 可选；run 不存在 / 非归属 user / turn 已结束时，若请求携带 `conversation_id`，空的 `message_end` 会回传该字段，便于客户端改查 history。
+
+- 断开 SSE **不**停止 agent；断线后切到虚拟 sink，只缓存**最后一条**可恢复事件（`text_delta` / `thinking_delta` / `question_request` / `permission_request` / `ping`）。断链瞬间默认缓存一条 `ping`，断线期间若有新事件则覆盖。
 - 重连后：若有缓存则立即补发该事件；若 run 不存在、非归属 user、或 turn 已在断线期间结束，返回空的 `message_end`（客户端可改查 history）；若重连时 turn 仍在跑、随后结束，正常收 `message_end`。
 - 普通正文缓存使用完整快照 + `replace:true`。
 - 同一 run 同时只允许一个活跃 SSE；已连接时 resume → `409 run already attached`。
-- run 不存在 / 非归属 user → 空的 `message_end`（客户端可改查 history）。
+- run 不存在 / 非归属 user → 空的 `message_end`（客户端可改查 history）；请求携带 `conversation_id` 时，`message_end` 会回传该字段
 - 断线后产生 `question_request` 时，若配置了 `question_notify_url`，异步 POST 通知 BFF（失败不影响 turn）。Body 仅含 `conversation_id`、`message_id`、`run_id`、`user_id`、`channel`；事件类型见 header `X-Chat-API-Event`。
 
 详见 [断链重连设计](./plans/2026-07-24-chat-api-disconnect-resume-design.md)。
@@ -707,14 +709,16 @@ X-Chat-API-User: user_001
 Content-Type: application/json
 Accept: text/event-stream
 
-{"run_id":"run_abc"}
+{"run_id":"run_abc","conversation_id":"conv_xxx"}
 ```
+
+可选 `conversation_id`：run 已结束或不存在时，空的 `message_end` 会带上该字段。
 
 | 条件 | 响应 |
 |------|------|
-| run 仍在跑 + 有缓存事件 | 先补发最后一条可恢复事件，再继续 SSE |
-| run 仍在跑 + 无缓存 | 直接挂载后续增量 |
-| 断线期间已结束 / run 不存在 / 非归属 user | 空的 `message_end`（客户端可改查 history） |
+| run 仍在跑 + 有缓存事件 | 先补发最后一条可恢复事件（断链默认 `ping`，断线期间新事件覆盖），再继续 SSE |
+| run 仍在跑 + 无缓存 | 直接挂载后续增量（断链时已默认缓存 `ping`，重连会先收到） |
+| 断线期间已结束 / run 不存在 / 非归属 user | 空的 `message_end`（客户端可改查 history）；请求含 `conversation_id` 时回传 |
 | 已有活跃 SSE | `409 run already attached` |
 
 ### 4.9 取消轮次

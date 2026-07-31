@@ -24,11 +24,11 @@
 | 项 | 决定 |
 |----|------|
 | 重连入口 | 复用 `POST /chat-messages`，body 含 `run_id`（无 `query`） |
-| 缓存模型 | `lastRecoverableEvent`：断线后覆盖写入，只保留最后一条 |
+| 缓存模型 | `lastRecoverableEvent`：断线后覆盖写入，只保留最后一条；断链瞬间默认写入 `ping` |
 | 连接抽象 | `runEventSink`：`sseEventSink` / `detachedEventSink` |
 | 外部通知 | `question_notify_url`；仅断线后 `question_request` |
 | 终态处理 | live / detached 一律 `complete()` + 立刻 `delete`；已挂上的 resume SSE 仍可通过 `done` 收到 `message_end` |
-| 未匹配 resume | run 不存在 / 非归属 user → 空的 `message_end` |
+| 未匹配 resume | run 不存在 / 非归属 user → 空的 `message_end`；请求携带 `conversation_id` 时回传该字段 |
 | 缓存消费 | resume 先 `peek`，SSE 写成功后再 `clear`；写失败则 `detach` 并保留缓存 |
 | 未决确认 | 断线后 `question_request`/`permission_request` 不被后续 `text_delta`/`thinking_delta` 覆盖 |
 | 并发 | 同一 run 同时只允许一个活跃 SSE；已 attached 时 resume → `409` |
