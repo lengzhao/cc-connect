@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -584,4 +585,29 @@ func TestSetMaxAttachmentSize_ConcurrentSafe(t *testing.T) {
 		_ = api.sendBodyLimit()
 	}
 	<-done
+}
+
+func TestNewAPIServer_DefaultSocketPath(t *testing.T) {
+	t.Parallel()
+	runDir := t.TempDir()
+	if len(runDir) > 80 {
+		runDir = "/tmp/cc-connect-api-run"
+		if err := os.MkdirAll(runDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := filepath.Join(runDir, "api.sock")
+
+	srv, err := NewAPIServer(runDir)
+	if err != nil {
+		t.Fatalf("NewAPIServer: %v", err)
+	}
+	defer srv.Stop()
+
+	if got := srv.SocketPath(); got != want {
+		t.Fatalf("SocketPath() = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("stat socket: %v", err)
+	}
 }

@@ -39,10 +39,16 @@
 # 会话数据存储目录（默认 ~/.cc-connect），以 JSON 文件保存对话历史和会话状态。
 # data_dir = "/path/to/custom/dir"
 
+# Runtime state directory for Unix sockets and ephemeral files (default: <data_dir>/run).
+# Set a pod-specific path when multiple instances share the same data_dir mount.
+# 运行态目录，存放 Unix socket 和临时文件（默认 <data_dir>/run）。
+# 多个 Pod 共享 data_dir 时可设为 Pod 专属路径，避免 socket 冲突。
+# run_dir = "/tmp/cc-connect-${HOSTNAME}/run"
+
 # Optional: override the resident ask-user MCP Unix socket path.
-# When unset, cc-connect listens on <data_dir>/run/askuser-mcp.sock.
+# When unset, cc-connect listens on <run_dir>/askuser-mcp.sock.
 # 可选：覆盖常驻 ask-user MCP 的 Unix socket 路径。
-# 未设置时默认监听 <data_dir>/run/askuser-mcp.sock。
+# 未设置时默认监听 <run_dir>/askuser-mcp.sock。
 # ask_user_mcp_socket = "/tmp/cc-connect-askuser.sock"
 
 # Attachment send-back switch for `cc-connect send --image/--file`.

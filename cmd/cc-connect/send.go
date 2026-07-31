@@ -344,17 +344,20 @@ func decodeSendPayload(data []byte, req *core.SendRequest) error {
 }
 
 func resolveSocketPath(dataDir string) string {
-	if dataDir != "" {
-		return filepath.Join(dataDir, "run", "api.sock")
+	var configuredRunDir string
+	if cfg := loadSendConfigBestEffort(); cfg != nil {
+		configuredRunDir = cfg.RunDir
+		if dataDir == "" && cfg.DataDir != "" {
+			dataDir = cfg.DataDir
+		}
 	}
-	// Check CC_DATA_DIR env var for custom data_dir configuration
-	if envDataDir := strings.TrimSpace(os.Getenv("CC_DATA_DIR")); envDataDir != "" {
-		return filepath.Join(envDataDir, "run", "api.sock")
+	if dataDir == "" {
+		dataDir = resolveDataDir("")
+		if envDataDir := strings.TrimSpace(os.Getenv("CC_DATA_DIR")); envDataDir != "" {
+			dataDir = envDataDir
+		}
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".cc-connect", "run", "api.sock")
-	}
-	return filepath.Join(".cc-connect", "run", "api.sock")
+	return filepath.Join(core.ResolveRunDir(dataDir, configuredRunDir), "api.sock")
 }
 
 func printSendUsage() {
@@ -385,6 +388,7 @@ Options:
   -p, --project <name>     Target project (optional if only one project)
   -s, --session <key>      Target session key (optional, picks first active)
       --data-dir <path>    Data directory (default: ~/.cc-connect)
+                           Socket path follows run_dir in config.toml
   -h, --help               Show this help
 
 Examples:

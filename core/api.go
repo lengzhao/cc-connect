@@ -63,13 +63,17 @@ type SendRequest struct {
 	AtAll      bool              `json:"at_all,omitempty"`
 }
 
-// NewAPIServer creates an API server on a Unix socket.
-func NewAPIServer(dataDir string) (*APIServer, error) {
-	sockDir := filepath.Join(dataDir, "run")
-	if err := os.MkdirAll(sockDir, 0o755); err != nil {
+const apiSocketName = "api.sock"
+
+// NewAPIServer creates an API server on a Unix socket at <runDir>/api.sock.
+func NewAPIServer(runDir string) (*APIServer, error) {
+	if runDir == "" {
+		return nil, fmt.Errorf("api server: run dir required")
+	}
+	sockPath := filepath.Join(runDir, apiSocketName)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create run dir: %w", err)
 	}
-	sockPath := filepath.Join(sockDir, "api.sock")
 
 	// Remove stale socket
 	os.Remove(sockPath)

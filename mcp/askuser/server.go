@@ -33,8 +33,8 @@ const (
 
 // ResolveSocketPath returns the Unix socket path for the resident ask-user MCP server.
 // When configured is non-empty it is used as-is; otherwise the default is
-// <dataDir>/run/askuser-mcp.sock with a short temp fallback when that path is too long.
-func ResolveSocketPath(dataDir, configured string) (string, error) {
+// <runDir>/askuser-mcp.sock with a short temp fallback when that path is too long.
+func ResolveSocketPath(runDir, configured string) (string, error) {
 	configured = strings.TrimSpace(configured)
 	if configured != "" {
 		if len(configured) > maxUnixSocketPath {
@@ -42,17 +42,17 @@ func ResolveSocketPath(dataDir, configured string) (string, error) {
 		}
 		return configured, nil
 	}
-	primary := filepath.Join(dataDir, "run", askUserMCPSocket)
+	primary := filepath.Join(runDir, askUserMCPSocket)
 	if len(primary) <= maxUnixSocketPath {
 		return primary, nil
 	}
 	sum := sha256.Sum256([]byte(primary))
 	short := filepath.Join(os.TempDir(), "cc-connect-askuser-"+hex.EncodeToString(sum[:8])+".sock")
 	if len(short) > maxUnixSocketPath {
-		return "", fmt.Errorf("askuser: cannot derive unix socket path under %q", dataDir)
+		return "", fmt.Errorf("askuser: cannot derive unix socket path under %q", runDir)
 	}
-	slog.Warn("askuser mcp: data_dir path too long for run/askuser-mcp.sock, using temp socket",
-		"data_dir", dataDir, "socket", short)
+	slog.Warn("askuser mcp: run_dir path too long for askuser-mcp.sock, using temp socket",
+		"run_dir", runDir, "socket", short)
 	return short, nil
 }
 
@@ -71,12 +71,12 @@ func Start(hub *core.AskUserHub) (*Server, error) {
 }
 
 // StartUnix listens on the resolved Unix socket path and serves /mcp.
-// When configuredSocket is empty, the default is <dataDir>/run/askuser-mcp.sock.
-func StartUnix(hub *core.AskUserHub, dataDir, configuredSocket string) (*Server, error) {
-	if dataDir == "" {
-		return nil, fmt.Errorf("askuser: data dir required")
+// When configuredSocket is empty, the default is <runDir>/askuser-mcp.sock.
+func StartUnix(hub *core.AskUserHub, runDir, configuredSocket string) (*Server, error) {
+	if runDir == "" {
+		return nil, fmt.Errorf("askuser: run dir required")
 	}
-	sockPath, err := ResolveSocketPath(dataDir, configuredSocket)
+	sockPath, err := ResolveSocketPath(runDir, configuredSocket)
 	if err != nil {
 		return nil, err
 	}

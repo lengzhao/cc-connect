@@ -375,11 +375,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	runDir := core.ResolveRunDir(cfg.DataDir, cfg.RunDir)
+
 	engines := make([]*core.Engine, 0, len(cfg.Projects))
 	effectiveWorkDirs := make([]string, 0, len(cfg.Projects))
 
 	askHub := core.NewAskUserHub()
-	askMCP, err := askuser.StartUnix(askHub, cfg.DataDir, cfg.AskUserMCPSocket)
+	askMCP, err := askuser.StartUnix(askHub, runDir, cfg.AskUserMCPSocket)
 	if err != nil {
 		slog.Error("failed to start ask-user MCP server", "error", err)
 		os.Exit(1)
@@ -418,7 +420,7 @@ func main() {
 
 		var platforms []core.Platform
 		for _, pc := range proj.Platforms {
-			opts := buildPlatformOptions(cfg.DataDir, proj, pc)
+			opts := buildPlatformOptions(cfg.DataDir, runDir, proj, pc)
 			p, err := core.CreatePlatform(pc.Type, opts)
 			if err != nil {
 				slog.Error("failed to create platform", "project", proj.Name, "type", pc.Type, "error", err)
@@ -1302,7 +1304,7 @@ func main() {
 	}
 
 	// Start internal API server for CLI send
-	apiSrv, err := core.NewAPIServer(cfg.DataDir)
+	apiSrv, err := core.NewAPIServer(runDir)
 	if err != nil {
 		slog.Warn("api server unavailable", "error", err)
 	} else {
@@ -1352,7 +1354,7 @@ func main() {
 	// for the target platform (or with a 10s safety timeout), so async
 	// platforms that need 2-3s to actually connect (e.g. Telegram) do not
 	// silently drop the notify. See issue #1383.
-	if notify := core.ConsumeRestartNotify(cfg.DataDir); notify != nil {
+	if notify := core.ConsumeRestartNotify(runDir); notify != nil {
 		slog.Info("post-restart: queuing success notification", "platform", notify.Platform, "session", notify.SessionKey)
 		for _, e := range engines {
 			e.SetPendingRestartNotify(notify)
@@ -1401,7 +1403,7 @@ func main() {
 	instanceLock.Release()
 
 	if restartReq != nil {
-		if err := core.SaveRestartNotify(cfg.DataDir, *restartReq); err != nil {
+		if err := core.SaveRestartNotify(runDir, *restartReq); err != nil {
 			slog.Error("restart: save notify failed", "error", err)
 		}
 		execPath, err := os.Executable()
@@ -1928,8 +1930,8 @@ func buildAgentOptions(dataDir string, proj config.ProjectConfig) map[string]any
 // so platforms (e.g. chat-api) can auto-bootstrap channel workspaces without
 // duplicating base_dir in platform options. Explicit platform base_dir still
 // wins via multiWorkspaceBaseDirFromOpts precedence.
-func buildPlatformOptions(dataDir string, proj config.ProjectConfig, pc config.PlatformConfig) map[string]any {
-	extra := 2
+func buildPlatformOptions(dataDir, runDir string, proj config.ProjectConfig, pc config.PlatformConfig) map[string]any {
+	extra := 3
 	if proj.Mode == "multi-workspace" && strings.TrimSpace(proj.BaseDir) != "" {
 		extra++
 	}
@@ -1938,6 +1940,7 @@ func buildPlatformOptions(dataDir string, proj config.ProjectConfig, pc config.P
 		opts[k] = v
 	}
 	opts["cc_data_dir"] = dataDir
+	opts["cc_run_dir"] = runDir
 	opts["cc_project"] = proj.Name
 	if strings.EqualFold(pc.Type, "chat-api") {
 		injectChatAPINameProviderOptions(opts, proj)

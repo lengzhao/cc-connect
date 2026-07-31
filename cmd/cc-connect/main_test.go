@@ -205,10 +205,13 @@ func TestBuildPlatformOptionsInjectsBaseDirInMultiWorkspace(t *testing.T) {
 		},
 	}
 
-	got := buildPlatformOptions("/tmp/data", proj, pc)
+	got := buildPlatformOptions("/tmp/data", "/tmp/data/run", proj, pc)
 
 	if got["cc_data_dir"] != "/tmp/data" {
 		t.Fatalf("cc_data_dir = %v, want %q", got["cc_data_dir"], "/tmp/data")
+	}
+	if got["cc_run_dir"] != "/tmp/data/run" {
+		t.Fatalf("cc_run_dir = %v, want %q", got["cc_run_dir"], "/tmp/data/run")
 	}
 	if got["cc_project"] != "demo-project" {
 		t.Fatalf("cc_project = %v, want %q", got["cc_project"], "demo-project")
@@ -231,7 +234,7 @@ func TestBuildPlatformOptionsSkipsBaseDirOutsideMultiWorkspace(t *testing.T) {
 	}
 	pc := config.PlatformConfig{Type: "chat-api", Options: map[string]any{"token": "secret"}}
 
-	got := buildPlatformOptions("/tmp/data", proj, pc)
+	got := buildPlatformOptions("/tmp/data", "/tmp/data/run", proj, pc)
 	if _, exists := got["cc_base_dir"]; exists {
 		t.Fatalf("cc_base_dir should not be injected outside multi-workspace: %v", got)
 	}

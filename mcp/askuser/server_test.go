@@ -130,11 +130,12 @@ func TestStartUnix_ServesMCP(t *testing.T) {
 }
 
 func TestResolveSocketPath_Default(t *testing.T) {
-	got, err := ResolveSocketPath("/tmp/cc-connect-test", "")
+	runDir := "/tmp/cc-connect-test/run"
+	got, err := ResolveSocketPath(runDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join("/tmp/cc-connect-test", "run", askUserMCPSocket)
+	want := filepath.Join(runDir, askUserMCPSocket)
 	if got != want {
 		t.Fatalf("ResolveSocketPath() = %q, want %q", got, want)
 	}
@@ -142,7 +143,7 @@ func TestResolveSocketPath_Default(t *testing.T) {
 
 func TestResolveSocketPath_Configured(t *testing.T) {
 	custom := "/tmp/cc-connect-custom-ask.sock"
-	got, err := ResolveSocketPath("/tmp/cc-connect-test", custom)
+	got, err := ResolveSocketPath("/tmp/cc-connect-test/run", custom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,7 @@ func TestStartUnix_UsesConfiguredSocket(t *testing.T) {
 	if len(custom) > maxUnixSocketPath {
 		custom = "/tmp/cc-connect-configured-ask.sock"
 	}
-	srv, err := StartUnix(hub, "/tmp/cc-connect-test", custom)
+	srv, err := StartUnix(hub, "/tmp/cc-connect-test/run", custom)
 	if err != nil {
 		t.Fatal(err)
 	}

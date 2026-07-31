@@ -108,19 +108,18 @@ type replyFooterUsageCache struct {
 
 // SaveRestartNotify persists restart info so the new process can send
 // a "restart successful" message after startup.
-func SaveRestartNotify(dataDir string, req RestartRequest) error {
-	dir := filepath.Join(dataDir, "run")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		slog.Warn("SaveRestartNotify: mkdir failed", "dir", dir, "error", err)
+func SaveRestartNotify(runDir string, req RestartRequest) error {
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		slog.Warn("SaveRestartNotify: mkdir failed", "dir", runDir, "error", err)
 	}
 	data, _ := json.Marshal(req)
-	return os.WriteFile(filepath.Join(dir, "restart_notify"), data, 0o644)
+	return os.WriteFile(filepath.Join(runDir, "restart_notify"), data, 0o644)
 }
 
 // ConsumeRestartNotify reads and deletes the restart notification file.
 // Returns nil if no notification is pending.
-func ConsumeRestartNotify(dataDir string) *RestartRequest {
-	p := filepath.Join(dataDir, "run", "restart_notify")
+func ConsumeRestartNotify(runDir string) *RestartRequest {
+	p := filepath.Join(runDir, "restart_notify")
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return nil

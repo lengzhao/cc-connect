@@ -66,7 +66,7 @@ token = "mgmt-secret"
 | `port`   | integer | `9820`    | TCP port to listen on                            |
 | `token`  | string  | (required)| Shared secret for authentication                 |
 
-When `enabled` is `false`, the Management API is not started. The token should be a strong, random string (e.g. 32+ characters).
+When `enabled` is `false`, the Management API is not started. The token should be a strong random string (32+ characters recommended).
 
 ### 2.2 Base URL
 

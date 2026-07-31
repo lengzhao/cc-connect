@@ -169,7 +169,7 @@ func New(opts map[string]any) (core.Platform, error) {
 	}
 
 	core.CheckAllowFrom("qqbot", allowFrom)
-	dataDir, _ := opts["cc_data_dir"].(string)
+	runDir, _ := opts["cc_run_dir"].(string)
 	return &Platform{
 		appID:                 appID,
 		appSecret:             appSecret,
@@ -178,7 +178,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		shareSessionInChannel: shareSessionInChannel,
 		intents:               intents,
 		markdownSupport:       markdownSupport,
-		messageCachePath:      qqbotMessageCachePath(dataDir),
+		messageCachePath:      qqbotMessageCachePath(runDir),
 	}, nil
 }
 
@@ -1588,12 +1588,12 @@ func stripAtMention(content string) string {
 	return content
 }
 
-func qqbotMessageCachePath(dataDir string) string {
-	dataDir = strings.TrimSpace(dataDir)
-	if dataDir == "" {
+func qqbotMessageCachePath(runDir string) string {
+	runDir = strings.TrimSpace(runDir)
+	if runDir == "" {
 		return ""
 	}
-	return filepath.Join(dataDir, "run", "qqbot_message_cache.json")
+	return filepath.Join(runDir, "qqbot_message_cache.json")
 }
 
 func (p *Platform) loadMessageCache() error {
