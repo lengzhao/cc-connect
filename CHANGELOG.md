@@ -1,5 +1,13 @@
 ﻿# Changelog
 
+## v9.1.8 (2026-07-31)
+
+### Added
+- **chat-api SSE resume**: on disconnect the recoverable cache defaults to a `ping` event so reconnect immediately confirms the stream is alive; later detached events (`text_delta`, `question_request`, etc.) overwrite it.
+
+### Fixed
+- **chat-api SSE resume**: when resume targets a missing or finished run, an empty `message_end` now echoes `conversation_id` from the resume request body so clients can fall back to history without losing context.
+
 ## v9.1.7 (2026-07-31)
 
 ### Added
