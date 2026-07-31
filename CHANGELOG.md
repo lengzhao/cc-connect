@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.10 (2026-07-31)
+
+### Fixed
+- **chat-api AskUserQuestion history**: in multi-workspace mode, question prompts are written to the bound conversation session instead of a stray session keyed by interactiveKey, so `GET /conversations/{id}/messages` shows the in-progress turn after refresh.
+
 ## v9.1.9 (2026-07-31)
 
 ### Changed
