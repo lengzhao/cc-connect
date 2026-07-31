@@ -1,9 +1,14 @@
 package chatapi
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestQuestionNotifyBody_MinimalFields(t *testing.T) {
@@ -57,6 +62,59 @@ func TestApplyQuestionNotifyHeaders_CustomAndDefaults(t *testing.T) {
 	}
 	if got := req.Header.Get("X-Chat-API-Event"); got != "custom-event" {
 		t.Fatalf("event=%q", got)
+	}
+}
+
+func TestNotifyQuestionAsync_SuccessLogs(t *testing.T) {
+	var done sync.WaitGroup
+	done.Add(1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer done.Done()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	prev := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	p := &Platform{
+		questionNotifyURL:     srv.URL,
+		questionNotifyTimeout: time.Second,
+	}
+	run := &runState{
+		id:             "run_test",
+		conversationID: "conv_1",
+		messageID:      "conv_1:0",
+	}
+	p.notifyQuestionAsync(run)
+
+	waitDone := make(chan struct{})
+	go func() {
+		done.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("question notify did not complete")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var out string
+	for time.Now().Before(deadline) {
+		out = buf.String()
+		if strings.Contains(out, "question notify sent") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(out, "question notify sent") {
+		t.Fatalf("expected success log, got %q", out)
+	}
+	if !strings.Contains(out, "run_test") {
+		t.Fatalf("expected run_id in log, got %q", out)
 	}
 }
 

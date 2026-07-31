@@ -139,7 +139,15 @@ func (p *Platform) notifyQuestionAsync(run *runState) {
 		defer resp.Body.Close()
 		if resp.StatusCode >= 300 {
 			slog.Warn("chat-api: question notify non-2xx", "url", url, "status", resp.StatusCode)
+			return
 		}
+		slog.Info("chat-api: question notify sent",
+			"url", url,
+			"run_id", run.id,
+			"conversation_id", run.conversationID,
+			"message_id", run.messageID,
+			"status", resp.StatusCode,
+		)
 	}()
 }
 
