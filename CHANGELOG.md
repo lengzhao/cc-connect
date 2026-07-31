@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.12 (2026-07-31)
+
+### Fixed
+- **chat-api message history on refresh**: `GET /conversations/{id}/messages` now includes in-progress turns (user query with empty `answer`) so page refresh after SSE disconnect can reload the pending user message; `message_id` turn indexing still counts only completed turns.
+
 ## v9.1.11 (2026-07-31)
 
 ### Added
