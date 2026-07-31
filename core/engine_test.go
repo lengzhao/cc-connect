@@ -7226,7 +7226,7 @@ func TestSendAskQuestionPrompt_RecommendedOptionLabel(t *testing.T) {
 			{Label: "SQLite"},
 		},
 	}}
-	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", qs, 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive("test:chat:user1"), qs, 0)
 	if len(p.sentCards) != 1 {
 		t.Fatalf("cards=%d", len(p.sentCards))
 	}
@@ -7242,7 +7242,7 @@ func TestSendAskQuestionPrompt_RecommendedOptionLabel(t *testing.T) {
 func TestSendAskQuestionPrompt_CardPlatform(t *testing.T) {
 	e := newTestEngine()
 	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
-	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", testQuestions(), 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive("test:chat:user1"), testQuestions(), 0)
 
 	if len(p.sentCards) != 1 {
 		t.Fatalf("expected 1 card, got %d", len(p.sentCards))
@@ -7261,7 +7261,7 @@ func TestSendAskQuestionPrompt_CardPlatform_MultiQuestion_ShowsIndex(t *testing.
 	e := newTestEngine()
 	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
 	qs := testMultiQuestions()
-	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", qs, 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive("test:chat:user1"), qs, 0)
 
 	if len(p.sentCards) != 1 {
 		t.Fatalf("expected 1 card, got %d", len(p.sentCards))
@@ -7275,7 +7275,7 @@ func TestSendAskQuestionPrompt_CardPlatform_MultiQuestion_ShowsIndex(t *testing.
 func TestSendAskQuestionPrompt_InlineButtonPlatform(t *testing.T) {
 	e := newTestEngine()
 	p := &stubInlineButtonPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
-	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", testQuestions(), 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive("test:chat:user1"), testQuestions(), 0)
 
 	if len(p.buttonRows) != 3 {
 		t.Fatalf("expected 3 button rows, got %d", len(p.buttonRows))
@@ -7288,7 +7288,7 @@ func TestSendAskQuestionPrompt_InlineButtonPlatform(t *testing.T) {
 func TestSendAskQuestionPrompt_PlainPlatform(t *testing.T) {
 	e := newTestEngine()
 	p := &stubPlatformEngine{n: "plain"}
-	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", testQuestions(), 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive("test:chat:user1"), testQuestions(), 0)
 
 	if len(p.sent) != 1 {
 		t.Fatal("expected 1 message")
@@ -7395,7 +7395,7 @@ func TestSendAskQuestionPrompt_PreferAskUserButtonsUsesInlineEvenWithCard(t *tes
 			{Label: "array"},
 		},
 	}}
-	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", qs, 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive("test:chat:user1"), qs, 0)
 
 	p.mu.Lock()
 	nCards := len(p.sentCards) + len(p.repliedCards)
@@ -7969,7 +7969,7 @@ func TestHandlePendingPermission_AskUserQuestion_DefaultPlatform_NoHistory(t *te
 	e.interactiveStates[sessionKey] = state
 	e.interactiveMu.Unlock()
 
-	e.sendAskQuestionPrompt(p, "ctx", sessionKey, state.pending.Questions, 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive(sessionKey), state.pending.Questions, 0)
 
 	if !e.handlePendingPermission(p, &Message{
 		SessionKey: sessionKey,
@@ -8019,7 +8019,7 @@ func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_WritesLabel(t *
 	e.interactiveStates[sessionKey] = state
 	e.interactiveMu.Unlock()
 
-	e.sendAskQuestionPrompt(p, "ctx", sessionKey, state.pending.Questions, 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive(sessionKey), state.pending.Questions, 0)
 
 	if !e.handlePendingPermission(p, &Message{
 		SessionKey: sessionKey,
@@ -8085,7 +8085,7 @@ func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_RespondPermissi
 	e.interactiveStates[sessionKey] = state
 	e.interactiveMu.Unlock()
 
-	e.sendAskQuestionPrompt(p, "ctx", sessionKey, state.pending.Questions, 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive(sessionKey), state.pending.Questions, 0)
 
 	if !e.handlePendingPermission(p, &Message{
 		SessionKey: sessionKey,
@@ -8145,7 +8145,7 @@ func TestHandlePendingPermission_MCPAskUser_HistoryRecorder_Writes(t *testing.T)
 	e.interactiveStates[sessionKey] = state
 	e.interactiveMu.Unlock()
 
-	e.sendAskQuestionPrompt(p, "ctx", sessionKey, state.pending.Questions, 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive(sessionKey), state.pending.Questions, 0)
 
 	if !e.handlePendingPermission(p, &Message{
 		SessionKey: sessionKey,
@@ -8199,7 +8199,7 @@ func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_MultiQuestion(t
 	e.interactiveStates[sessionKey] = state
 	e.interactiveMu.Unlock()
 
-	e.sendAskQuestionPrompt(p, "ctx", sessionKey, state.pending.Questions, 0)
+	e.sendAskQuestionPrompt(p, "ctx", e.sessions.GetOrCreateActive(sessionKey), state.pending.Questions, 0)
 
 	if !e.handlePendingPermission(p, &Message{
 		SessionKey: sessionKey, UserID: "user1", Content: "1", ReplyCtx: "ctx",
@@ -8231,6 +8231,38 @@ func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_MultiQuestion(t
 	}
 	if hist[4].Role != "user" || hist[4].Content != "Echo" {
 		t.Fatalf("hist[4] = %#v", hist[4])
+	}
+}
+
+func TestSendAskQuestionPrompt_MultiWorkspace_WritesHistoryToBoundSession(t *testing.T) {
+	e := newTestEngine()
+	p := &stubAskUserHistoryPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}, record: true}
+
+	engineSessionKey := "chat-api:channel002:conv_abc"
+	interactiveKey := "/tmp/workspaces/channel002:" + engineSessionKey
+
+	convSession, err := e.sessions.NewSessionWithID("chat-api:owner", "conv_abc", "default")
+	if err != nil {
+		t.Fatalf("NewSessionWithID: %v", err)
+	}
+	if !e.sessions.BindActiveSession(engineSessionKey, convSession.ID) {
+		t.Fatal("BindActiveSession failed")
+	}
+	convSession.AddUserHistory("发送3个选项", "user1", "Alice")
+
+	e.sendAskQuestionPrompt(p, "ctx", convSession, testQuestions(), 0)
+
+	hist := convSession.GetHistory(0)
+	if len(hist) != 2 {
+		t.Fatalf("conv history len = %d, want 2 (user query + assistant question)", len(hist))
+	}
+	if hist[1].Role != "assistant" || !strings.Contains(hist[1].Content, "Which database?") {
+		t.Fatalf("hist[1] = %#v, want assistant question on conversation session", hist[1])
+	}
+
+	wrong := e.sessions.GetOrCreateActive(interactiveKey)
+	if len(wrong.GetHistory(0)) != 0 {
+		t.Fatalf("history must not land on interactiveKey session %q: %#v", interactiveKey, wrong.GetHistory(0))
 	}
 }
 

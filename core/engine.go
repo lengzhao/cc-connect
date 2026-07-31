@@ -3402,7 +3402,7 @@ found:
 		if curIdx+1 < len(pending.Questions) {
 			pending.CurrentQuestion = curIdx + 1
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", q.Question, display))
-			e.sendAskQuestionPrompt(p, msg.ReplyCtx, msg.SessionKey, pending.Questions, curIdx+1)
+			e.sendAskQuestionPrompt(p, msg.ReplyCtx, e.sessionForAskUserHistory(msg), pending.Questions, curIdx+1)
 			return true
 		}
 
@@ -3581,17 +3581,26 @@ func (e *Engine) finalizeAskQuestion(p Platform, msg *Message, state *interactiv
 	return true
 }
 
+// sessionForAskUserHistory resolves the Session record that backs conversation
+// history for AskUserQuestion. msg.SessionKey is the engine session key
+// (e.g. chat-api channel+conversation), not the multi-workspace interactiveKey.
+func (e *Engine) sessionForAskUserHistory(msg *Message) *Session {
+	if e.sessions == nil || msg == nil || msg.SessionKey == "" {
+		return nil
+	}
+	return e.sessions.GetOrCreateActive(msg.SessionKey)
+}
+
 // recordAskUserQuestionPromptHistory writes one AskUserQuestion prompt to session
 // history when the platform opts in via AskUserQuestionHistoryRecorder.
-func (e *Engine) recordAskUserQuestionPromptHistory(p Platform, sessionKey string, q UserQuestion) {
-	if !e.askUserQuestionHistoryEnabled(p) || sessionKey == "" || e.sessions == nil {
+func (e *Engine) recordAskUserQuestionPromptHistory(p Platform, session *Session, q UserQuestion) {
+	if !e.askUserQuestionHistoryEnabled(p) || session == nil {
 		return
 	}
 	text := formatAskQuestionHistoryText(e, q)
 	if text == "" {
 		return
 	}
-	session := e.sessions.GetOrCreateActive(sessionKey)
 	session.AddHistory("assistant", text)
 	e.sessions.Save()
 }
@@ -3599,14 +3608,17 @@ func (e *Engine) recordAskUserQuestionPromptHistory(p Platform, sessionKey strin
 // recordAskUserQuestionAnswerHistory writes one AskUserQuestion user response to
 // session history when the platform opts in via AskUserQuestionHistoryRecorder.
 func (e *Engine) recordAskUserQuestionAnswerHistory(p Platform, msg *Message, display string) {
-	if !e.askUserQuestionHistoryEnabled(p) || msg == nil || msg.SessionKey == "" || e.sessions == nil {
+	if !e.askUserQuestionHistoryEnabled(p) || msg == nil {
 		return
 	}
 	display = strings.TrimSpace(display)
 	if display == "" {
 		return
 	}
-	session := e.sessions.GetOrCreateActive(msg.SessionKey)
+	session := e.sessionForAskUserHistory(msg)
+	if session == nil {
+		return
+	}
 	session.AddUserHistory(display, msg.UserID, msg.UserName)
 	e.sessions.Save()
 }
@@ -5661,7 +5673,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			state.mu.Unlock()
 
 			if isAskQuestion {
-				e.sendAskQuestions(p, replyCtx, sessionKey, pending)
+				e.sendAskQuestions(p, replyCtx, session, pending)
 			} else {
 				permLimit := e.display.ToolMaxLen
 				if permLimit > 0 {
@@ -11805,11 +11817,11 @@ func preferAskUserButtons(p Platform) bool {
 
 // sendAskQuestions delivers the first AskUserQuestion prompt. Additional
 // questions (if any) are shown sequentially after each answer.
-func (e *Engine) sendAskQuestions(p Platform, replyCtx any, sessionKey string, pending *pendingPermission) {
+func (e *Engine) sendAskQuestions(p Platform, replyCtx any, session *Session, pending *pendingPermission) {
 	if pending == nil || len(pending.Questions) == 0 {
 		return
 	}
-	e.sendAskQuestionPrompt(p, replyCtx, sessionKey, pending.Questions, 0)
+	e.sendAskQuestionPrompt(p, replyCtx, session, pending.Questions, 0)
 }
 
 // dispatchClientFlow delivers a non-blocking App flow guide when the platform
@@ -11871,12 +11883,12 @@ func formatAskOptionDesc(e *Engine, opt UserQuestionOption) string {
 
 // sendAskQuestionPrompt renders one question (by index) from the AskUserQuestion list.
 // qIdx is the 0-based index of the question to display.
-func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, sessionKey string, questions []UserQuestion, qIdx int) {
+func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, session *Session, questions []UserQuestion, qIdx int) {
 	if qIdx >= len(questions) {
 		return
 	}
 	q := questions[qIdx]
-	e.recordAskUserQuestionPromptHistory(p, sessionKey, q)
+	e.recordAskUserQuestionPromptHistory(p, session, q)
 	total := len(questions)
 
 	titleSuffix := ""
