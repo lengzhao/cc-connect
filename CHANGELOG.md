@@ -1,5 +1,13 @@
 ﻿# Changelog
 
+## v9.1.9 (2026-07-31)
+
+### Changed
+- **chat-api AskUserQuestion history**: question and user answer are persisted incrementally—assistant text when the prompt is sent, user label on respond—without waiting for agent handoff or all questions to finish.
+
+### Fixed
+- **chat-api SSE resume**: disconnect only seeds a default `ping` recoverable event when the cache is empty; re-detach after a failed replay no longer overwrites an existing cached event.
+
 ## v9.1.8 (2026-07-31)
 
 ### Added
