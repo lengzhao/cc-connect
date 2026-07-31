@@ -339,13 +339,15 @@ func (r *runState) detachUnderFlush() {
 	}
 	r.detached = true
 	r.sink = &detachedEventSink{run: r, p: r.platform}
-	r.lastRecoverableEvent = &recoverableEvent{
-		name: "ping",
-		payload: map[string]any{
-			"run_id": r.id,
-			"ts":     time.Now().Unix(),
-		},
-		createdAt: time.Now(),
+	if r.lastRecoverableEvent == nil {
+		r.lastRecoverableEvent = &recoverableEvent{
+			name: "ping",
+			payload: map[string]any{
+				"run_id": r.id,
+				"ts":     time.Now().Unix(),
+			},
+			createdAt: time.Now(),
+		}
 	}
 }
 

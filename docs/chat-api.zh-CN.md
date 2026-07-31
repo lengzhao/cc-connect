@@ -376,7 +376,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 - `ping` 为保活事件，客户端可忽略
 - 同一 run 若出现新的确认，会先发 `interaction_superseded`；旧 `interaction_id` 不可再 respond
 - AskUserQuestion 超时后当前阻塞 turn 会取消；后续用户输入应重新 `POST /chat-messages`，作为普通对话
-- 结构化确认（`question_request`）在用户成功 respond 后会写入会话历史：可读问题文本作为 `assistant`，用户看到的选项 label（或自定义输入）作为 `user`，随后再接 Agent 最终回复；`pairHistory` 仍按普通 `query`/`answer` 配对。权限确认（`permission_request`）不写入历史
+- 结构化确认（`question_request`）：发出问题时立即写入可读问题文本（`assistant`）；用户 respond 后立即写入选项 label 或自定义输入（`user`），不等待 Agent 回传或全部题目答完；Agent 最终回复仍在 turn 结束时写入。`pairHistory` 仍按普通 `query`/`answer` 配对。权限确认（`permission_request`）不写入历史
 - 取消：`POST /runs/{run_id}/cancel`（`run_id` 来自 `message` 事件）
 - 断线后确认卡：可配置 `question_notify_url` 收 webhook，再 `POST /chat-messages` + `run_id` 重连补卡或直接 respond
 

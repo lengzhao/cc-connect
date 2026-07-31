@@ -760,6 +760,12 @@ func TestReplayFailureKeepsLastRecoverable(t *testing.T) {
 	if ev == nil || ev.name != "text_delta" {
 		t.Fatalf("peek = %#v", ev)
 	}
+	// Failed replay calls detach again — must not replace an existing cache with ping.
+	run.detach()
+	ev = run.peekLastRecoverable()
+	if ev == nil || ev.name != "text_delta" {
+		t.Fatalf("after re-detach peek = %#v, want preserved text_delta", ev)
+	}
 	// Do not clear — failed write path.
 	if run.peekLastRecoverable() == nil {
 		t.Fatal("cache cleared before successful replay")
@@ -767,6 +773,20 @@ func TestReplayFailureKeepsLastRecoverable(t *testing.T) {
 	run.clearLastRecoverable()
 	if run.peekLastRecoverable() != nil {
 		t.Fatal("expected clear after successful replay")
+	}
+}
+
+func TestDetachSeedsPingWhenNoRecoverableCache(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	run := newRunState("run_ping", "u", "ch", "sk", "c", "c:0", "", p, nil, time.Now().Add(time.Minute))
+	run.detach()
+	ev := run.peekLastRecoverable()
+	if ev == nil || ev.name != "ping" {
+		t.Fatalf("expected ping cache on disconnect, got %#v", ev)
+	}
+	payload, _ := ev.payload.(map[string]any)
+	if payload["run_id"] != "run_ping" {
+		t.Fatalf("ping run_id=%#v", payload["run_id"])
 	}
 }
 

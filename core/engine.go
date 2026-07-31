@@ -3396,12 +3396,13 @@ found:
 		}
 		pending.Answers[curIdx] = answer
 		pending.DisplayAnswers[curIdx] = display
+		e.recordAskUserQuestionAnswerHistory(p, msg, display)
 
 		// More questions remaining — advance to next and send new card
 		if curIdx+1 < len(pending.Questions) {
 			pending.CurrentQuestion = curIdx + 1
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", q.Question, display))
-			e.sendAskQuestionPrompt(p, msg.ReplyCtx, pending.Questions, curIdx+1)
+			e.sendAskQuestionPrompt(p, msg.ReplyCtx, msg.SessionKey, pending.Questions, curIdx+1)
 			return true
 		}
 
@@ -3548,12 +3549,9 @@ func questionAnswersKey(q UserQuestion) string {
 
 func (e *Engine) finalizeAskQuestion(p Platform, msg *Message, state *interactiveState, pending *pendingPermission, ackQuestion, ackAnswer string) bool {
 	if pending != nil && IsMCPAskTool(pending.ToolName) && e.askUserHub != nil {
-		ok := e.askUserHub.Complete(pending.RequestID, pending.Answers, pending.DisplayAnswers)
+		e.askUserHub.Complete(pending.RequestID, pending.Answers, pending.DisplayAnswers)
 		if ackQuestion != "" {
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", ackQuestion, ackAnswer))
-		}
-		if ok {
-			e.maybeRecordAskUserQuestionHistory(p, msg, pending)
 		}
 		state.mu.Lock()
 		state.pending = nil
@@ -3574,7 +3572,6 @@ func (e *Engine) finalizeAskQuestion(p Platform, msg *Message, state *interactiv
 		if ackQuestion != "" {
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", ackQuestion, ackAnswer))
 		}
-		e.maybeRecordAskUserQuestionHistory(p, msg, pending)
 	}
 
 	state.mu.Lock()
@@ -3584,37 +3581,39 @@ func (e *Engine) finalizeAskQuestion(p Platform, msg *Message, state *interactiv
 	return true
 }
 
-// maybeRecordAskUserQuestionHistory appends synthetic assistant/user history
-// turns for platforms that opt in via AskUserQuestionHistoryRecorder.
-func (e *Engine) maybeRecordAskUserQuestionHistory(p Platform, msg *Message, pending *pendingPermission) {
-	if pending == nil || len(pending.Questions) == 0 {
+// recordAskUserQuestionPromptHistory writes one AskUserQuestion prompt to session
+// history when the platform opts in via AskUserQuestionHistoryRecorder.
+func (e *Engine) recordAskUserQuestionPromptHistory(p Platform, sessionKey string, q UserQuestion) {
+	if !e.askUserQuestionHistoryEnabled(p) || sessionKey == "" || e.sessions == nil {
 		return
 	}
-	recorder, ok := p.(AskUserQuestionHistoryRecorder)
-	if !ok || !recorder.RecordAskUserQuestionHistory() {
+	text := formatAskQuestionHistoryText(e, q)
+	if text == "" {
 		return
 	}
-	if msg == nil || msg.SessionKey == "" || e.sessions == nil {
-		return
-	}
-
-	session := e.sessions.GetOrCreateActive(msg.SessionKey)
-	for i, q := range pending.Questions {
-		text := formatAskQuestionHistoryText(e, q)
-		if text == "" {
-			continue
-		}
-		session.AddHistory("assistant", text)
-		display := ""
-		if pending.DisplayAnswers != nil {
-			display = strings.TrimSpace(pending.DisplayAnswers[i])
-		}
-		if display == "" && pending.Answers != nil {
-			display = strings.TrimSpace(pending.Answers[i])
-		}
-		session.AddUserHistory(display, msg.UserID, msg.UserName)
-	}
+	session := e.sessions.GetOrCreateActive(sessionKey)
+	session.AddHistory("assistant", text)
 	e.sessions.Save()
+}
+
+// recordAskUserQuestionAnswerHistory writes one AskUserQuestion user response to
+// session history when the platform opts in via AskUserQuestionHistoryRecorder.
+func (e *Engine) recordAskUserQuestionAnswerHistory(p Platform, msg *Message, display string) {
+	if !e.askUserQuestionHistoryEnabled(p) || msg == nil || msg.SessionKey == "" || e.sessions == nil {
+		return
+	}
+	display = strings.TrimSpace(display)
+	if display == "" {
+		return
+	}
+	session := e.sessions.GetOrCreateActive(msg.SessionKey)
+	session.AddUserHistory(display, msg.UserID, msg.UserName)
+	e.sessions.Save()
+}
+
+func (e *Engine) askUserQuestionHistoryEnabled(p Platform) bool {
+	recorder, ok := p.(AskUserQuestionHistoryRecorder)
+	return ok && recorder.RecordAskUserQuestionHistory()
 }
 
 // formatAskQuestionHistoryText builds a readable plain-text snapshot of one
@@ -5662,7 +5661,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			state.mu.Unlock()
 
 			if isAskQuestion {
-				e.sendAskQuestions(p, replyCtx, pending)
+				e.sendAskQuestions(p, replyCtx, sessionKey, pending)
 			} else {
 				permLimit := e.display.ToolMaxLen
 				if permLimit > 0 {
@@ -11806,11 +11805,11 @@ func preferAskUserButtons(p Platform) bool {
 
 // sendAskQuestions delivers the first AskUserQuestion prompt. Additional
 // questions (if any) are shown sequentially after each answer.
-func (e *Engine) sendAskQuestions(p Platform, replyCtx any, pending *pendingPermission) {
+func (e *Engine) sendAskQuestions(p Platform, replyCtx any, sessionKey string, pending *pendingPermission) {
 	if pending == nil || len(pending.Questions) == 0 {
 		return
 	}
-	e.sendAskQuestionPrompt(p, replyCtx, pending.Questions, 0)
+	e.sendAskQuestionPrompt(p, replyCtx, sessionKey, pending.Questions, 0)
 }
 
 // dispatchClientFlow delivers a non-blocking App flow guide when the platform
@@ -11872,11 +11871,12 @@ func formatAskOptionDesc(e *Engine, opt UserQuestionOption) string {
 
 // sendAskQuestionPrompt renders one question (by index) from the AskUserQuestion list.
 // qIdx is the 0-based index of the question to display.
-func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, questions []UserQuestion, qIdx int) {
+func (e *Engine) sendAskQuestionPrompt(p Platform, replyCtx any, sessionKey string, questions []UserQuestion, qIdx int) {
 	if qIdx >= len(questions) {
 		return
 	}
 	q := questions[qIdx]
+	e.recordAskUserQuestionPromptHistory(p, sessionKey, q)
 	total := len(questions)
 
 	titleSuffix := ""

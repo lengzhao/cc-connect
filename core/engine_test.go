@@ -7226,7 +7226,7 @@ func TestSendAskQuestionPrompt_RecommendedOptionLabel(t *testing.T) {
 			{Label: "SQLite"},
 		},
 	}}
-	e.sendAskQuestionPrompt(p, "ctx", qs, 0)
+	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", qs, 0)
 	if len(p.sentCards) != 1 {
 		t.Fatalf("cards=%d", len(p.sentCards))
 	}
@@ -7242,7 +7242,7 @@ func TestSendAskQuestionPrompt_RecommendedOptionLabel(t *testing.T) {
 func TestSendAskQuestionPrompt_CardPlatform(t *testing.T) {
 	e := newTestEngine()
 	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
-	e.sendAskQuestionPrompt(p, "ctx", testQuestions(), 0)
+	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", testQuestions(), 0)
 
 	if len(p.sentCards) != 1 {
 		t.Fatalf("expected 1 card, got %d", len(p.sentCards))
@@ -7261,7 +7261,7 @@ func TestSendAskQuestionPrompt_CardPlatform_MultiQuestion_ShowsIndex(t *testing.
 	e := newTestEngine()
 	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
 	qs := testMultiQuestions()
-	e.sendAskQuestionPrompt(p, "ctx", qs, 0)
+	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", qs, 0)
 
 	if len(p.sentCards) != 1 {
 		t.Fatalf("expected 1 card, got %d", len(p.sentCards))
@@ -7275,7 +7275,7 @@ func TestSendAskQuestionPrompt_CardPlatform_MultiQuestion_ShowsIndex(t *testing.
 func TestSendAskQuestionPrompt_InlineButtonPlatform(t *testing.T) {
 	e := newTestEngine()
 	p := &stubInlineButtonPlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
-	e.sendAskQuestionPrompt(p, "ctx", testQuestions(), 0)
+	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", testQuestions(), 0)
 
 	if len(p.buttonRows) != 3 {
 		t.Fatalf("expected 3 button rows, got %d", len(p.buttonRows))
@@ -7288,7 +7288,7 @@ func TestSendAskQuestionPrompt_InlineButtonPlatform(t *testing.T) {
 func TestSendAskQuestionPrompt_PlainPlatform(t *testing.T) {
 	e := newTestEngine()
 	p := &stubPlatformEngine{n: "plain"}
-	e.sendAskQuestionPrompt(p, "ctx", testQuestions(), 0)
+	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", testQuestions(), 0)
 
 	if len(p.sent) != 1 {
 		t.Fatal("expected 1 message")
@@ -7395,7 +7395,7 @@ func TestSendAskQuestionPrompt_PreferAskUserButtonsUsesInlineEvenWithCard(t *tes
 			{Label: "array"},
 		},
 	}}
-	e.sendAskQuestionPrompt(p, "ctx", qs, 0)
+	e.sendAskQuestionPrompt(p, "ctx", "test:chat:user1", qs, 0)
 
 	p.mu.Lock()
 	nCards := len(p.sentCards) + len(p.repliedCards)
@@ -7969,6 +7969,8 @@ func TestHandlePendingPermission_AskUserQuestion_DefaultPlatform_NoHistory(t *te
 	e.interactiveStates[sessionKey] = state
 	e.interactiveMu.Unlock()
 
+	e.sendAskQuestionPrompt(p, "ctx", sessionKey, state.pending.Questions, 0)
+
 	if !e.handlePendingPermission(p, &Message{
 		SessionKey: sessionKey,
 		UserID:     "user1",
@@ -8017,6 +8019,8 @@ func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_WritesLabel(t *
 	e.interactiveStates[sessionKey] = state
 	e.interactiveMu.Unlock()
 
+	e.sendAskQuestionPrompt(p, "ctx", sessionKey, state.pending.Questions, 0)
+
 	if !e.handlePendingPermission(p, &Message{
 		SessionKey: sessionKey,
 		UserID:     "user1",
@@ -8059,7 +8063,7 @@ func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_WritesLabel(t *
 	}
 }
 
-func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_RespondPermissionFail_NoHistory(t *testing.T) {
+func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_RespondPermissionFail_KeepsImmediateHistory(t *testing.T) {
 	e := newTestEngine()
 	p := &stubAskUserHistoryPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}, record: true}
 	rec := &recordingAgentSession{respondErr: errors.New("agent gone")}
@@ -8081,6 +8085,8 @@ func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_RespondPermissi
 	e.interactiveStates[sessionKey] = state
 	e.interactiveMu.Unlock()
 
+	e.sendAskQuestionPrompt(p, "ctx", sessionKey, state.pending.Questions, 0)
+
 	if !e.handlePendingPermission(p, &Message{
 		SessionKey: sessionKey,
 		UserID:     "user1",
@@ -8091,8 +8097,14 @@ func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_RespondPermissi
 	}
 
 	hist := e.sessions.GetOrCreateActive(sessionKey).GetHistory(0)
-	if len(hist) != 1 {
-		t.Fatalf("history len = %d, want 1 (no write on RespondPermission failure)", len(hist))
+	if len(hist) != 3 {
+		t.Fatalf("history len = %d, want 3 (question and answer written before agent respond)", len(hist))
+	}
+	if hist[1].Role != "assistant" || !strings.Contains(hist[1].Content, "Which database?") {
+		t.Fatalf("hist[1] = %#v", hist[1])
+	}
+	if hist[2].Role != "user" || hist[2].Content != "SQLite" {
+		t.Fatalf("hist[2] = %#v, want user label SQLite", hist[2])
 	}
 }
 
@@ -8132,6 +8144,8 @@ func TestHandlePendingPermission_MCPAskUser_HistoryRecorder_Writes(t *testing.T)
 	e.interactiveMu.Lock()
 	e.interactiveStates[sessionKey] = state
 	e.interactiveMu.Unlock()
+
+	e.sendAskQuestionPrompt(p, "ctx", sessionKey, state.pending.Questions, 0)
 
 	if !e.handlePendingPermission(p, &Message{
 		SessionKey: sessionKey,
@@ -8185,13 +8199,15 @@ func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_MultiQuestion(t
 	e.interactiveStates[sessionKey] = state
 	e.interactiveMu.Unlock()
 
+	e.sendAskQuestionPrompt(p, "ctx", sessionKey, state.pending.Questions, 0)
+
 	if !e.handlePendingPermission(p, &Message{
 		SessionKey: sessionKey, UserID: "user1", Content: "1", ReplyCtx: "ctx",
 	}, "1", "") {
 		t.Fatal("expected first answer handled")
 	}
-	if len(e.sessions.GetOrCreateActive(sessionKey).GetHistory(0)) != 1 {
-		t.Fatal("must not write history until all questions answered")
+	if len(e.sessions.GetOrCreateActive(sessionKey).GetHistory(0)) != 4 {
+		t.Fatal("expected prompt + answer + next prompt written after first answer")
 	}
 
 	if !e.handlePendingPermission(p, &Message{

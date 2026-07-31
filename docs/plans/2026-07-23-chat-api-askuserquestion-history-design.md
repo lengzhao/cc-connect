@@ -22,12 +22,14 @@
 flowchart TD
   agent[Agent AskUser / MCP] --> eng[Engine]
   eng --> sse[SSE question_request]
+  sse --> histQ[AddHistory assistant question]
   user[App respond] --> eng
   eng --> dual[Parse agent_value + display_value]
-  dual --> agentResp[Hub.Complete / RespondPermission]
-  agentResp -->|success and recorder on| hist[Append history pairs]
-  hist --> save[SessionManager.Save]
-  hist --> pair[pairHistory query/answer]
+  dual --> histA[AddHistory user answer]
+  histA --> agentResp[Hub.Complete / RespondPermission]
+  agentResp --> final[Agent final reply on EventResult]
+  histQ --> save[SessionManager.Save]
+  histA --> save
 ```
 
 ### Capability interface（core）
@@ -74,22 +76,17 @@ chat-api 恒返回 `true`。Engine 通过类型断言启用，不判断平台名
 
 ### Write timing
 
-1. SSE 发出问题时 **不**写历史。
-2. 多题期间暂存 `(question, display_value)`（已有 `Answers` / `DisplayAnswers`）。
-3. **全部题目答完且回传成功**（MCP `Hub.Complete` 成功 / 原生 `RespondPermission` 无错）后，按顺序一次性 `AddHistory`：
-   - assistant(question text) → user(display_value) × N
-4. 然后解除 pending，让 Agent 继续产出最终回复（最终 assistant 自然排在后面）。
-5. 每次写入后 `sessions.Save()`。
+1. 发出问题（`sendAskQuestionPrompt` / SSE `question_request`）时 **立即** 写入 `assistant` 问题文本。
+2. 用户 respond 成功解析出 display 值后 **立即** 写入 `user` 回答，**不等待** Agent `RespondPermission` / MCP `Complete` 或全部题目答完。
+3. 多题场景：每题按「发题 → 作答」交替写入；下一题发出时再写下一道 `assistant` 问题。
+4. 每次写入后 `sessions.Save()`。
+5. Agent 最终回复仍在 `EventResult` 时写入（已有逻辑）。
 
 ### Failure / skip rules
 
-整组确认 **不写历史** 当：
-
-- 平台未实现 `AskUserQuestionHistoryRecorder` 或返回 `false`
-- 任一题未完成（超时 / 取消 / 用户放弃）
-- `RespondPermission` 失败 / MCP `Complete` 未命中 waiter
-
-禁止写入半组残缺配对。
+- 平台未实现 `AskUserQuestionHistoryRecorder` 或返回 `false` → 不写 AskUserQuestion 历史
+- 已写入的问题/回答 **不回滚**（即使后续 `RespondPermission` 失败、超时或取消）
+- 空 display 回答跳过 user 写入
 
 ### Question text format（assistant history）
 

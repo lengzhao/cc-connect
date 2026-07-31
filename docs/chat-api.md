@@ -61,7 +61,7 @@
 
 `client_flow` is emitted from the independent `cc_connect_client_flow` MCP tool and carries exactly `flow_id`, `type`, `description`, `run_id`, and `message_id`. `type` is a non-empty string passed through to the App (common values: `connect_account`, `create_task`, `task_generating`, `task_center_approval`, `credits_insufficient`). It is non-blocking: it creates no interaction, occupies no interaction slot, requires no respond, and may coexist with `question_request`. The App handles the type locally while the SSE turn keeps streaming. See [Client flow MCP](./plans/2026-07-23-chat-api-client-flow-design.md).
 
-After a successful question respond, chat-api always persists the confirm as normal history turns: readable question text as `assistant`, the user-visible option label (or custom input) as `user`, then the agent’s final reply. `GET …/messages` still returns plain `query`/`answer` pairs. Permission confirms are not written to history.
+AskUserQuestion history is written incrementally: the question text is persisted as `assistant` when `question_request` is sent; the user-visible label (or custom input) is persisted as `user` immediately on respond, without waiting for agent handoff or all questions to finish; the agent’s final reply is still written on turn completion. `GET …/messages` still returns plain `query`/`answer` pairs. Permission confirms are not written to history.
 
 ## Configuration
 
