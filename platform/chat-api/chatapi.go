@@ -57,6 +57,7 @@ type Platform struct {
 	questionNotifyHeaders     map[string]string
 	questionNotifyTimeout     time.Duration
 	toolSSETransforms         *toolSSETransformRegistry
+	responseHeader            responseHeaderConfig
 
 	server   *http.Server
 	handler  core.MessageHandler
@@ -122,6 +123,10 @@ func New(opts map[string]any) (core.Platform, error) {
 		return nil, err
 	}
 	forwardHeaders := normalizeForwardHeaderNames(stringSliceOption(opts, "forward_headers"))
+	responseHeader, err := responseHeaderOption(opts)
+	if err != nil {
+		return nil, err
+	}
 
 	busyPolicy := strings.ToLower(stringOption(opts, "busy_policy", busyPolicyQueue))
 	if busyPolicy != busyPolicyQueue && busyPolicy != busyPolicyReject {
@@ -157,6 +162,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		questionNotifySecret:      stringOption(opts, "question_notify_secret", ""),
 		questionNotifyHeaders:     stringStringMapOption(opts, "question_notify_headers"),
 		questionNotifyTimeout:     questionNotifyTimeout,
+		responseHeader:            responseHeader,
 	}
 	if p.autoGenerateNameMode != autoGenerateNameModeHeuristic && p.autoGenerateNameMode != autoGenerateNameModeAI {
 		return nil, errors.New("chat-api: auto_generate_name_mode must be heuristic or ai")
@@ -224,6 +230,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 	}()
 
 	slog.Info("chat-api: server started", "listen_addr", p.resolvedAddr, "path", p.path)
+	p.logResponseHeaderConfig()
 	if p.debugUI {
 		slog.Info("chat-api: debug UI enabled", "url", "http://"+p.resolvedAddr+"/debug/")
 	}
@@ -281,7 +288,7 @@ func (p *Platform) getHandler() core.MessageHandler {
 func (p *Platform) routes() http.Handler {
 	mux := http.NewServeMux()
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
-		return p.corsHTTP(p.authHTTP(h))
+		return p.corsHTTP(p.responseHeaderHTTP(p.authHTTP(h)))
 	}
 	mux.HandleFunc(p.path+"conversations", wrap(p.handleConversations))
 	mux.HandleFunc(p.path+"conversations/", wrap(p.handleConversationSub))

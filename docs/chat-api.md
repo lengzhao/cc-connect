@@ -1,6 +1,6 @@
 # chat-api Platform — API v1
 
-> Version: **v1.2.8** (2026-07-26)
+> Version: **v1.2.10** (2026-08-02)
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
 > Disconnect resume: [plans/2026-07-24-chat-api-disconnect-resume-design.md](./plans/2026-07-24-chat-api-disconnect-resume-design.md)
@@ -9,6 +9,7 @@
 > Client flow MCP: [plans/2026-07-23-chat-api-client-flow-design.md](./plans/2026-07-23-chat-api-client-flow-design.md)
 > AskUserQuestion history: [plans/2026-07-23-chat-api-askuserquestion-history-design.md](./plans/2026-07-23-chat-api-askuserquestion-history-design.md)
 > Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)  
+> Pod affinity: [plans/2026-08-02-chat-api-pod-affinity-design.md](./plans/2026-08-02-chat-api-pod-affinity-design.md) (custom response header)
 > Stream answer parse: [plans/2026-07-21-chat-api-stream-answer-parse-design.md](./plans/2026-07-21-chat-api-stream-answer-parse-design.md)  
 > Structured streaming (planned): [plans/2026-07-21-structured-streaming-card-design.md](./plans/2026-07-21-structured-streaming-card-design.md)
 
@@ -42,6 +43,7 @@
 - Auth: `Authorization: Bearer <api_token>` (required in production)
 - User: `X-Chat-API-User` on writes; query or header on list/delete
 - Optional `X-Chat-API-Channel` on send for multi-workspace `work_dir` binding (omit → `default_channel`; cancel/respond reuse run channel)
+- When `response_header` is configured, all responses include that header (fixed value or from env) for gateway sticky routing
 - `auto_generate_name` applies to newly created conversations; `auto_generate_name_mode` defaults to `heuristic` and may be set to `ai`
 - In `ai` mode, `name_model` selects a separate low-cost model while credentials and endpoint are reused from `name_provider` or the configured project provider; name generation never calls the main Agent and falls back to heuristic naming when no provider is available
 - `message_id`: `{conversation_id}:{turn_index}`

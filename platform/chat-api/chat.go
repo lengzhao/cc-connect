@@ -170,11 +170,12 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		headers:        collectForwardedHeaders(p.forwardHeaders, r),
 	}
 
-	if err := sse.Event("message", map[string]string{
+	msgPayload := map[string]any{
 		"conversation_id": session.ID,
 		"message_id":      msgID,
 		"run_id":          runID,
-	}); err != nil {
+	}
+	if err := sse.Event("message", msgPayload); err != nil {
 		run.detach()
 		return
 	}

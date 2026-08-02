@@ -28,6 +28,13 @@ func (p *Platform) authHTTP(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func (p *Platform) responseHeaderHTTP(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p.setResponseHeader(w)
+		next(w, r)
+	}
+}
+
 func (p *Platform) corsHTTP(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p.setCORS(w, r)
@@ -55,7 +62,13 @@ func (p *Platform) setCORS(w http.ResponseWriter, r *http.Request) {
 			}
 			allowHeaders = append(allowHeaders, p.agentContextHeaders.headerNames()...)
 			allowHeaders = append(allowHeaders, p.forwardHeaders...)
+			if p.responseHeader.enabled() {
+				allowHeaders = append(allowHeaders, p.responseHeader.name)
+			}
 			w.Header().Set("Access-Control-Allow-Headers", strings.Join(allowHeaders, ", "))
+			if p.responseHeader.enabled() {
+				w.Header().Set("Access-Control-Expose-Headers", p.responseHeader.name)
+			}
 			return
 		}
 	}

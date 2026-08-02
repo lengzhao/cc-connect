@@ -1394,6 +1394,12 @@ app_secret = "your-feishu-app-secret"
 # origin_channel = "BACKEND"
 # client_platform = "WEB"
 #
+# Pod affinity for multi-replica deployments (optional custom response header).
+# 多副本部署时可选自定义响应头，供 gateway 实现粘连路由。
+# response_header = "X-Custom-Header"
+# response_header_value = "pod-a"      # fixed value
+# response_header_env = "POD_NAME"     # or read from env at startup (value wins)
+#
 # Map HTTP headers into Message.AgentContext (agent-visible when project
 # inject_context allowlists the same fields). Body metadata stays hooks-only.
 # 将 HTTP header 映射到 Message.AgentContext（需配合项目 inject_context 白名单才会进入 Agent）。

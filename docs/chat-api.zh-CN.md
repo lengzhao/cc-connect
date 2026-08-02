@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.2.8**（2026-07-26）<br>
+> 版本：**v1.2.10**（2026-08-02）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [断链重连](./plans/2026-07-24-chat-api-disconnect-resume-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [Tool SSE 转换](./plans/2026-07-28-chat-api-tool-sse-transform-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [断链重连](./plans/2026-07-24-chat-api-disconnect-resume-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [Tool SSE 转换](./plans/2026-07-28-chat-api-tool-sse-transform-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [response header](./plans/2026-08-02-chat-api-pod-affinity-design.md)
 
 ## 1. 概述
 
@@ -819,6 +819,9 @@ auto_generate_name_mode = "heuristic"
 include_answer_in_message_end = false
 max_runs = 1000
 # forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # hooks-only; not agent prompt
+# response_header = "X-Custom-Header"                 # 自定义响应头名；空则关闭
+# response_header_value = "pod-a"                    # 固定值
+# response_header_env = "POD_NAME"                   # 或启动时从环境变量读取（value 优先）
 
 # Optional embedded debug console (same origin): http://127.0.0.1:8030/debug/
 # debug_ui = true
@@ -839,6 +842,9 @@ task_id = "X-Task-ID"
 | `channel_header` | `X-Chat-API-Channel` | 可选工作区 channel header |
 | `agent_context_headers` | 空 | 字段 → HTTP header 映射，写入 `Message.AgentContext` |
 | `forward_headers` | 空 | 白名单 HTTP header → hooks（`headers` / `CC_HOOK_HEADERS_JSON`），不进 Agent；敏感头始终拦截 |
+| `response_header` | 空 | 自定义响应头名；配合 value/env 用于多副本粘连 |
+| `response_header_value` | 空 | 响应头固定值；非空时优先于 env |
+| `response_header_env` | 空 | 启动时读取的环境变量名 |
 | `debug_ui` | `false` | 为 `true` 时提供同源调试页 `/debug/`（不鉴权打开页面；调 API 仍需 token） |
 | `cors_origins` | 空 | CORS 允许来源 |
 | `request_timeout` / `timeout` | `30m` | SSE 等待上限 |
@@ -857,7 +863,7 @@ task_id = "X-Task-ID"
 | `question_notify_timeout` | `5s` | webhook HTTP 超时 |
 | `tool_sse_transforms_file` | 空 | 外部 JSON：将指定 tool 的 `tool_call` 转为 `thinking_delta` / `client_flow`（见 §3.3） |
 
-会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态（确认窗口不支持多副本共享）。
+会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态（确认窗口不支持多副本共享）。可配置 `response_header` 在响应中携带 pod 等信息，由 gateway 实现粘连。详见 [response header 设计](./plans/2026-08-02-chat-api-pod-affinity-design.md)。
 
 ---
 
@@ -865,6 +871,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.2.10 | 2026-08-02 | 新增 `response_header` / `response_header_value` / `response_header_env`：自定义响应头，支持多副本粘连 |
 | v1.2.9 | 2026-07-28 | 可选 `tool_sse_transforms_file`：外部 JSON 将 tool_call 转为 thinking/client_flow |
 | v1.2.8 | 2026-07-26 | 新增 `POST /conversations` 显式创建空会话并指定 `name` |
 | v1.2.7 | 2026-07-24 | 断链重连：`POST /chat-messages` + `run_id`；虚拟 sink 缓存最后事件；`question_notify_url`；结束即释放 run |
