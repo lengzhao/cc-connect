@@ -1,5 +1,13 @@
 ﻿# Changelog
 
+## v9.1.13 (2026-08-02)
+
+### Added
+- **chat-api custom response header**: optional `response_header` / `response_header_value` / `response_header_env` adds a configured HTTP response header on every chat-api reply (fixed value or read from env at request time) for gateway sticky routing in multi-replica deployments.
+
+### Changed
+- **chat-api question notify logging**: log Info when the detached `question_request` webhook returns 2xx so operators can confirm delivery without BFF-side logs.
+
 ## v9.1.12 (2026-07-31)
 
 ### Fixed
