@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.14 (2026-08-03)
+
+### Added
+- **client_flow `args`**: `cc_connect_client_flow` and chat-api SSE `client_flow` support optional `args`; semantics depend on `type` (task-related types → `task_id`, `connect_account` → `provider`).
+
 ## v9.1.13 (2026-08-02)
 
 ### Added
