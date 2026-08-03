@@ -7,14 +7,15 @@
 
 ## Goal
 
-1. 支持对外契约中的极简 SSE `client_flow`：仅 `type` + `description`（另加 `flow_id` / `run_id` / `message_id`）。
+1. 支持对外契约中的极简 SSE `client_flow`：`type` + `description`（另加 `flow_id` / `run_id` / `message_id`），以及可选 `args` 透传流程参数。
 2. 通过**独立 MCP 工具**由 Agent 显式触发，与 `question_request` / `cc_connect_ask_user` 解耦。
 3. 不阻塞 interaction 槽；不要求 App `respond`。
 
 ## Non-goals
 
 - 不修改 `cc_connect_ask_user` / `question_request.event` 语义
-- 不传 URL / deep_link / 业务 JSON
+- 不传 URL / deep_link
+- 可选 `args` 字符串透传流程参数；语义由 `type` 决定（task 类 → task_id，`connect_account` → provider）
 - 不把 `client_flow` 写入 history
 - 不为非 chat-api 平台做 UI 降级（静默成功）
 
@@ -55,7 +56,7 @@ sequenceDiagram
 
 ```go
 type ClientFlowSender interface {
-	SendClientFlow(ctx context.Context, replyCtx any, flowType, description string) error
+	SendClientFlow(ctx context.Context, replyCtx any, flowType, description, args string) error
 }
 ```
 
@@ -79,7 +80,8 @@ Claude session 在 Hub `Bind` 时注册现有 `AskUserEmitter`。如果 session 
 ```json
 {
   "type": "connect_account | create_task | task_center_approval",
-  "description": "string (required)"
+  "description": "string (required)",
+  "args": "string (optional; task types → task_id, connect_account → provider)"
 }
 ```
 
@@ -109,6 +111,7 @@ data: {
   "flow_id":"flow_xxx",
   "type":"connect_account",
   "description":"绑定新账户",
+  "args":"feishu",
   "run_id":"run_abc",
   "message_id":"s1a2b3c:1"
 }

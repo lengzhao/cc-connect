@@ -7570,7 +7570,7 @@ type clientFlowPlatform struct {
 	flows []struct{ typ, desc string }
 }
 
-func (p *clientFlowPlatform) SendClientFlow(_ context.Context, _ any, flowType, description string) error {
+func (p *clientFlowPlatform) SendClientFlow(_ context.Context, _ any, flowType, description, args string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.flows = append(p.flows, struct{ typ, desc string }{flowType, description})

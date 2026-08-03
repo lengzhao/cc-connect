@@ -95,7 +95,7 @@ func TestAskUserHub_EmitClientFlow(t *testing.T) {
 		got = e
 		return nil
 	}))
-	if err := h.EmitClientFlow("s1", "connect_account", "绑定新账户"); err != nil {
+	if err := h.EmitClientFlow("s1", "connect_account", "绑定新账户", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got.Type != EventClientFlow || got.ToolName != ToolCCConnectClientFlow {
@@ -115,10 +115,25 @@ func TestAskUserHub_EmitClientFlow(t *testing.T) {
 	}
 }
 
+func TestAskUserHub_EmitClientFlow_WithArgs(t *testing.T) {
+	h := NewAskUserHub()
+	var got Event
+	h.Bind("s1", askEmitterFunc(func(e Event) error {
+		got = e
+		return nil
+	}))
+	if err := h.EmitClientFlow("s1", "create_task", "创建任务", "task_123"); err != nil {
+		t.Fatal(err)
+	}
+	if got.ToolInputRaw["args"] != "task_123" {
+		t.Fatalf("args=%v", got.ToolInputRaw["args"])
+	}
+}
+
 func TestAskUserHub_EmitClientFlow_EmptyType(t *testing.T) {
 	h := NewAskUserHub()
 	h.Bind("s1", askEmitterFunc(func(e Event) error { return nil }))
-	if err := h.EmitClientFlow("s1", "  ", "x"); err == nil {
+	if err := h.EmitClientFlow("s1", "  ", "x", ""); err == nil {
 		t.Fatal("expected error for empty type")
 	}
 }
@@ -130,7 +145,7 @@ func TestAskUserHub_EmitClientFlow_CustomType(t *testing.T) {
 		got = e
 		return nil
 	}))
-	if err := h.EmitClientFlow("s1", "credits_insufficient", "请充值"); err != nil {
+	if err := h.EmitClientFlow("s1", "credits_insufficient", "请充值", ""); err != nil {
 		t.Fatal(err)
 	}
 	if typ, _ := got.ToolInputRaw["type"].(string); typ != "credits_insufficient" {
@@ -141,14 +156,14 @@ func TestAskUserHub_EmitClientFlow_CustomType(t *testing.T) {
 func TestAskUserHub_EmitClientFlow_EmptyDescription(t *testing.T) {
 	h := NewAskUserHub()
 	h.Bind("s1", askEmitterFunc(func(e Event) error { return nil }))
-	if err := h.EmitClientFlow("s1", "connect_account", "  "); err == nil {
+	if err := h.EmitClientFlow("s1", "connect_account", "  ", ""); err == nil {
 		t.Fatal("expected error for empty description")
 	}
 }
 
 func TestAskUserHub_EmitClientFlow_NoEmitter(t *testing.T) {
 	h := NewAskUserHub()
-	if err := h.EmitClientFlow("missing", "connect_account", "x"); err == nil {
+	if err := h.EmitClientFlow("missing", "connect_account", "x", ""); err == nil {
 		t.Fatal("expected error when no emitter")
 	}
 }

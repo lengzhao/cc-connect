@@ -143,7 +143,7 @@ Example when the user may type another bank:
 Do not ask a separate clarification question after the tool call; wait for the user's answer.
 
 ### Client flow guide (cc_connect_client_flow)
-Use mcp__ccconnect__cc_connect_client_flow when the App should open its own business flow WITHOUT a confirm card (e.g. bind new account while also asking which existing account to use). Required: type (non-empty string, e.g. connect_account / create_task / credits_insufficient), description. Does not wait for user respond. May be used together with cc_connect_ask_user.
+Use mcp__ccconnect__cc_connect_client_flow when the App should open its own business flow WITHOUT a confirm card (e.g. bind new account while also asking which existing account to use). Required: type (non-empty string, e.g. connect_account / create_task / credits_insufficient), description. Optional args string: for task-related types (create_task / task_generating / task_center_approval) pass task_id; for connect_account pass provider (e.g. feishu). Does not wait for user respond. May be used together with cc_connect_ask_user.
 
 `
 }
@@ -296,7 +296,7 @@ type AskQuestionSender interface {
 // ClientFlowSender is an optional interface for platforms that emit non-blocking
 // App flow guidance (SSE client_flow) without occupying the interaction slot.
 type ClientFlowSender interface {
-	SendClientFlow(ctx context.Context, replyCtx any, flowType, description string) error
+	SendClientFlow(ctx context.Context, replyCtx any, flowType, description, args string) error
 }
 
 // AskUserQuestionHistoryRecorder is implemented by platforms that want

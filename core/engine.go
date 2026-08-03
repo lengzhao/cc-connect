@@ -11841,12 +11841,14 @@ func (e *Engine) dispatchClientFlow(p Platform, replyCtx any, sessionKey string,
 			"type", flowType, "session", sessionKey)
 		return
 	}
+	args, _ := event.ToolInputRaw["args"].(string)
+	args = strings.TrimSpace(args)
 	if sender, ok := p.(ClientFlowSender); ok {
 		ctx := e.ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		if err := sender.SendClientFlow(ctx, replyCtx, flowType, desc); err != nil {
+		if err := sender.SendClientFlow(ctx, replyCtx, flowType, desc, args); err != nil {
 			slog.Warn("client_flow send failed",
 				"error", err, "type", flowType, "session", sessionKey)
 		}

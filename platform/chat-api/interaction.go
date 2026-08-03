@@ -154,13 +154,14 @@ func (p *Platform) SendAskQuestion(_ context.Context, replyTo any, q core.UserQu
 
 // SendClientFlow implements core.ClientFlowSender: enqueue non-blocking SSE
 // client_flow without occupying the interaction slot.
-func (p *Platform) SendClientFlow(_ context.Context, replyTo any, flowType, description string) error {
+func (p *Platform) SendClientFlow(_ context.Context, replyTo any, flowType, description, args string) error {
 	rc, ok := replyTo.(*replyContext)
 	if !ok || rc == nil || rc.runID == "" {
 		return fmt.Errorf("chat-api: unsupported reply context %T", replyTo)
 	}
 	flowType = core.NormalizeAskUserEvent(flowType)
 	description = strings.TrimSpace(description)
+	args = strings.TrimSpace(args)
 	if flowType == "" || description == "" {
 		return fmt.Errorf("chat-api: invalid client_flow")
 	}
@@ -168,13 +169,17 @@ func (p *Platform) SendClientFlow(_ context.Context, replyTo any, flowType, desc
 	if run == nil {
 		return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
 	}
-	run.enqueueEvent("client_flow", map[string]any{
+	payload := map[string]any{
 		"flow_id":     newFlowID(),
 		"type":        flowType,
 		"description": description,
 		"run_id":      run.id,
 		"message_id":  run.messageID,
-	})
+	}
+	if args != "" {
+		payload["args"] = args
+	}
+	run.enqueueEvent("client_flow", payload)
 	return nil
 }
 

@@ -338,6 +338,12 @@ func clientFlowToolDescriptor() map[string]any {
 					"type":        "string",
 					"description": "流程说明文案（必填），展示给用户引导其进入 App 自有流程。",
 				},
+				"args": map[string]any{
+					"type": "string",
+					"description": "可选流程参数（语义由 type 决定）。" +
+						"create_task / task_generating / task_center_approval → task_id；" +
+						"connect_account → provider（如 feishu、wecom）。",
+				},
 			},
 		},
 	}
@@ -400,7 +406,7 @@ func (s *Server) callClientFlow(sessionKey string, argsRaw json.RawMessage) (any
 	if err != nil {
 		return nil, err
 	}
-	if err := s.hub.EmitClientFlow(sessionKey, in.Type, in.Description); err != nil {
+	if err := s.hub.EmitClientFlow(sessionKey, in.Type, in.Description, in.Args); err != nil {
 		return map[string]any{
 			"content": []any{map[string]any{"type": "text", "text": "client_flow failed: " + err.Error()}},
 			"isError": true,

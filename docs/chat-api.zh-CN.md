@@ -496,6 +496,7 @@ data: {
   "flow_id":"flow_xxx",
   "type":"connect_account",
   "description":"绑定新账户",
+  "args":"feishu",
   "run_id":"run_abc",
   "message_id":"s1a2b3c:1"
 }
@@ -506,12 +507,21 @@ data: {
 | `flow_id` | string | 本次流程引导 ID，仅用于客户端关联 |
 | `type` | string | 非空字符串，原样透传给 App（常见值：`connect_account` / `create_task` / `task_generating` / `task_center_approval` / `credits_insufficient`） |
 | `description` | string | 必填非空的用户引导文案 |
+| `args` | string | 可选；语义由 `type` 决定（见下表） |
 | `run_id` | string | 所属轮次 ID |
 | `message_id` | string | 所属消息 ID |
 
+| `type` | `args` 含义 | 示例 |
+|--------|-------------|------|
+| `create_task` | `task_id` | `"task_123"` |
+| `task_generating` | `task_id` | `"task_123"` |
+| `task_center_approval` | `task_id` | `"task_456"` |
+| `connect_account` | `provider`（账号厂商） | `"feishu"` |
+| `credits_insufficient` | 通常省略 | — |
+
 | 关键语义 | 行为 |
 |----------|------|
-| 协议形状 | 仅上述五个字段；不传 URL、deep link 或业务 JSON |
+| 协议形状 | 基础五字段 + 可选 `args`；不传 URL、deep link |
 | 阻塞与回传 | 非阻塞；无 `interaction_id` / `expires_at` / `actions`，不调用 §4.9 respond |
 | interaction 单槽 | 不创建、不替换、不占用 interaction；可与 `question_request` 并存 |
 | 会话历史 | 临时 SSE 引导，不作为问答写入 history |

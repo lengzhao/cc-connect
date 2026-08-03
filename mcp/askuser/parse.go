@@ -88,10 +88,12 @@ func ParseToolArguments(raw json.RawMessage) (core.UserQuestion, error) {
 type ClientFlowArgs struct {
 	Type        string
 	Description string
+	Args        string
 }
 
 // ParseClientFlowArguments validates type + description for client_flow.
 // type and description must be non-empty after trim; type is not allowlisted.
+// args is optional; semantics depend on type (task_id for task flows, provider for connect_account).
 func ParseClientFlowArguments(raw json.RawMessage) (ClientFlowArgs, error) {
 	if len(raw) == 0 {
 		return ClientFlowArgs{}, fmt.Errorf("arguments required")
@@ -111,7 +113,11 @@ func ParseClientFlowArguments(raw json.RawMessage) (ClientFlowArgs, error) {
 	if desc == "" {
 		return ClientFlowArgs{}, fmt.Errorf("description required")
 	}
-	return ClientFlowArgs{Type: typ, Description: desc}, nil
+	return ClientFlowArgs{
+		Type:        typ,
+		Description: desc,
+		Args:        valueString(m["args"]),
+	}, nil
 }
 
 func firstString(m map[string]any, keys ...string) string {

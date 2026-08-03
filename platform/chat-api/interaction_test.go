@@ -1236,7 +1236,7 @@ func TestSendClientFlow_EmitsSSEWithoutInteraction(t *testing.T) {
 	}
 	rc := run.replyContext()
 
-	if err := p.SendClientFlow(context.Background(), rc, "connect_account", "绑定新账户"); err != nil {
+	if err := p.SendClientFlow(context.Background(), rc, "connect_account", "绑定新账户", ""); err != nil {
 		t.Fatalf("SendClientFlow: %v", err)
 	}
 
@@ -1320,7 +1320,7 @@ func TestSendClientFlow_CoexistsWithQuestionRequest(t *testing.T) {
 	origID := beforeIx.ID
 	origPtr := beforeIx
 
-	if err := p.SendClientFlow(context.Background(), rc, "  create_task  ", "  创建任务  "); err != nil {
+	if err := p.SendClientFlow(context.Background(), rc, "  create_task  ", "  创建任务  ", ""); err != nil {
 		t.Fatalf("SendClientFlow: %v", err)
 	}
 
@@ -1398,7 +1398,7 @@ func TestSendClientFlow_InvalidInput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := p.SendClientFlow(context.Background(), tt.replyTo, tt.flowType, tt.description)
+			err := p.SendClientFlow(context.Background(), tt.replyTo, tt.flowType, tt.description, "")
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -1417,5 +1417,39 @@ func TestSendClientFlow_InvalidInput(t *testing.T) {
 	}
 	if ix != nil {
 		t.Fatalf("invalid calls must not set interaction, got %#v", ix)
+	}
+}
+
+func TestSendClientFlow_EmitsArgsWhenProvided(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{})
+	run := newRunState(
+		"run_cf_args",
+		"user_001",
+		"channel",
+		"session",
+		"conv",
+		"conv:2",
+		"",
+		p,
+		nil,
+		time.Now().Add(time.Minute),
+	)
+	if !p.pending.create(run) {
+		t.Fatal("create run")
+	}
+	rc := run.replyContext()
+
+	if err := p.SendClientFlow(context.Background(), rc, "create_task", "创建任务", "task_123"); err != nil {
+		t.Fatalf("SendClientFlow: %v", err)
+	}
+
+	run.mu.Lock()
+	payload, ok := run.pendingEvents[0].payload.(map[string]any)
+	run.mu.Unlock()
+	if !ok {
+		t.Fatalf("payload type = %T", run.pendingEvents[0].payload)
+	}
+	if payload["args"] != "task_123" {
+		t.Fatalf("args = %#v", payload["args"])
 	}
 }

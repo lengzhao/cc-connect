@@ -187,7 +187,8 @@ func (h *AskUserHub) Ask(ctx context.Context, sessionKey string, q UserQuestion)
 
 // EmitClientFlow fire-and-forget: validates type/description, emits EventClientFlow.
 // Does not wait for App respond. Unknown type or empty description → error.
-func (h *AskUserHub) EmitClientFlow(sessionKey, flowType, description string) error {
+// args is optional; non-empty values are forwarded to the App via SSE.
+func (h *AskUserHub) EmitClientFlow(sessionKey, flowType, description, args string) error {
 	if h == nil {
 		return fmt.Errorf("askuser hub is nil")
 	}
@@ -203,15 +204,20 @@ func (h *AskUserHub) EmitClientFlow(sessionKey, flowType, description string) er
 		return fmt.Errorf("type required")
 	}
 
+	args = strings.TrimSpace(args)
+	raw := map[string]any{
+		"type":        flowType,
+		"description": description,
+	}
+	if args != "" {
+		raw["args"] = args
+	}
 	evt := Event{
-		Type:      EventClientFlow,
-		ToolName:  ToolCCConnectClientFlow,
-		ToolInput: description,
-		ToolInputRaw: map[string]any{
-			"type":        flowType,
-			"description": description,
-		},
-		RequestID: newAskRequestID(),
+		Type:         EventClientFlow,
+		ToolName:     ToolCCConnectClientFlow,
+		ToolInput:    description,
+		ToolInputRaw: raw,
+		RequestID:    newAskRequestID(),
 	}
 
 	h.mu.Lock()

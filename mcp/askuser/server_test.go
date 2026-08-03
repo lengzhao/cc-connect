@@ -216,6 +216,11 @@ func TestParseClientFlowArguments(t *testing.T) {
 	if err == nil {
 		t.Fatal("nil args must fail")
 	}
+
+	in, err = ParseClientFlowArguments(json.RawMessage(`{"type":"create_task","description":"创建任务","args":"task_123"}`))
+	if err != nil || in.Type != EventCreateTask || in.Args != "task_123" {
+		t.Fatalf("args: %+v %v", in, err)
+	}
 }
 
 func TestClientFlowToolDescriptor(t *testing.T) {
