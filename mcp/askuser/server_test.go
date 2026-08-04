@@ -192,6 +192,16 @@ func TestParseClientFlowArguments(t *testing.T) {
 		t.Fatalf("credits_insufficient: %+v %v", in, err)
 	}
 
+	in, err = ParseClientFlowArguments(json.RawMessage(`{"type":"view_task","description":"查看任务","args":"task_789"}`))
+	if err != nil || in.Type != EventViewTask || in.Args != "task_789" {
+		t.Fatalf("view_task: %+v %v", in, err)
+	}
+
+	in, err = ParseClientFlowArguments(json.RawMessage(`{"type":"view_task_template","description":"查看任务模板","args":"tpl_001"}`))
+	if err != nil || in.Type != EventViewTaskTemplate || in.Args != "tpl_001" {
+		t.Fatalf("view_task_template: %+v %v", in, err)
+	}
+
 	in, err = ParseClientFlowArguments(json.RawMessage(`{"type":"account_bind","description":"x"}`))
 	if err != nil || in.Type != "account_bind" {
 		t.Fatalf("custom type must pass through: %+v %v", in, err)
@@ -252,8 +262,8 @@ func TestClientFlowToolDescriptor(t *testing.T) {
 	props, _ := schema["properties"].(map[string]any)
 	typ, _ := props["type"].(map[string]any)
 	enum, _ := typ["enum"].([]any)
-	if len(enum) != 5 {
-		t.Fatalf("type enum must be exactly 5 values, got %v", enum)
+	if len(enum) != 7 {
+		t.Fatalf("type enum must be exactly 7 values, got %v", enum)
 	}
 	for _, v := range enum {
 		s, _ := v.(string)

@@ -57,7 +57,7 @@ See `config/chat-api-tool-sse-transforms.example.json`.
 | `tool` | per transform | Tool name match (case-insensitive) |
 | `emit` | yes | `thinking` or `client_flow` |
 | `suppress` | no | When true, skip `tool_call` / paired `tool_result` (default false) |
-| `flow_type` | when `emit=client_flow` | `connect_account` \| `create_task` \| `task_generating` \| `task_center_approval` |
+| `flow_type` | when `emit=client_flow` | `connect_account` \| `create_task` \| `task_generating` \| `task_center_approval` \| `view_task` \| `view_task_template` |
 | `text` | yes | Map of locale → message (`en`, `zh`, `zh-TW`, `ja`, `es`, …) |
 
 Rules are evaluated on **tool_call only** (not tool_result), at structured

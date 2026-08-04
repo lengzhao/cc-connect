@@ -18,6 +18,8 @@ const (
 	EventTaskCenterApproval  = "task_center_approval"
 	EventTaskGenerating      = "task_generating"
 	EventCreditsInsufficient = "credits_insufficient"
+	EventViewTask            = "view_task"
+	EventViewTaskTemplate    = "view_task_template"
 )
 
 // Tag variant enums for option badges.
@@ -93,7 +95,7 @@ type ClientFlowArgs struct {
 
 // ParseClientFlowArguments validates type + description for client_flow.
 // type and description must be non-empty after trim; type is not allowlisted.
-// args is optional; semantics depend on type (task_id for task flows, provider for connect_account).
+// args is optional; semantics depend on type (task_id for task flows, task_template_id for view_task_template, provider for connect_account).
 func ParseClientFlowArguments(raw json.RawMessage) (ClientFlowArgs, error) {
 	if len(raw) == 0 {
 		return ClientFlowArgs{}, fmt.Errorf("arguments required")

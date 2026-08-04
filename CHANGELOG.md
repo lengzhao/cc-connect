@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.15 (2026-08-04)
+
+### Added
+- **client_flow types**: new `view_task` and `view_task_template` navigation events; `args` carries `task_id` or `task_template_id` respectively.
+
 ## v9.1.14 (2026-08-03)
 
 ### Added

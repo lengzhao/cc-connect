@@ -505,7 +505,7 @@ data: {
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `flow_id` | string | 本次流程引导 ID，仅用于客户端关联 |
-| `type` | string | 非空字符串，原样透传给 App（常见值：`connect_account` / `create_task` / `task_generating` / `task_center_approval` / `credits_insufficient`） |
+| `type` | string | 非空字符串，原样透传给 App（常见值：`connect_account` / `create_task` / `task_generating` / `task_center_approval` / `credits_insufficient` / `view_task` / `view_task_template`） |
 | `description` | string | 必填非空的用户引导文案 |
 | `args` | string | 可选；语义由 `type` 决定（见下表） |
 | `run_id` | string | 所属轮次 ID |
@@ -516,6 +516,8 @@ data: {
 | `create_task` | `task_id` | `"task_123"` |
 | `task_generating` | `task_id` | `"task_123"` |
 | `task_center_approval` | `task_id` | `"task_456"` |
+| `view_task` | `task_id` | `"task_789"` |
+| `view_task_template` | `task_template_id` | `"tpl_001"` |
 | `connect_account` | `provider`（账号厂商） | `"feishu"` |
 | `credits_insufficient` | 通常省略 | — |
 
