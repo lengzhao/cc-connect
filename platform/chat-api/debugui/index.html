@@ -7,6 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <script>
+    window.__CHAT_API_CONFIG__ = {{json .Config}};
+  </script>
   <style>
     :root {
       --bg: #0c1117;
@@ -408,6 +411,26 @@
       color: var(--muted);
       margin-bottom: 6px;
     }
+    .agent-ctx-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 10px;
+    }
+    .custom-ctx-list {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .custom-ctx-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 10px;
+    }
+    .custom-ctx-row label {
+      font-size: 10px;
+      color: var(--muted);
+    }
 
     @media (max-width: 1100px) {
       .shell { grid-template-columns: 240px 1fr; }
@@ -438,38 +461,42 @@
         <input id="token" value="local-chat-api-token" />
         <div class="row">
           <div>
-            <label>User</label>
+            <label>{{.UserHeader}}</label>
             <input id="userId" value="local_user" />
           </div>
           <div>
-            <label>User Name</label>
+            <label>{{.UserNameHeader}}</label>
             <input id="userName" value="Local Tester" />
           </div>
         </div>
-        <label>Channel (optional)</label>
+        <label>{{.ChannelHeader}} (optional)</label>
         <input id="channel" placeholder="team-alpha/backend" />
 
         <details class="advanced" open>
           <summary>AgentContext headers</summary>
-          <div class="row">
+          {{if .AgentContextFields}}
+          <div class="agent-ctx-grid">
+            {{range .AgentContextFields}}
             <div>
-              <label>X-Language</label>
-              <input id="lang" value="zh" />
+              <label>{{.HeaderName}}</label>
+              <input id="{{.InputID}}" value="{{.DefaultVal}}" />
             </div>
-            <div>
-              <label>X-Task-ID</label>
-              <input id="taskId" value="ui-job-1" />
-            </div>
+            {{end}}
           </div>
-          <div class="row">
-            <div>
-              <label>X-Trace-ID</label>
-              <input id="traceId" value="" />
+          {{end}}
+          <div class="custom-ctx-list">
+            {{range .CustomHeaderSlots}}
+            <div class="custom-ctx-row">
+              <div>
+                <label>Custom header #{{.}}</label>
+                <input id="customHeader{{.}}Name" placeholder="X-My-Header" />
+              </div>
+              <div>
+                <label>Value</label>
+                <input id="customHeader{{.}}Value" placeholder="" />
+              </div>
             </div>
-            <div>
-              <label>X-Tenant-ID</label>
-              <input id="tenantId" value="acme" />
-            </div>
+            {{end}}
           </div>
         </details>
 
@@ -541,7 +568,20 @@
       interactionRunId: null,
     };
 
-    const fields = ["baseUrl", "token", "userId", "userName", "channel", "lang", "taskId", "traceId", "tenantId"];
+    const CHAT_API = window.__CHAT_API_CONFIG__ || {};
+    const customHeaderFields = (CHAT_API.customHeaderSlots || []).flatMap((n) => [
+      "customHeader" + n + "Name",
+      "customHeader" + n + "Value",
+    ]);
+    const fields = [
+      "baseUrl",
+      "token",
+      "userId",
+      "userName",
+      "channel",
+      ...(CHAT_API.agentContextFields || []).map((f) => f.inputId),
+      ...customHeaderFields,
+    ];
 
     function loadConfig() {
       try {
@@ -591,7 +631,7 @@
       const raw = $("baseUrl").value.trim();
       if (raw) return raw.replace(/\/$/, "");
       // Same-origin when served from /debug/
-      return window.location.origin.replace(/\/$/, "") + (window.__CHAT_API_PATH__ || "/v1").replace(/\/$/, "");
+      return window.location.origin.replace(/\/$/, "") + (CHAT_API.apiPath || "/v1").replace(/\/$/, "");
     }
 
     function authHeaders(extra = {}) {
@@ -600,19 +640,20 @@
         ...extra,
       };
       const user = $("userId").value.trim();
-      if (user) h["X-Chat-API-User"] = user;
+      if (user && CHAT_API.userHeader) h[CHAT_API.userHeader] = user;
       const name = $("userName").value.trim();
-      if (name) h["X-Chat-API-User-Name"] = name;
+      if (name && CHAT_API.userNameHeader) h[CHAT_API.userNameHeader] = name;
       const channel = $("channel").value.trim();
-      if (channel) h["X-Chat-API-Channel"] = channel;
-      const lang = $("lang").value.trim();
-      if (lang) h["X-Language"] = lang;
-      const taskId = $("taskId").value.trim();
-      if (taskId) h["X-Task-ID"] = taskId;
-      const traceId = $("traceId").value.trim();
-      if (traceId) h["X-Trace-ID"] = traceId;
-      const tenantId = $("tenantId").value.trim();
-      if (tenantId) h["X-Tenant-ID"] = tenantId;
+      if (channel && CHAT_API.channelHeader) h[CHAT_API.channelHeader] = channel;
+      for (const f of CHAT_API.agentContextFields || []) {
+        const value = $(f.inputId).value.trim();
+        if (value) h[f.headerName] = value;
+      }
+      for (const n of CHAT_API.customHeaderSlots || []) {
+        const headerName = $("customHeader" + n + "Name").value.trim();
+        const headerValue = $("customHeader" + n + "Value").value.trim();
+        if (headerName && headerValue) h[headerName] = headerValue;
+      }
       return h;
     }
 

@@ -857,7 +857,7 @@ task_id = "X-Task-ID"
 | `response_header` | 空 | 自定义响应头名；配合 value/env 用于多副本粘连 |
 | `response_header_value` | 空 | 响应头固定值；非空时优先于 env |
 | `response_header_env` | 空 | 启动时读取的环境变量名 |
-| `debug_ui` | `false` | 为 `true` 时提供同源调试页 `/debug/`（不鉴权打开页面；调 API 仍需 token） |
+| `debug_ui` | `false` | 为 `true` 时提供同源调试页 `/debug/`（不鉴权打开页面；调 API 仍需 token）；页面标签与请求头会随 `user_header` / `user_name_header` / `channel_header` / `agent_context_headers` 配置在启动时渲染；另含 2 组可自填 header 名与值的 AgentContext 调试行 |
 | `cors_origins` | 空 | CORS 允许来源 |
 | `request_timeout` / `timeout` | `30m` | SSE 等待上限 |
 | `interaction_timeout` | `10m` | 确认窗口超时；不超过当前 run 剩余 `request_timeout` |

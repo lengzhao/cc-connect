@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.16 (2026-08-05)
+
+### Changed
+- **chat-api debug UI**: `/debug/` labels and outbound headers now follow `user_header`, `user_name_header`, `channel_header`, and `agent_context_headers` at startup; includes two extra custom AgentContext header rows for ad-hoc testing.
+
 ## v9.1.15 (2026-08-04)
 
 ### Added
