@@ -1,5 +1,13 @@
 ﻿# Changelog
 
+## v9.1.18 (2026-08-06)
+
+### Added
+- **chat-api SSE resume**: when reconnecting with `run_id` while a `question_request` is still pending, chat-api proactively emits non-blocking `client_flow` with `type: waiting_answer` so the App can restore the confirm UI after disconnect.
+
+### Fixed
+- **engine assistant history segments**: persist separate session history entries at tool/thinking boundaries so chat-api `GET /conversations/{id}/messages` returns each assistant text segment instead of only the last chunk.
+
 ## v9.1.17 (2026-08-06)
 
 ### Fixed
