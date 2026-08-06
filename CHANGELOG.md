@@ -1,5 +1,13 @@
 ﻿# Changelog
 
+## v9.1.17 (2026-08-06)
+
+### Fixed
+- **chat-api AskUserQuestion timeout history**: when a `question_request` interaction times out and the turn is cancelled, the ask prompt is persisted so `GET /conversations/{id}/messages` still returns the user query and question text.
+
+### Changed
+- **chat-api message list shape**: `GET /conversations/{id}/messages` now returns session history entries one-by-one (`role` + `content`, id `{conversation_id}:{entry_index}`) instead of merging into query/answer turn pairs; legacy `query` / `answer` fields remain for older clients.
+
 ## v9.1.16 (2026-08-05)
 
 ### Changed
