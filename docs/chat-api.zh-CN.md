@@ -239,7 +239,7 @@ message_id = "{conversation_id}:{turn_index}"
 `conversation_id` 可选；run 不存在 / 非归属 user / turn 已结束时，若请求携带 `conversation_id`，空的 `message_end` 会回传该字段，便于客户端改查 history。
 
 - 断开 SSE **不**停止 agent；断线后切到虚拟 sink，只缓存**最后一条**可恢复事件（`text_delta` / `thinking_delta` / `question_request` / `permission_request` / `ping`）。断链瞬间默认缓存一条 `ping`，断线期间若有新事件则覆盖。
-- 重连后：若有缓存则立即补发该事件；若 run 不存在、非归属 user、或 turn 已在断线期间结束，返回空的 `message_end`（客户端可改查 history）；若重连时 turn 仍在跑、随后结束，正常收 `message_end`。
+- 重连后：若有缓存则立即补发该事件；若 run 仍有未回复的 `question_request`，额外主动发送非阻塞 `client_flow`（`type: waiting_answer`），便于 App 恢复确认 UI；若 run 不存在、非归属 user、或 turn 已在断线期间结束，返回空的 `message_end`（客户端可改查 history）；若重连时 turn 仍在跑、随后结束，正常收 `message_end`。
 - 普通正文缓存使用完整快照 + `replace:true`。
 - 同一 run 同时只允许一个活跃 SSE；已连接时 resume → `409 run already attached`。
 - run 不存在 / 非归属 user → 空的 `message_end`（客户端可改查 history）；请求携带 `conversation_id` 时，`message_end` 会回传该字段
@@ -505,7 +505,7 @@ data: {
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `flow_id` | string | 本次流程引导 ID，仅用于客户端关联 |
-| `type` | string | 非空字符串，原样透传给 App（常见值：`connect_account` / `create_task` / `task_generating` / `task_center_approval` / `credits_insufficient` / `view_task` / `view_task_template`） |
+| `type` | string | 非空字符串，原样透传给 App（常见值：`connect_account` / `create_task` / `task_generating` / `task_center_approval` / `credits_insufficient` / `view_task` / `view_task_template` / `waiting_answer`） |
 | `description` | string | 必填非空的用户引导文案 |
 | `args` | string | 可选；语义由 `type` 决定（见下表） |
 | `run_id` | string | 所属轮次 ID |
@@ -520,6 +520,7 @@ data: {
 | `view_task_template` | `task_template_id` | `"tpl_001"` |
 | `connect_account` | `provider`（账号厂商） | `"feishu"` |
 | `credits_insufficient` | 通常省略 | — |
+| `waiting_answer` | 通常省略 | 断链重连且仍有未回复问题时由服务端主动发送 |
 
 | 关键语义 | 行为 |
 |----------|------|
@@ -741,6 +742,7 @@ Accept: text/event-stream
 | 条件 | 响应 |
 |------|------|
 | run 仍在跑 + 有缓存事件 | 先补发最后一条可恢复事件（断链默认 `ping`，断线期间新事件覆盖），再继续 SSE |
+| run 仍在跑 + 仍有未回复问题 | 补发缓存后额外发送 `client_flow`（`type: waiting_answer`） |
 | run 仍在跑 + 无缓存 | 直接挂载后续增量（断链时已默认缓存 `ping`，重连会先收到） |
 | 断线期间已结束 / run 不存在 / 非归属 user | 空的 `message_end`（客户端可改查 history）；请求含 `conversation_id` 时回传 |
 | 已有活跃 SSE | `409 run already attached` |

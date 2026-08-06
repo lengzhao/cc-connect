@@ -251,6 +251,10 @@ func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user
 		}
 		run.clearLastRecoverable()
 	}
+	if err := run.emitWaitingAnswerClientFlow(sse); err != nil {
+		run.detach()
+		return
+	}
 
 	rc := run.replyContext()
 	p.serveRunSSE(r.Context(), run, sse, run.sessionKey, user, run.channelKey, rc)

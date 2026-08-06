@@ -668,6 +668,31 @@ func (r *runState) stopInteractionTimer() {
 	}
 }
 
+func (r *runState) hasPendingQuestion() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ix := r.interaction
+	return ix != nil && ix.Kind == interactionQuestion && !ix.Responded && !ix.Expired
+}
+
+func (r *runState) emitWaitingAnswerClientFlow(sse *sseWriter) error {
+	if sse == nil || !r.hasPendingQuestion() {
+		return nil
+	}
+	r.mu.Lock()
+	runID := r.id
+	messageID := r.messageID
+	lang := r.language
+	r.mu.Unlock()
+	return sse.Event("client_flow", map[string]any{
+		"flow_id":     newFlowID(),
+		"type":        "waiting_answer",
+		"description": waitingAnswerFlowDescription(lang),
+		"run_id":      runID,
+		"message_id":  messageID,
+	})
+}
+
 func (r *runState) getInteraction(id string) *interactionState {
 	r.mu.Lock()
 	defer r.mu.Unlock()

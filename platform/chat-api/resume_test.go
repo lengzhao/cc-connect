@@ -110,6 +110,9 @@ func TestResumeReplaysLastTextDeltaAfterDisconnect(t *testing.T) {
 	if !hasEvent(events, "message_end") {
 		t.Fatalf("missing message_end: %#v", events)
 	}
+	if findClientFlowByType(events, "waiting_answer") != nil {
+		t.Fatalf("text-only resume must not emit waiting_answer: %#v", events)
+	}
 }
 
 func TestResumeReplaysLastQuestionAndNotifies(t *testing.T) {
@@ -240,6 +243,20 @@ func TestResumeReplaysLastQuestionAndNotifies(t *testing.T) {
 	}()
 
 	ixID := waitInteractionID(t, resumeRec, "question_request")
+	flow := findClientFlowByType(parseSSE(resumeRec.Body.String()), "waiting_answer")
+	if flow == nil {
+		t.Fatalf("missing waiting_answer client_flow on resume: %s", resumeRec.Body.String())
+	}
+	var flowPayload map[string]any
+	if err := json.Unmarshal([]byte(flow.Data), &flowPayload); err != nil {
+		t.Fatalf("client_flow payload: %v", err)
+	}
+	if flowPayload["type"] != "waiting_answer" {
+		t.Fatalf("client_flow type = %#v", flowPayload["type"])
+	}
+	if flowPayload["interaction_id"] != nil {
+		t.Fatalf("waiting_answer must not include interaction_id: %#v", flowPayload)
+	}
 	respondRec := postRespond(t, p, `{"run_id":`+jsonQuote(runID)+`,"interaction_id":`+jsonQuote(ixID)+`,"answers":[{"index":0,"value":"Staging"}]}`)
 	if respondRec.Code != http.StatusOK {
 		t.Fatalf("respond status=%d body=%s", respondRec.Code, respondRec.Body.String())
@@ -252,6 +269,73 @@ func TestResumeReplaysLastQuestionAndNotifies(t *testing.T) {
 	}
 	if !hasEvent(parseSSE(resumeRec.Body.String()), "message_end") {
 		t.Fatalf("missing message_end: %s", resumeRec.Body.String())
+	}
+}
+
+func TestResumeLiveQuestionEmitsWaitingAnswerClientFlow(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
+	bindTestSessions(t, p)
+
+	release := make(chan struct{})
+	questionReady := make(chan struct{})
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		_ = platform.(core.AskQuestionSender).SendAskQuestion(context.Background(), msg.ReplyCtx, core.UserQuestion{
+			Question: "Pick env",
+			Options:  []core.UserQuestionOption{{Label: "Staging", Value: "Staging"}},
+		}, 0)
+		close(questionReady)
+		<-release
+		if scp, ok := platform.(core.StreamingCardPlatform); ok {
+			c, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+			_ = c.Finalize(context.Background(), "done")
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(`{"query":"deploy"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+
+	var firstBody strings.Builder
+	go func() {
+		rec := httptest.NewRecorder()
+		p.routes().ServeHTTP(rec, req)
+		firstBody.WriteString(rec.Body.String())
+	}()
+
+	runID := waitRunID(t, p)
+	select {
+	case <-questionReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("question not emitted")
+	}
+	waitInteractionIDFromBody(t, firstBody.String(), "question_request")
+	cancel()
+	time.Sleep(30 * time.Millisecond)
+
+	resumeReq := httptest.NewRequest(http.MethodPost, "/v1/chat-messages",
+		strings.NewReader(`{"run_id":`+jsonQuote(runID)+`}`))
+	resumeReq.Header.Set("Authorization", "Bearer secret")
+	resumeReq.Header.Set("X-Chat-API-User", "user_001")
+	resumeReq.Header.Set("Content-Type", "application/json")
+	resumeReq.Header.Set("Accept", "text/event-stream")
+	resumeRec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		p.routes().ServeHTTP(resumeRec, resumeReq)
+		close(done)
+	}()
+
+	waitClientFlowByType(t, resumeRec, "waiting_answer")
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("resume SSE did not finish")
 	}
 }
 
@@ -867,4 +951,33 @@ func waitRunGone(t *testing.T, p *Platform, runID string) {
 func jsonQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+func findClientFlowByType(events []sseEvent, flowType string) *sseEvent {
+	for i := range events {
+		if events[i].Name != "client_flow" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(events[i].Data), &payload); err != nil {
+			continue
+		}
+		if payload["type"] == flowType {
+			ev := events[i]
+			return &ev
+		}
+	}
+	return nil
+}
+
+func waitClientFlowByType(t *testing.T, rec *httptest.ResponseRecorder, flowType string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if findClientFlowByType(parseSSE(rec.Body.String()), flowType) != nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("missing client_flow type=%q in SSE: %s", flowType, rec.Body.String())
 }

@@ -198,3 +198,16 @@ func resolveRunLanguage(agentLang string) string {
 	}
 	return "en"
 }
+
+func waitingAnswerFlowDescription(language string) string {
+	switch normalizeTransformLocale(language) {
+	case "zh", "zh-cn", "zh-tw":
+		return "有待回复的问题"
+	case "ja":
+		return "未回答の質問があります"
+	case "es":
+		return "Tiene una pregunta sin responder"
+	default:
+		return "You have an unanswered question"
+	}
+}

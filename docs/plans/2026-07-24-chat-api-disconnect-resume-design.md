@@ -9,8 +9,9 @@
 
 1. 客户端 SSE 断链后可用同一端点 `POST /chat-messages` 带 `run_id` 重连。
 2. 断链期间只缓存**最后一条**可恢复事件（普通 `text_delta`/`thinking_delta` 或 `question_request`），重连后补发。
-3. 断链后若产生 `question_request`，异步通知配置的外部 webhook。
-4. 断链期间 turn 仍在跑时可 resume；若 turn 已在断线期间结束（run 已删除）或 run 不存在/非归属 user，resume → 空的 `message_end`（客户端可改查 history）。重连已挂上后 turn 结束仍正常发 `message_end`。
+3. 重连后若 run 仍有未回复的 `question_request`，额外主动发送 `client_flow`（`type: waiting_answer`）。
+4. 断链后若产生 `question_request`，异步通知配置的外部 webhook。
+5. 断链期间 turn 仍在跑时可 resume；若 turn 已在断线期间结束（run 已删除）或 run 不存在/非归属 user，resume → 空的 `message_end`（客户端可改查 history）。重连已挂上后 turn 结束仍正常发 `message_end`。
 
 ## Non-goals
 
@@ -54,6 +55,7 @@ sequenceDiagram
   App->>ChatAPI: POST /chat-messages run_id
   ChatAPI->>Sink: attach sseEventSink
   ChatAPI-->>App: replay last event or message_end
+  ChatAPI-->>App: client_flow waiting_answer (if pending question)
 ```
 
 ### runEventSink
@@ -108,7 +110,7 @@ question_notify_timeout = "5s"
 ## Testing
 
 - 断线后 text → resume 补发 `replace:true` text_delta
-- 断线后 question → webhook + resume 补发 question_request
+- 断线后 question → webhook + resume 补发 question_request + waiting_answer client_flow
 - 多事件覆盖，只补最后一条
 - 断线后 finish → 再 resume → 空的 `message_end`（查 history）
 - attached 重复 resume → 409
