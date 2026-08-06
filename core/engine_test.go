@@ -1622,6 +1622,39 @@ func TestProcessInteractiveEvents_AppendsContextIndicatorInsideReplyFooter(t *te
 	}
 }
 
+func TestProcessInteractiveEvents_ToolSegmentsRecordMultipleHistoryEntries(t *testing.T) {
+	p := &stubPlatformEngine{n: "chat-api"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetDisplayConfig(DisplayCfg{ThinkingMessages: true, ThinkingMaxLen: 300, ToolMaxLen: 500, ToolMessages: true})
+
+	sessionKey := "chat-api:user-history-segments"
+	session := e.sessions.GetOrCreateActive(sessionKey)
+	agentSession := newControllableSession("s-history-segments")
+	state := &interactiveState{
+		agentSession: agentSession,
+		platform:     p,
+		replyCtx:     "ctx-history-segments",
+	}
+	e.interactiveStates[sessionKey] = state
+
+	agentSession.events <- Event{Type: EventText, Content: "先检查一下。"}
+	agentSession.events <- Event{Type: EventToolUse, ToolName: "Bash", ToolInput: "pwd"}
+	agentSession.events <- Event{Type: EventText, Content: "已处理完成。"}
+	agentSession.events <- Event{Type: EventResult, Content: "已处理完成。", Done: true}
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-history-segments", time.Now(), nil, nil, state.replyCtx)
+
+	hist := session.GetHistory(0)
+	if len(hist) != 2 {
+		t.Fatalf("history len = %d, want 2 assistant segments; got=%#v", len(hist), hist)
+	}
+	if hist[0].Role != "assistant" || hist[0].Content != "先检查一下。" {
+		t.Fatalf("first history = %+v, want assistant 先检查一下。", hist[0])
+	}
+	if hist[1].Role != "assistant" || hist[1].Content != "已处理完成。" {
+		t.Fatalf("second history = %+v, want assistant 已处理完成。", hist[1])
+	}
+}
+
 func TestProcessInteractiveEvents_ToolSegmentsKeepFinalFooter(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)

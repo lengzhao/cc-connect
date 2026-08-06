@@ -672,6 +672,8 @@ GET /conversations/{conversation_id}/messages?cursor=s1a2b3c:5&limit=20
 
 每条记录对应 session history 中的一条 `user` / `assistant` 条目（按写入顺序编号 `{conversation_id}:{entry_index}`）。响应含 `role`、`content`；为兼容旧客户端，`user` 条目仍带 `query`，`assistant` 条目仍带 `answer`。
 
+同一轮用户请求若经工具调用产生多段助手正文（SSE 多次 `text_delta`），history 按段逐条写入多个 `assistant` 条目，不再合并为一条。
+
 ```json
 {
   "ok": true,

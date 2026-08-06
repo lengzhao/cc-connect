@@ -4977,7 +4977,16 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 	var textParts []string
 	var segmentStart int // index into textParts: text before this has been sent/displayed
+	historyWritten := 0  // index into textParts: text before this has been persisted to session history
 	silentHold := false  // true while accumulated segment text could still resolve to a bare NO_REPLY marker
+	advanceSegmentStart := func() {
+		if !skipHistory && historyWritten < len(textParts) {
+			e.persistAssistantHistorySegment(session, sessions, textParts, historyWritten, len(textParts))
+			historyWritten = len(textParts)
+		}
+		segmentStart = len(textParts)
+		silentHold = false
+	}
 	toolCount := 0
 	waitStart := time.Now()
 	firstEventLogged := false
@@ -5281,13 +5290,16 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 							}
 						}
 					}
-					segmentStart = len(textParts)
+					advanceSegmentStart()
 				}
 				silentHold = false
 			}
 			if e.display.ThinkingMessages && event.Content != "" {
 				// --- StreamingCard path ---
 				if turnStream != nil && !turnStream.Failed() {
+					if len(textParts) > segmentStart {
+						advanceSegmentStart()
+					}
 					turnStream.OnThinking(e.ctx, truncateIf(event.Content, e.display.ThinkingMaxLen))
 					continue // skip original independent message sending
 				}
@@ -5303,8 +5315,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 							}
 						}
 					}
-					segmentStart = len(textParts)
-					silentHold = false
+					advanceSegmentStart()
 				}
 				sp.freeze()
 				if previewActive {
@@ -5367,13 +5378,16 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 							}
 						}
 					}
-					segmentStart = len(textParts)
+					advanceSegmentStart()
 				}
 				silentHold = false
 			}
 			if e.display.ToolMessages {
 				// --- StreamingCard path ---
 				if turnStream != nil && !turnStream.Failed() {
+					if len(textParts) > segmentStart {
+						advanceSegmentStart()
+					}
 					toolInput := event.ToolInput
 					var formattedInput string
 					if toolInput == "" {
@@ -5406,8 +5420,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 							}
 						}
 					}
-					segmentStart = len(textParts)
-					silentHold = false
+					advanceSegmentStart()
 				}
 				sp.freeze()
 				if previewActive {
@@ -5669,8 +5682,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 						}
 					}
 				}
-				segmentStart = len(textParts)
-				silentHold = false
+				advanceSegmentStart()
 			}
 			sp.freeze()
 			if previewActive {
@@ -5845,12 +5857,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			//   1. bare marker (isSilentReply)               → fully silent
 			//   2. trailing marker with non-empty reasoning  → strip marker, deliver reasoning
 			//   3. trailing marker with empty strip result   → fully silent
-			// History records the ORIGINAL baseResponse so the agent retains context of its own
-			// decision; only the outbound platform text gets rewritten/suppressed.
-			if !skipHistory {
-				session.AddHistory("assistant", baseResponse)
-				sessions.Save()
-			}
+			// History records assistant text by segment (tool/thinking boundaries)
+			// so chat-api GET /messages can replay each streamed response separately.
+			// Uses baseResponse fallback when no streamed segments were persisted.
+			e.persistAssistantHistoryTurnEnd(session, sessions, textParts, &historyWritten, baseResponse)
 
 			isSilent := isSilentReply(baseResponse)
 			if !isSilent {
@@ -6203,6 +6213,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				msgID = queued.messageID
 				textParts = nil
 				segmentStart = 0
+				historyWritten = 0
 				toolCount = 0
 				turnStart = time.Now()
 				firstEventLogged = false
@@ -6362,8 +6373,14 @@ channelClosed:
 		state.mu.Unlock()
 
 		fullResponse := strings.Join(textParts, "")
-		if !skipHistory {
-			session.AddHistory("assistant", fullResponse)
+		if !skipHistory && len(textParts) > 0 {
+			if historyWritten < segmentStart {
+				e.persistAssistantHistorySegment(session, sessions, textParts, historyWritten, segmentStart)
+				historyWritten = segmentStart
+			}
+			if historyWritten < len(textParts) {
+				e.persistAssistantHistorySegment(session, sessions, textParts, historyWritten, len(textParts))
+			}
 		}
 		// Persist immediately — this path runs on abnormal channel close,
 		// so deferring the save until the next foreground turn risks losing
@@ -9429,6 +9446,46 @@ func truncateHistoryEntry(content string, maxLen int) string {
 	}
 	runes := []rune(content)
 	return string(runes[:maxLen]) + "..."
+}
+
+func cleanAssistantHistoryText(content string) string {
+	content = ctxSelfReportRe.ReplaceAllString(content, "")
+	return strings.TrimRight(content, "\n ")
+}
+
+// persistAssistantHistoryText appends one assistant history entry when content
+// is non-empty and not a silent (NO_REPLY) marker.
+func (e *Engine) persistAssistantHistoryText(session *Session, sessions *SessionManager, content string) {
+	content = cleanAssistantHistoryText(content)
+	if content == "" || isSilentReply(content) {
+		return
+	}
+	session.AddHistory("assistant", content)
+	sessions.Save()
+}
+
+// persistAssistantHistorySegment writes one assistant entry from a textParts slice range.
+func (e *Engine) persistAssistantHistorySegment(session *Session, sessions *SessionManager, textParts []string, from, to int) {
+	if from >= to {
+		return
+	}
+	e.persistAssistantHistoryText(session, sessions, strings.Join(textParts[from:to], ""))
+}
+
+// persistAssistantHistoryTurnEnd flushes any remaining streamed segments, then falls
+// back to baseResponse when nothing was persisted (empty stream or silent-only).
+func (e *Engine) persistAssistantHistoryTurnEnd(session *Session, sessions *SessionManager, textParts []string, historyWritten *int, baseResponse string) {
+	if historyWritten == nil {
+		return
+	}
+	prevLen := session.HistoryLen()
+	if len(textParts) > 0 && *historyWritten < len(textParts) {
+		e.persistAssistantHistorySegment(session, sessions, textParts, *historyWritten, len(textParts))
+		*historyWritten = len(textParts)
+	}
+	if session.HistoryLen() == prevLen {
+		e.persistAssistantHistoryText(session, sessions, baseResponse)
+	}
 }
 
 func (e *Engine) cmdLang(p Platform, msg *Message, args []string) {
