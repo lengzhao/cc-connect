@@ -855,6 +855,84 @@ func TestQuestionInteractionTimeoutCancelsTurn(t *testing.T) {
 	}
 }
 
+func TestQuestionInteractionTimeout_MessagesListable(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{
+		"token":               "secret",
+		"interaction_timeout": "50ms",
+	})
+	sm := bindTestSessions(t, p)
+
+	var conversationID string
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		if msg.Content == "/stop" {
+			return
+		}
+		if conversationID == "" {
+			conversationID = conversationIDFromEngineSessionKey(msg.SessionKey)
+		}
+		s := sm.GetOrCreateActive(msg.SessionKey)
+		s.AddUserHistory(msg.Content, msg.UserID, msg.UserName)
+		q := core.UserQuestion{
+			Question: "Choose",
+			Options:  []core.UserQuestionOption{{Label: "A", Value: "A"}},
+		}
+		_ = platform.(core.AskQuestionSender).SendAskQuestion(context.Background(), msg.ReplyCtx, q, 0)
+		// Simulate engine AskUserQuestion history recorder on prompt emit.
+		s.AddHistory("assistant", "Choose\n\n1. A")
+		sm.Save()
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(`{"query":"ask"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		p.routes().ServeHTTP(rec, req)
+		close(done)
+	}()
+	<-done
+
+	if conversationID == "" {
+		t.Fatal("missing conversation id")
+	}
+
+	msgReq := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+conversationID+"/messages?limit=10", nil)
+	msgReq.Header.Set("Authorization", "Bearer secret")
+	msgRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(msgRec, msgReq)
+	if msgRec.Code != http.StatusOK {
+		t.Fatalf("messages status = %d body=%s", msgRec.Code, msgRec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Messages []map[string]any `json:"messages"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(msgRec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Messages) != 2 {
+		t.Fatalf("messages = %+v, want user + assistant entries after question timeout", resp.Data.Messages)
+	}
+	var foundUser, foundQuestion bool
+	for _, m := range resp.Data.Messages {
+		if m["role"] == "user" && m["content"] == "ask" {
+			foundUser = true
+		}
+		if m["role"] == "assistant" {
+			if content, _ := m["content"].(string); strings.Contains(content, "Choose") {
+				foundQuestion = true
+			}
+		}
+	}
+	if !foundUser || !foundQuestion {
+		t.Fatalf("messages = %+v, want ask user query and question prompt entries", resp.Data.Messages)
+	}
+}
+
 func waitInteractionID(t *testing.T, rec *httptest.ResponseRecorder, eventName string) string {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

@@ -8177,6 +8177,36 @@ func TestHandlePendingPermission_MCPAskUser_HistoryRecorder_Writes(t *testing.T)
 	}
 }
 
+func TestFinalizeAskUserTurnOnAbort_WritesPromptWhenTurnEndsUserOnly(t *testing.T) {
+	e := newTestEngine()
+	p := &stubAskUserHistoryPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}, record: true}
+	sessionKey := "test:chat:user1"
+	session := e.sessions.GetOrCreateActive(sessionKey)
+	session.AddUserHistory("pick wallet", "user1", "Alice")
+
+	pending := &pendingPermission{
+		RequestID: "req-abort",
+		ToolName:  ToolCCConnectAskUser,
+		Questions: []UserQuestion{{
+			Question: "Which wallet?",
+			Options: []UserQuestionOption{
+				{Label: "MetaMask", Value: "mm"},
+			},
+		}},
+		Resolved: make(chan struct{}),
+	}
+
+	e.finalizeAskUserTurnOnAbort(p, session, e.sessions, pending)
+
+	hist := session.GetHistory(0)
+	if len(hist) != 2 {
+		t.Fatalf("history len = %d, want user + assistant prompt", len(hist))
+	}
+	if hist[1].Role != "assistant" || !strings.Contains(hist[1].Content, "Which wallet?") {
+		t.Fatalf("hist[1] = %#v", hist[1])
+	}
+}
+
 func TestHandlePendingPermission_AskUserQuestion_HistoryRecorder_MultiQuestion(t *testing.T) {
 	e := newTestEngine()
 	p := &stubAskUserHistoryPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}, record: true}

@@ -314,7 +314,7 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 	}
 
 	// 3. History (wait briefly for engine to persist assistant turn)
-	waitForHistory(t, base, token, convID, 1)
+	waitForHistory(t, base, token, convID, 2)
 
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
 	if resp.StatusCode != http.StatusOK {
@@ -329,15 +329,17 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &histResp); err != nil {
 		t.Fatalf("decode messages: %v", err)
 	}
-	if len(histResp.Data.Messages) != 1 {
-		t.Fatalf("messages = %+v, want 1", histResp.Data.Messages)
+	if len(histResp.Data.Messages) != 2 {
+		t.Fatalf("messages = %+v, want user + assistant entries", histResp.Data.Messages)
 	}
-	if histResp.Data.Messages[0]["query"] != "用一句话介绍你自己" {
-		t.Fatalf("query = %v", histResp.Data.Messages[0]["query"])
+	var foundUser bool
+	for _, m := range histResp.Data.Messages {
+		if m["role"] == "user" && m["content"] == "用一句话介绍你自己" {
+			foundUser = true
+		}
 	}
-	answer, _ := histResp.Data.Messages[0]["answer"].(string)
-	if answer == "" {
-		t.Fatalf("empty answer in history: %+v", histResp.Data.Messages[0])
+	if !foundUser {
+		t.Fatalf("missing user history entry: %+v", histResp.Data.Messages)
 	}
 
 	// 4. Continue conversation
@@ -350,7 +352,7 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 		t.Fatalf("continue SSE missing message_end: %s", raw)
 	}
 
-	waitForHistory(t, base, token, convID, 2)
+	waitForHistory(t, base, token, convID, 4)
 
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
 	var hist2 struct {
@@ -359,8 +361,8 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 		} `json:"data"`
 	}
 	_ = json.Unmarshal([]byte(raw), &hist2)
-	if len(hist2.Data.Messages) != 2 {
-		t.Fatalf("after continue messages = %d, want 2", len(hist2.Data.Messages))
+	if len(hist2.Data.Messages) != 4 {
+		t.Fatalf("after continue messages = %d, want 4 history entries", len(hist2.Data.Messages))
 	}
 
 	// 5. Rename
@@ -466,7 +468,7 @@ func TestE2ELocalChatAPIAgentContextInjection(t *testing.T) {
 		t.Fatalf("agent prompt missing context: %q", prompt)
 	}
 
-	waitForHistory(t, base, "e2e-token", convID, 1)
+	waitForHistory(t, base, "e2e-token", convID, 2)
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", "e2e-token", "", nil, "")
 	var hist struct {
 		Data struct {
@@ -476,10 +478,15 @@ func TestE2ELocalChatAPIAgentContextInjection(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &hist); err != nil {
 		t.Fatalf("decode history: %v body=%s", err, raw)
 	}
-	if len(hist.Data.Messages) != 1 {
+	if len(hist.Data.Messages) != 2 {
 		t.Fatalf("messages = %+v", hist.Data.Messages)
 	}
-	q, _ := hist.Data.Messages[0]["query"].(string)
+	var q string
+	for _, m := range hist.Data.Messages {
+		if m["role"] == "user" {
+			q, _ = m["content"].(string)
+		}
+	}
 	if q != "hello with context" {
 		t.Fatalf("history query = %q, want raw user text", q)
 	}
@@ -514,7 +521,7 @@ func TestE2ELocalChatAPIMultiWorkspaceChannelHistory(t *testing.T) {
 		t.Fatalf("missing conversation_id in SSE: %s", raw)
 	}
 
-	waitForHistory(t, base, token, convID, 1)
+	waitForHistory(t, base, token, convID, 2)
 
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
 	if resp.StatusCode != http.StatusOK {
@@ -528,11 +535,17 @@ func TestE2ELocalChatAPIMultiWorkspaceChannelHistory(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &hist); err != nil {
 		t.Fatalf("decode messages: %v", err)
 	}
-	if len(hist.Data.Messages) != 1 {
+	if len(hist.Data.Messages) != 2 {
 		t.Fatalf("messages = %+v, want workspace turn history readable by conversation id", hist.Data.Messages)
 	}
-	if hist.Data.Messages[0]["query"] != "进入 workspace 后回复一句" {
-		t.Fatalf("query = %v", hist.Data.Messages[0]["query"])
+	var found bool
+	for _, m := range hist.Data.Messages {
+		if m["role"] == "user" && m["content"] == "进入 workspace 后回复一句" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing user entry: %+v", hist.Data.Messages)
 	}
 }
 

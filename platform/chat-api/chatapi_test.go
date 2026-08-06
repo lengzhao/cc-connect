@@ -63,24 +63,42 @@ func TestNewDefaults(t *testing.T) {
 	}
 }
 
-func TestPairHistoryAndMessageID(t *testing.T) {
+func TestHistoryMessagesAndMessageID(t *testing.T) {
 	entries := []core.HistoryEntry{
 		{Role: "user", Content: "q1", Timestamp: time.Unix(100, 0)},
 		{Role: "assistant", Content: "a1", Timestamp: time.Unix(101, 0)},
 		{Role: "user", Content: "q2", Timestamp: time.Unix(200, 0)},
 	}
-	pairs := pairHistory("s1", entries)
-	if len(pairs) != 2 {
-		t.Fatalf("pairs len = %d, want 2 (in-progress turn included)", len(pairs))
+	msgs := historyMessages("s1", entries)
+	if len(msgs) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(msgs))
 	}
-	if pairs[0].ID != "s1:0" || pairs[0].Answer != "a1" {
-		t.Fatalf("first pair = %+v, want completed turn s1:0", pairs[0])
+	if msgs[0].ID != "s1:0" || msgs[0].Role != "user" || msgs[0].Content != "q1" {
+		t.Fatalf("first = %+v", msgs[0])
 	}
-	if pairs[1].ID != "s1:1" || pairs[1].Query != "q2" || pairs[1].Answer != "" {
-		t.Fatalf("second pair = %+v, want in-progress q2 with empty answer", pairs[1])
+	if msgs[1].Role != "assistant" || msgs[1].Content != "a1" {
+		t.Fatalf("second = %+v", msgs[1])
+	}
+	if msgs[2].ID != "s1:2" || msgs[2].Content != "q2" {
+		t.Fatalf("third = %+v", msgs[2])
 	}
 	if countCompletedTurns(entries) != 1 {
 		t.Fatalf("completed turns = %d, want 1", countCompletedTurns(entries))
+	}
+}
+
+func TestHistoryMessages_ConsecutiveUsers(t *testing.T) {
+	entries := []core.HistoryEntry{
+		{Role: "user", Content: "first", Timestamp: time.Unix(100, 0)},
+		{Role: "user", Content: "second", Timestamp: time.Unix(200, 0)},
+		{Role: "assistant", Content: "done", Timestamp: time.Unix(201, 0)},
+	}
+	msgs := historyMessages("s1", entries)
+	if len(msgs) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(msgs))
+	}
+	if msgs[0].Content != "first" || msgs[1].Content != "second" || msgs[2].Content != "done" {
+		t.Fatalf("messages = %+v", msgs)
 	}
 }
 
@@ -110,32 +128,32 @@ func TestMessagesHTTPReturnsInProgressTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(resp.Data.Messages) != 1 {
-		t.Fatalf("messages = %+v, want 1 in-progress turn", resp.Data.Messages)
+		t.Fatalf("messages = %+v, want 1 history entry", resp.Data.Messages)
 	}
-	if resp.Data.Messages[0]["query"] != "still waiting for agent" {
-		t.Fatalf("query = %v", resp.Data.Messages[0]["query"])
+	if resp.Data.Messages[0]["role"] != "user" && resp.Data.Messages[0]["query"] != "still waiting for agent" {
+		t.Fatalf("message = %+v", resp.Data.Messages[0])
 	}
-	if ans, _ := resp.Data.Messages[0]["answer"].(string); ans != "" {
-		t.Fatalf("answer = %q, want empty for in-progress turn", ans)
+	if resp.Data.Messages[0]["content"] != "still waiting for agent" {
+		t.Fatalf("content = %v", resp.Data.Messages[0]["content"])
 	}
 }
 
-func TestPairHistoryWithUserIdentity(t *testing.T) {
+func TestHistoryMessagesWithUserIdentity(t *testing.T) {
 	entries := []core.HistoryEntry{
 		{Role: "user", Content: "q1", UserID: "uid_a", UserName: "Alice", Timestamp: time.Unix(100, 0)},
 		{Role: "assistant", Content: "a1", Timestamp: time.Unix(101, 0)},
 		{Role: "user", Content: "q2", UserID: "uid_b", Timestamp: time.Unix(200, 0)},
 		{Role: "assistant", Content: "a2", Timestamp: time.Unix(201, 0)},
 	}
-	pairs := pairHistory("s1", entries)
-	if len(pairs) != 2 {
-		t.Fatalf("pairs len = %d, want 2", len(pairs))
+	msgs := historyMessages("s1", entries)
+	if len(msgs) != 4 {
+		t.Fatalf("messages len = %d, want 4", len(msgs))
 	}
-	if pairs[0].UserID != "uid_a" || pairs[0].UserName != "Alice" {
-		t.Fatalf("first pair user = %+v", pairs[0])
+	if msgs[0].UserID != "uid_a" || msgs[0].UserName != "Alice" {
+		t.Fatalf("first user = %+v", msgs[0])
 	}
-	if pairs[1].UserID != "uid_b" || pairs[1].UserName != "" {
-		t.Fatalf("second pair user = %+v", pairs[1])
+	if msgs[2].UserID != "uid_b" || msgs[2].UserName != "" {
+		t.Fatalf("second user = %+v", msgs[2])
 	}
 }
 
@@ -165,16 +183,16 @@ func TestMessagesHTTPReturnsUserIdentity(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(resp.Data.Messages) != 2 {
-		t.Fatalf("messages = %+v", resp.Data.Messages)
+	if len(resp.Data.Messages) != 4 {
+		t.Fatalf("messages = %+v, want 4 history entries", resp.Data.Messages)
 	}
-	latest := resp.Data.Messages[0]
-	if latest["user_id"] != "uid_b" || latest["user_name"] != "Bob" {
-		t.Fatalf("latest message user fields = %+v", latest)
+	latestUser := resp.Data.Messages[1]
+	if latestUser["user_id"] != "uid_b" || latestUser["user_name"] != "Bob" {
+		t.Fatalf("latest user message = %+v", latestUser)
 	}
-	older := resp.Data.Messages[1]
-	if older["user_id"] != "uid_a" || older["user_name"] != "Alice" {
-		t.Fatalf("older message user fields = %+v", older)
+	olderUser := resp.Data.Messages[3]
+	if olderUser["user_id"] != "uid_a" || olderUser["user_name"] != "Alice" {
+		t.Fatalf("older user message = %+v", olderUser)
 	}
 }
 
@@ -369,20 +387,20 @@ func TestPaginateConversations(t *testing.T) {
 }
 
 func TestPaginateMessages(t *testing.T) {
-	pairs := []pairedMessage{
-		{ID: "s1:0", TurnIndex: 0},
-		{ID: "s1:1", TurnIndex: 1},
-		{ID: "s1:2", TurnIndex: 2},
+	items := []historyMessage{
+		{ID: "s1:0", Index: 0},
+		{ID: "s1:1", Index: 1},
+		{ID: "s1:2", Index: 2},
 	}
-	page, hasMore, next, err := paginateMessages(pairs, "", 2)
+	page, hasMore, next, err := paginateMessages(items, "", 2)
 	if err != nil {
 		t.Fatalf("paginate error = %v", err)
 	}
 	if len(page) != 2 || !hasMore || next != "s1:1" {
 		t.Fatalf("page = %+v hasMore=%v next=%q", page, hasMore, next)
 	}
-	if page[0].TurnIndex != 2 {
-		t.Fatalf("newest first: got turn %d", page[0].TurnIndex)
+	if page[0].Index != 2 {
+		t.Fatalf("newest first: got index %d", page[0].Index)
 	}
 }
 
@@ -654,11 +672,12 @@ func TestChatMessagesHistoryReadableByConversationID(t *testing.T) {
 	if err := json.Unmarshal(msgRec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(resp.Data.Messages) != 1 {
-		t.Fatalf("messages = %+v, want 1 paired turn", resp.Data.Messages)
+	if len(resp.Data.Messages) != 2 {
+		t.Fatalf("messages = %+v, want 2 history entries", resp.Data.Messages)
 	}
-	if resp.Data.Messages[0]["query"] != "ping" || resp.Data.Messages[0]["answer"] != "hello back" {
-		t.Fatalf("message pair = %+v", resp.Data.Messages[0])
+	// Newest first: assistant then user.
+	if resp.Data.Messages[0]["content"] != "hello back" || resp.Data.Messages[1]["content"] != "ping" {
+		t.Fatalf("messages = %+v", resp.Data.Messages)
 	}
 }
 

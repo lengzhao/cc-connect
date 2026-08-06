@@ -225,27 +225,15 @@ func (p *Platform) handleConversationMessages(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
-	pairs := pairHistory(conversationID, s.GetHistory(0))
-	page, hasMore, nextCursor, err := paginateMessages(pairs, cursor, limit)
+	items := historyMessages(conversationID, s.GetHistory(0))
+	page, hasMore, nextCursor, err := paginateMessages(items, cursor, limit)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 	messages := make([]map[string]any, len(page))
 	for i, m := range page {
-		msg := map[string]any{
-			"id":         m.ID,
-			"query":      m.Query,
-			"answer":     m.Answer,
-			"created_at": m.CreatedAt,
-		}
-		if m.UserID != "" {
-			msg["user_id"] = m.UserID
-		}
-		if m.UserName != "" {
-			msg["user_name"] = m.UserName
-		}
-		messages[i] = msg
+		messages[i] = historyMessageToAPI(m)
 	}
 	data := map[string]any{
 		"limit":    clampLimit(limit),

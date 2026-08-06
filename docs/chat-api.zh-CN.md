@@ -376,7 +376,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 - `ping` 为保活事件，客户端可忽略
 - 同一 run 若出现新的确认，会先发 `interaction_superseded`；旧 `interaction_id` 不可再 respond
 - AskUserQuestion 超时后当前阻塞 turn 会取消；后续用户输入应重新 `POST /chat-messages`，作为普通对话
-- 结构化确认（`question_request`）：发出问题时立即写入可读问题文本（`assistant`）；用户 respond 后立即写入选项 label 或自定义输入（`user`），不等待 Agent 回传或全部题目答完；Agent 最终回复仍在 turn 结束时写入。`pairHistory` 仍按普通 `query`/`answer` 配对。权限确认（`permission_request`）不写入历史
+- 结构化确认（`question_request`）：发出问题时立即写入可读问题文本（`assistant`）；用户 respond 后立即写入选项 label 或自定义输入（`user`），不等待 Agent 回传或全部题目答完；Agent 最终回复仍在 turn 结束时写入。`GET /messages` 按 session history 逐条返回（`role` + `content`），不再合并为 query/answer 轮次。权限确认（`permission_request`）不写入历史
 - 取消：`POST /runs/{run_id}/cancel`（`run_id` 来自 `message` 事件）
 - 断线后确认卡：可配置 `question_notify_url` 收 webhook，再 `POST /chat-messages` + `run_id` 重连补卡或直接 respond
 
@@ -670,6 +670,8 @@ GET /conversations/{conversation_id}/messages?cursor=s1a2b3c:5&limit=20
 
 持有 `conversation_id` 即可，不需要 `user`。
 
+每条记录对应 session history 中的一条 `user` / `assistant` 条目（按写入顺序编号 `{conversation_id}:{entry_index}`）。响应含 `role`、`content`；为兼容旧客户端，`user` 条目仍带 `query`，`assistant` 条目仍带 `answer`。
+
 ```json
 {
   "ok": true,
@@ -679,9 +681,17 @@ GET /conversations/{conversation_id}/messages?cursor=s1a2b3c:5&limit=20
     "messages": [
       {
         "id": "s1a2b3c:1",
-        "query": "帮我解释这段代码",
+        "role": "assistant",
+        "content": "这段代码实现了……",
         "answer": "这段代码实现了……",
-        "created_at": 1780003500,
+        "created_at": 1780003500
+      },
+      {
+        "id": "s1a2b3c:0",
+        "role": "user",
+        "content": "帮我解释这段代码",
+        "query": "帮我解释这段代码",
+        "created_at": 1780003400,
         "user_id": "user_001",
         "user_name": "Alice"
       }

@@ -3666,6 +3666,29 @@ func formatAskQuestionHistoryText(e *Engine, q UserQuestion) string {
 	return b.String()
 }
 
+// finalizeAskUserTurnOnAbort ensures structured ask prompts are persisted before
+// a turn is torn down (e.g. chat-api question interaction timeout → /stop).
+// When the platform records AskUserQuestion history, the prompt is normally
+// written when the question is sent; this covers abort races where the turn
+// would otherwise remain user-only and break GET /messages pairing.
+func (e *Engine) finalizeAskUserTurnOnAbort(p Platform, session *Session, sessions *SessionManager, pending *pendingPermission) {
+	if pending == nil || len(pending.Questions) == 0 || session == nil || sessions == nil {
+		return
+	}
+	if !e.askUserQuestionHistoryEnabled(p) {
+		return
+	}
+	hist := session.GetHistory(0)
+	if len(hist) == 0 || hist[len(hist)-1].Role != "user" {
+		return
+	}
+	idx := pending.CurrentQuestion
+	if idx < 0 || idx >= len(pending.Questions) {
+		idx = 0
+	}
+	e.recordAskUserQuestionPromptHistory(p, session, pending.Questions[idx])
+}
+
 // abortPendingAsk finishes a pending permission/ask without a user answer.
 // MCP asks must Deny the hub waiter so tools/call does not hang.
 func (e *Engine) abortPendingAsk(pending *pendingPermission, reason string) {
@@ -5698,6 +5721,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				case <-pending.Resolved:
 					break waitPermission
 				case <-stopCh:
+					e.finalizeAskUserTurnOnAbort(p, session, sessions, pending)
 					sp.discard()
 					return
 				case <-e.ctx.Done():
