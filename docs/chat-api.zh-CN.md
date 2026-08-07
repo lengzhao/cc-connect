@@ -3,7 +3,7 @@
 > 版本：**v1.2.10**（2026-08-02）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [断链重连](./plans/2026-07-24-chat-api-disconnect-resume-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [Tool SSE 转换](./plans/2026-07-28-chat-api-tool-sse-transform-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [response header](./plans/2026-08-02-chat-api-pod-affinity-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [断链重连](./plans/2026-07-24-chat-api-disconnect-resume-design.md) · [SSE 生命周期日志](./plans/2026-08-07-chat-api-sse-lifecycle-logging-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [Tool SSE 转换](./plans/2026-07-28-chat-api-tool-sse-transform-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [response header](./plans/2026-08-02-chat-api-pod-affinity-design.md)
 
 ## 1. 概述
 
@@ -244,6 +244,7 @@ message_id = "{conversation_id}:{turn_index}"
 - 同一 run 同时只允许一个活跃 SSE；已连接时 resume → `409 run already attached`。
 - run 不存在 / 非归属 user → 空的 `message_end`（客户端可改查 history）；请求携带 `conversation_id` 时，`message_end` 会回传该字段
 - 断线后产生 `question_request` 时，若配置了 `question_notify_url`，异步 POST 通知 BFF（失败不影响 turn）。Body 仅含 `conversation_id`、`message_id`、`run_id`、`user_id`、`channel`；事件类型见 header `X-Chat-API-Event`。
+- 运维日志：SSE 主流程以 Info 输出 `chat-api: sse <event>`（`start` / `disconnect` / `resume` / `resume_miss` / `resume_rejected` / `end`；可含 `reason`、`replay_event`、`terminal`、`error`，每事件一行）。详见 [SSE 生命周期日志](./plans/2026-08-07-chat-api-sse-lifecycle-logging-design.md)。
 
 详见 [断链重连设计](./plans/2026-07-24-chat-api-disconnect-resume-design.md)。
 

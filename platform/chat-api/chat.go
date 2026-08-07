@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chenhg5/cc-connect/core"
 )
@@ -176,9 +177,10 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		"run_id":          runID,
 	}
 	if err := sse.Event("message", msgPayload); err != nil {
-		run.detach()
+		p.pending.finish(runID, pendingResult{err: err})
 		return
 	}
+	logSSELifecycle("start", run)
 
 	autoName := body.AutoGenerateName == nil || *body.AutoGenerateName
 	chatName, _ := p.ResolveChannelName(channelKey)
@@ -227,11 +229,17 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user, runID, conversationID string) {
 	run := p.pending.get(runID)
 	if run == nil || run.user != user {
+		reason := "run_not_found"
+		if run != nil {
+			reason = "user_mismatch"
+		}
+		logSSELifecyclePartial("resume_miss", runID, user, conversationID, "reason", reason)
 		p.writeResumeMessageEnd(w, conversationID)
 		return
 	}
 
 	if err := run.beginAttach(); err != nil {
+		logSSELifecycle("resume_rejected", run, "reason", "already_attached")
 		writeErr(w, http.StatusConflict, "run already attached")
 		return
 	}
@@ -243,15 +251,23 @@ func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	run.finishAttach(sse)
-
+	replayEvent := ""
 	if ev := run.peekLastRecoverable(); ev != nil {
+		replayEvent = ev.name
 		if err := sse.Event(ev.name, ev.payload); err != nil {
+			logSSELifecycle("disconnect", run, "reason", "write_error", "error", err.Error())
 			run.detach()
 			return
 		}
 		run.clearLastRecoverable()
 	}
+	if replayEvent != "" {
+		logSSELifecycle("resume", run, "replay_event", replayEvent)
+	} else {
+		logSSELifecycle("resume", run)
+	}
 	if err := run.emitWaitingAnswerClientFlow(sse); err != nil {
+		logSSELifecycle("disconnect", run, "reason", "write_error", "error", err.Error())
 		run.detach()
 		return
 	}
@@ -298,6 +314,7 @@ func (p *Platform) serveRunSSE(reqCtx context.Context, run *runState, sse *sseWr
 		select {
 		case <-run.notify:
 			if err := run.flushDelta(); err != nil {
+				logSSELifecycle("disconnect", run, "reason", "write_error", "error", err.Error())
 				return
 			}
 		case result := <-run.done:
@@ -315,6 +332,7 @@ func (p *Platform) serveRunSSE(reqCtx context.Context, run *runState, sse *sseWr
 			_ = sse.Error("request timed out")
 			return
 		case <-reqCtx.Done():
+			logSSELifecycle("disconnect", run, "reason", "client_gone")
 			run.detach()
 			return
 		}
@@ -380,7 +398,28 @@ func deltaPayload(messageID, prev, curr string) (map[string]any, bool) {
 		}
 		return map[string]any{"message_id": messageID, "text": suffix}, true
 	}
-	return map[string]any{"message_id": messageID, "text": curr, "replace": true}, true
+	return replaceDeltaPayload(messageID, curr), true
+}
+
+const logContentLimit = 40
+
+func truncateForLog(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= maxLen {
+		return s
+	}
+	return string([]rune(s)[:maxLen])
+}
+
+// replaceDeltaPayload builds a full-text delta with replace=true and warns.
+func replaceDeltaPayload(messageID, curr string) map[string]any {
+	slog.Warn("chat-api: emitting SSE delta with replace=true",
+		"message_id", messageID,
+		"text", truncateForLog(curr, logContentLimit),
+	)
+	return map[string]any{"message_id": messageID, "text": curr, "replace": true}
 }
 
 func inputsToCore(inputs []chatInput) ([]core.ImageAttachment, []core.FileAttachment, *core.AudioAttachment, error) {
@@ -583,6 +622,10 @@ func (c *streamingCard) Update(_ context.Context, content string) error {
 	if run := c.platform.pending.get(id); run != nil && run.usesStructuredStream() {
 		return nil
 	}
+	slog.Warn("chat-api: StreamingCard.Update used (legacy markdown path)",
+		"run_id", id,
+		"content", truncateForLog(content, logContentLimit),
+	)
 	c.lastSent = content
 	if !c.platform.pending.setStreamContent(id, content) {
 		return fmt.Errorf("chat-api: run %q is not pending", id)

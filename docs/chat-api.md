@@ -3,7 +3,8 @@
 > Version: **v1.2.10** (2026-08-02)
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
-> Disconnect resume: [plans/2026-07-24-chat-api-disconnect-resume-design.md](./plans/2026-07-24-chat-api-disconnect-resume-design.md)
+> Disconnect resume: [plans/2026-07-24-chat-api-disconnect-resume-design.md](./plans/2026-07-24-chat-api-disconnect-resume-design.md)  
+> SSE lifecycle logging: [plans/2026-08-07-chat-api-sse-lifecycle-logging-design.md](./plans/2026-08-07-chat-api-sse-lifecycle-logging-design.md)
 > AskUserQuestion card contract: [plans/2026-07-22-askuserquestion-rich-confirm-design.md](./plans/2026-07-22-askuserquestion-rich-confirm-design.md)
 > Ask User MCP (Claude Code source): [plans/2026-07-23-cc-connect-ask-user-mcp-design.md](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md)
 > Client flow MCP: [plans/2026-07-23-chat-api-client-flow-design.md](./plans/2026-07-23-chat-api-client-flow-design.md)
@@ -50,6 +51,7 @@
 - Client disconnect does not stop the agent; use cancel endpoint to abort
 - Resume: `POST /chat-messages` with `{"run_id":"..."}` replays the last recoverable event while the turn is still running (on disconnect the cache defaults to `ping`; later detached events overwrite it). If the run still has an unanswered `question_request`, resume also emits a non-blocking `client_flow` with `type: waiting_answer` so the App can restore the confirm UI. If the run is missing, not owned by the user, or already finished, resume returns an empty `message_end` (client may query history). Optional `conversation_id` in the resume body is echoed in that empty `message_end`.
 - Optional `question_notify_url` receives async webhook when `question_request` arrives while detached. Body fields: `conversation_id`, `message_id`, `run_id`, `user_id`, `channel`; event type is sent in `X-Chat-API-Event`.
+- Ops logs: SSE main-flow lines use Info `chat-api: sse <event>` (`start` / `disconnect` / `resume` / `resume_miss` / `resume_rejected` / `end`; may include `reason`, `replay_event`, `terminal`, `error`; one line per event). See [SSE lifecycle logging](./plans/2026-08-07-chat-api-sse-lifecycle-logging-design.md).
 
 ## SSE events
 

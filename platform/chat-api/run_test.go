@@ -8,9 +8,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chenhg5/cc-connect/core"
 )
+
+func TestTruncateForLog(t *testing.T) {
+	if got := truncateForLog("短文本", 40); got != "短文本" {
+		t.Fatalf("short = %q", got)
+	}
+	long := strings.Repeat("测", 50)
+	if got := truncateForLog(long, 40); got != strings.Repeat("测", 40) {
+		t.Fatalf("truncated len=%d got=%q", utf8.RuneCountInString(got), got)
+	}
+}
 
 func TestRunStateThinkingAndAnswerDeltas(t *testing.T) {
 	rec := httptest.NewRecorder()

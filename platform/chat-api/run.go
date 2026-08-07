@@ -437,7 +437,7 @@ func (r *runState) flushThinkingDelta() error {
 		if hasAnswer {
 			return nil
 		}
-		payload := map[string]any{"message_id": messageID, "text": curr, "replace": true}
+		payload := replaceDeltaPayload(messageID, curr)
 		if err := sink.Event("thinking_delta", payload); err != nil {
 			return err
 		}
@@ -579,7 +579,7 @@ func (r *runState) flushAnswerDelta() error {
 		if curr == "" || curr == prev {
 			return nil
 		}
-		payload := map[string]any{"message_id": messageID, "text": curr, "replace": true}
+		payload := replaceDeltaPayload(messageID, curr)
 		if err := sink.Event("text_delta", payload); err != nil {
 			return err
 		}
@@ -608,6 +608,7 @@ func (r *runState) complete(result pendingResult) bool {
 	r.once.Do(func() {
 		r.stopInteractionTimer()
 		r.done <- result
+		logSSEEnd(r, result)
 		ok = true
 	})
 	return ok
