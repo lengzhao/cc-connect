@@ -1,5 +1,16 @@
 ﻿# Changelog
 
+## v9.1.19 (2026-08-07)
+
+### Added
+- **chat-api SSE lifecycle logs**: Info-level `chat-api: sse <event>` lines for `start`, `disconnect`, `resume`, `resume_miss`, `resume_rejected`, and `end` so operators can trace SSE connection lifecycles without per-delta noise.
+
+### Changed
+- **chat-api delta observability**: warn when emitting SSE deltas with `replace=true` or when legacy `StreamingCard.Update` markdown path is used.
+
+### Fixed
+- **chat-api initial SSE write failure**: on `message` event write error, log `disconnect` and `detach` the run (consistent with other write-failure paths).
+
 ## v9.1.18 (2026-08-06)
 
 ### Added
