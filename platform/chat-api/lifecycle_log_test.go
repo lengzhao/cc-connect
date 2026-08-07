@@ -100,7 +100,7 @@ func TestLogSSELifecyclePartial(t *testing.T) {
 	}
 }
 
-func TestEarlyFinish_RemovesPendingWithoutDisconnect(t *testing.T) {
+func TestMessageWriteFailure_DetachesWithoutStart(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -111,18 +111,24 @@ func TestEarlyFinish_RemovesPendingWithoutDisconnect(t *testing.T) {
 	if !p.pending.create(run) {
 		t.Fatal("create pending run")
 	}
-	if !p.pending.finish(run.id, pendingResult{err: context.Canceled}) {
-		t.Fatal("finish should succeed once")
+	logSSELifecycle("disconnect", run, "reason", "write_error", "error", "broken pipe")
+	run.detach()
+
+	if p.pending.get(run.id) == nil {
+		t.Fatal("detached run should remain in pending for resume")
 	}
-	if p.pending.get(run.id) != nil {
-		t.Fatal("run should be removed from pending after early finish")
+	run.mu.Lock()
+	detached := run.detached
+	run.mu.Unlock()
+	if !detached {
+		t.Fatal("run should be detached after write failure")
 	}
 	out := buf.String()
-	if strings.Contains(out, "chat-api: sse disconnect") {
-		t.Fatalf("early finish must not log disconnect: %s", out)
+	if strings.Contains(out, "chat-api: sse start") {
+		t.Fatalf("write failure must not log start: %s", out)
 	}
-	if !strings.Contains(out, "chat-api: sse end") || !strings.Contains(out, "terminal=error") {
-		t.Fatalf("expected end log for early finish: %s", out)
+	if !strings.Contains(out, "chat-api: sse disconnect") || !strings.Contains(out, "reason=write_error") {
+		t.Fatalf("expected disconnect log for write failure: %s", out)
 	}
 }
 

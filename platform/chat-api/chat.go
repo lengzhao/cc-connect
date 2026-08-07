@@ -177,7 +177,8 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		"run_id":          runID,
 	}
 	if err := sse.Event("message", msgPayload); err != nil {
-		p.pending.finish(runID, pendingResult{err: err})
+		logSSELifecycle("disconnect", run, "reason", "write_error", "error", err.Error())
+		run.detach()
 		return
 	}
 	logSSELifecycle("start", run)

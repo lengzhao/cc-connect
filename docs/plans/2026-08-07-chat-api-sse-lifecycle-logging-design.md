@@ -39,7 +39,7 @@ chat-api: sse <event>
 
 ## Call sites
 
-- `handleChatMessages`：`start`（`message` 写成功后）；`message` 写失败时不打 `start`/`disconnect`，直接 `finish` → 仅 `end`（`terminal=error`），并从 pending 移除
+- `handleChatMessages`：`start`（`message` 写成功后）；`message` 写失败 → `disconnect`（`reason=write_error`）+ `detach`（不打 `start`）
 - `serveRunSSE`：`disconnect`（`reqCtx.Done` / `flushDelta` 写失败）
 - `handleChatResume`：`resume`（Info，可含 `replay_event`）/ `resume_miss` / `resume_rejected`
 - `runState.complete`：`end` + `terminal`（含 timeout、断线后 turn 结束等）
