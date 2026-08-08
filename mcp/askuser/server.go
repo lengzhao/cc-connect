@@ -314,25 +314,20 @@ func toolDescriptor() map[string]any {
 func clientFlowToolDescriptor() map[string]any {
 	return map[string]any{
 		"name": core.ToolCCConnectClientFlow,
-		"description": "非阻塞地引导 App 打开自有业务流程（如绑定账户、创建任务、去任务中心审批）。" +
-			"不用于普通确认问答，也不等待用户 respond。",
+		"description": "非阻塞地引导 App 打开自有业务流程（如绑定账户、查看任务/模板）。" +
+			"不用于普通确认问答，也不等待用户 respond。" +
+			"create_task / task_generating / task_center_approval / credits_insufficient 等由 chat-api tool-sse-transforms 程序化发送，请勿通过本工具调用。",
 		"inputSchema": map[string]any{
 			"type":     "object",
 			"required": []string{"type", "description"},
 			"properties": map[string]any{
 				"type": map[string]any{
 					"type": "string",
-					"description": "发送事件（可选）。" +
-						"枚举：connect_account（有连接新账户需求时）、create_task（任务保存的时候）、" +
-						"task_generating（触发子Agent生成任务时）、task_center_approval（任务修改/保存后需要去任务中心审批）、" +
-						"credits_insufficient（LLM 额度不足时引导充值）、" +
+					"description": "App 流程类型。" +
+						"枚举：connect_account（有连接新账户需求时）、" +
 						"view_task（查看任务详情）、view_task_template（查看任务模板）。",
 					"enum": []any{
 						EventConnectAccount,
-						EventCreateTask,
-						EventTaskGenerating,
-						EventTaskCenterApproval,
-						EventCreditsInsufficient,
 						EventViewTask,
 						EventViewTaskTemplate,
 					},
@@ -344,7 +339,7 @@ func clientFlowToolDescriptor() map[string]any {
 				"args": map[string]any{
 					"type": "string",
 					"description": "可选流程参数（语义由 type 决定）。" +
-						"create_task / task_generating / task_center_approval / view_task → task_id；" +
+						"view_task → task_id；" +
 						"view_task_template → task_template_id；" +
 						"connect_account → provider（如 feishu、wecom）。",
 				},

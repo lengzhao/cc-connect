@@ -10,8 +10,10 @@ import (
 )
 
 // Known envelope event / client_flow type values for App navigation guidance.
-// Runtime accepts any non-empty string; these constants document common types
-// and populate MCP tool schemas.
+// Runtime accepts any non-empty string; these constants document common types.
+// MCP cc_connect_client_flow schema only exposes connect_account / view_task /
+// view_task_template; create_task / task_generating / task_center_approval /
+// credits_insufficient are intended for chat-api tool-sse-transforms.
 const (
 	EventConnectAccount      = "connect_account"
 	EventCreateTask          = "create_task"

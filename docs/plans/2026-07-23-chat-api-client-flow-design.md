@@ -24,7 +24,7 @@
 | 项 | 决定 |
 |----|------|
 | 触发方式 | 独立 MCP：`cc_connect_client_flow` |
-| `type` 枚举 | 复用 `connect_account` / `create_task` / `task_center_approval` |
+| `type` 枚举 | MCP schema：`connect_account` / `view_task` / `view_task_template`；`create_task` / `task_generating` / `task_center_approval` / `credits_insufficient` 改由 tool-sse-transforms 发送 |
 | 文档修正 | 对外示例 `account_bind` → `connect_account` |
 | 非 chat-api | 已绑定 session 仍正常发出事件；Engine 发现平台未实现 `ClientFlowSender` 后跳过 |
 | 与确认卡关系 | 可并存；各自独立 SSE |
@@ -79,17 +79,18 @@ Claude session 在 Hub `Bind` 时注册现有 `AskUserEmitter`。如果 session 
 
 ```json
 {
-  "type": "connect_account | create_task | task_center_approval",
+  "type": "connect_account | view_task | view_task_template",
   "description": "string (required)",
-  "args": "string (optional; task types → task_id, connect_account → provider)"
+  "args": "string (optional; view_task → task_id, view_task_template → task_template_id, connect_account → provider)"
 }
 ```
 
 校验：
 
-- `type` 必须为三枚举之一（未知 → 参数错误，不清空后静默）
+- MCP schema 枚举引导 Agent 仅使用上述三值；运行时仍透传非空 `type`（兼容自定义）
 - `description` 必填非空
 - 缺少 `X-CC-Session-Key` → 错误
+- `create_task` / `task_generating` / `task_center_approval` / `credits_insufficient` 不在 MCP schema 中，由 chat-api `tool_sse_transforms_file` 在业务 tool 匹配时程序化发出
 
 成功：立即返回 text tool result（如 `client_flow emitted: connect_account`），**不**等待用户。
 

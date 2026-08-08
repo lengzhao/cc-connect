@@ -2690,6 +2690,9 @@ func TestAgentSystemPrompt_MentionsClientFlow(t *testing.T) {
 		"cc_connect_client_flow",
 		"mcp__ccconnect__cc_connect_client_flow",
 		"connect_account",
+		"view_task",
+		"tool-sse-transforms",
+		"task_generating",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("AgentSystemPrompt missing %q", want)

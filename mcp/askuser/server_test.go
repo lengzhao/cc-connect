@@ -262,17 +262,26 @@ func TestClientFlowToolDescriptor(t *testing.T) {
 	props, _ := schema["properties"].(map[string]any)
 	typ, _ := props["type"].(map[string]any)
 	enum, _ := typ["enum"].([]any)
-	if len(enum) != 7 {
-		t.Fatalf("type enum must be exactly 7 values, got %v", enum)
+	if len(enum) != 3 {
+		t.Fatalf("type enum must be exactly 3 values, got %v", enum)
+	}
+	wantEnum := map[string]bool{
+		EventConnectAccount:   true,
+		EventViewTask:         true,
+		EventViewTaskTemplate: true,
 	}
 	for _, v := range enum {
 		s, _ := v.(string)
-		if s == "" {
-			t.Fatal("type enum must not include empty string")
-		}
-		if NormalizeEvent(s) == "" {
+		if !wantEnum[s] {
 			t.Fatalf("unexpected enum value %q", s)
 		}
+		delete(wantEnum, s)
+	}
+	if len(wantEnum) != 0 {
+		t.Fatalf("missing enum values: %v", wantEnum)
+	}
+	if !strings.Contains(fmt.Sprint(desc["description"]), "tool-sse-transforms") {
+		t.Fatalf("description should mention transforms for removed types: %v", desc["description"])
 	}
 	if _, ok := props["description"].(map[string]any); !ok {
 		t.Fatal("description property required")
@@ -355,12 +364,13 @@ func TestServer_ToolsCallClientFlow(t *testing.T) {
 		"params": map[string]any{
 			"name": core.MCPQualifiedClientFlowTool,
 			"arguments": map[string]any{
-				"type":        "create_task",
-				"description": "去创建",
+				"type":        "view_task",
+				"description": "查看任务",
+				"args":        "task_789",
 			},
 		},
 	})
-	if !bytes.Contains(callQ, []byte("emitted")) || !bytes.Contains(callQ, []byte("create_task")) {
+	if !bytes.Contains(callQ, []byte("emitted")) || !bytes.Contains(callQ, []byte("view_task")) {
 		t.Fatalf("qualified tools/call=%s", callQ)
 	}
 }

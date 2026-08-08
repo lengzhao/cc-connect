@@ -15,7 +15,7 @@
 - 会话历史（游标分页）
 - 发送消息：**SSE 流式**（`message` → `thinking_delta?` → `tool_call?` / `tool_result?` → `text_delta` → `message_end`）
 - 用户确认窗口：权限 / AskUserQuestion（单确认可扩展）；公共 respond 字段、`ping` 保活、单槽 supersede
-- 极简 `client_flow`：通过独立 MCP 非阻塞引导 App 打开自有业务流程
+- 极简 `client_flow`：MCP（账户/查看任务）或 tool-sse-transforms（任务类/额度等）非阻塞引导 App 打开自有业务流程
 - 隐式创建会话（首条 `chat-messages` 不带 `conversation_id`），或显式 `POST /conversations` 创建空会话
 - 会话忙时排队（默认 `busy_policy=queue`，复用 Engine 队列）
 
@@ -491,7 +491,13 @@ POST /conversations/messages/respond
 
 #### `client_flow`（独立、非阻塞）
 
-`client_flow` 由独立 MCP 工具 `cc_connect_client_flow`（Claude Code 中为 `mcp__ccconnect__cc_connect_client_flow`）触发，不是 `cc_connect_ask_user` 的确认结果。它只引导 App 打开自有流程，不创建未决 interaction，不占用单槽，不等待用户，也没有 respond。它可以与同一 run 的 `question_request` 并存。
+`client_flow` 可由以下来源发出，不是 `cc_connect_ask_user` 的确认结果。它只引导 App 打开自有流程，不创建未决 interaction，不占用单槽，不等待用户，也没有 respond。它可以与同一 run 的 `question_request` 并存。
+
+| 来源 | 说明 |
+|------|------|
+| MCP `cc_connect_client_flow` | Agent 显式调用；schema 枚举仅 `connect_account` / `view_task` / `view_task_template` |
+| `tool_sse_transforms_file` | 业务 tool 命中转换规则时程序化发送（如 `CreateTask` → `task_generating`）；用于 `create_task` / `task_generating` / `task_center_approval` / `credits_insufficient` 等 |
+| chat-api 内部 | 断链重连且仍有未回复问题时发送 `waiting_answer` |
 
 ```text
 event: client_flow
@@ -508,22 +514,22 @@ data: {
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `flow_id` | string | 本次流程引导 ID，仅用于客户端关联 |
-| `type` | string | 非空字符串，原样透传给 App（常见值：`connect_account` / `create_task` / `task_generating` / `task_center_approval` / `credits_insufficient` / `view_task` / `view_task_template` / `waiting_answer`） |
+| `type` | string | 非空字符串，原样透传给 App（常见值见下表） |
 | `description` | string | 必填非空的用户引导文案 |
 | `args` | string | 可选；语义由 `type` 决定（见下表） |
 | `run_id` | string | 所属轮次 ID |
 | `message_id` | string | 所属消息 ID |
 
-| `type` | `args` 含义 | 示例 |
-|--------|-------------|------|
-| `create_task` | `task_id` | `"task_123"` |
-| `task_generating` | `task_id` | `"task_123"` |
-| `task_center_approval` | `task_id` | `"task_456"` |
-| `view_task` | `task_id` | `"task_789"` |
-| `view_task_template` | `task_template_id` | `"tpl_001"` |
-| `connect_account` | `provider`（账号厂商） | `"feishu"` |
-| `credits_insufficient` | 通常省略 | — |
-| `waiting_answer` | 通常省略 | 断链重连且仍有未回复问题时由服务端主动发送 |
+| `type` | `args` 含义 | 典型来源 | 示例 |
+|--------|-------------|----------|------|
+| `connect_account` | `provider`（账号厂商） | MCP | `"feishu"` |
+| `view_task` | `task_id` | MCP | `"task_789"` |
+| `view_task_template` | `task_template_id` | MCP | `"tpl_001"` |
+| `create_task` | `task_id` | tool-sse-transforms | `"task_123"` |
+| `task_generating` | `task_id` | tool-sse-transforms | `"task_123"` |
+| `task_center_approval` | `task_id` | tool-sse-transforms | `"task_456"` |
+| `credits_insufficient` | 通常省略 | tool-sse-transforms | — |
+| `waiting_answer` | 通常省略 | chat-api 断链重连 | — |
 
 | 关键语义 | 行为 |
 |----------|------|
