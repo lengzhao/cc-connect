@@ -1,7 +1,7 @@
 {
   "default": {
     "emit": "thinking",
-    "suppress": true,
+    "suppress": false,
     "text": {
       "en": "Running {tool}...",
       "zh": "正在执行 {tool}...",
@@ -12,9 +12,38 @@
   },
   "transforms": [
     {
+      "tool": "Agent",
+      "emit": "client_flow",
+      "flow_type": "agent_call",
+      "args_from": "$.message_id",
+      "suppress": false,
+      "text": {
+        "en": "SubAgent: Running...",
+        "zh": "子Agent: 正在执行...",
+        "zh-TW": "子Agent: 正在執行...",
+        "ja": "子Agent: 実行中...",
+        "es": "SubAgent: Ejecutando..."
+      }
+    },
+    {
+      "tool": "CreateTask",
+      "emit": "client_flow",
+      "when": "tool_result",
+      "flow_type": "task_generating",
+      "args_from": "$.task_id",
+      "suppress": false,
+      "text": {
+        "en": "Generating task...",
+        "zh": "正在生成任务...",
+        "zh-TW": "正在生成任務...",
+        "ja": "タスクを生成中...",
+        "es": "Generando tarea..."
+      }
+    },
+    {
       "tool": "Bash",
       "emit": "thinking",
-      "suppress": true,
+      "suppress": false,
       "text": {
         "en": "Running command...",
         "zh": "正在执行命令...",
@@ -26,7 +55,7 @@
     {
       "tool": "mcp__ccconnect__cc_connect_ask_user",
       "emit": "thinking",
-      "suppress": true,
+      "suppress": false,
       "text": {
         "en": "Please choose and confirm:",
         "zh": "需要你选择并确认:",
@@ -38,7 +67,7 @@
     {
       "tool": "cc_connect_ask_user",
       "emit": "thinking",
-      "suppress": true,
+      "suppress": false,
       "text": {
         "en": "Please choose and confirm:",
         "zh": "需要你选择并确认:",
@@ -50,26 +79,13 @@
     {
       "tool": "AskUserQuestion",
       "emit": "thinking",
-      "suppress": true,
+      "suppress": false,
       "text": {
         "en": "Please choose and confirm:",
         "zh": "需要你选择并确认:",
         "zh-TW": "需要你選擇並確認:",
         "ja": "選択して確認してください:",
         "es": "Elige y confirma:"
-      }
-    },
-    {
-      "tool": "CreateTask",
-      "emit": "client_flow",
-      "flow_type": "task_generating",
-      "suppress": true,
-      "text": {
-        "en": "Generating task...",
-        "zh": "正在生成任务...",
-        "zh-TW": "正在生成任務...",
-        "ja": "タスクを生成中...",
-        "es": "Generando tarea..."
       }
     }
   ]

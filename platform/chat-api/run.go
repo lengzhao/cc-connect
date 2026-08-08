@@ -86,6 +86,7 @@ type runState struct {
 	toolCalls             []streamToolCall
 	sentToolCallIDs       map[string]bool
 	suppressedToolCallIDs map[string]bool
+	pendingTransforms     map[string]pendingToolTransform
 	pendingToolResults    []streamToolResult
 	toolResultMatchIndex  int
 	language              string
@@ -161,10 +162,19 @@ func newRunState(id, user, channelKey, sessionKey, conversationID, messageID, la
 		sink:                  &sseEventSink{w: sse},
 		sentToolCallIDs:       make(map[string]bool),
 		suppressedToolCallIDs: make(map[string]bool),
+		pendingTransforms:     make(map[string]pendingToolTransform),
 		notify:                make(chan struct{}, 1),
 		done:                  make(chan pendingResult, 1),
 	}
 	return run
+}
+
+// pendingToolTransform is a transform deferred until tool_result (when=tool_result).
+type pendingToolTransform struct {
+	Emit        string
+	FlowType    string
+	Description string
+	ArgsFrom    string
 }
 
 func (r *runState) setStreamContent(thinking, answer string) {
@@ -237,31 +247,38 @@ func (r *runState) upsertStructuredTool(id, name, input string) {
 	r.structuredPrimary = true
 	r.mergeToolCallsLocked([]streamToolCall{{ID: id, Name: name, Input: input}})
 	r.mu.Unlock()
-	r.applyToolCallTransformAtIngest(id, name)
+	r.applyToolCallTransformAtIngest(id, name, input)
 	r.signal()
 }
 
-func (r *runState) applyToolCallTransformAtIngest(id, toolName string) {
+func (r *runState) applyToolCallTransformAtIngest(id, toolName, input string) {
 	reg := r.platform.toolSSETransforms
 	rule, ok := reg.lookup(toolName)
 	if !ok {
 		return
 	}
 	text := formatTransformText(rule.Text, r.language, toolName)
-	switch rule.Emit {
-	case toolSSEEmitThinking:
+	if rule.When == toolSSEWhenResult {
 		if text != "" {
-			r.appendThinkingLine(text)
+			r.mu.Lock()
+			r.pendingTransforms[id] = pendingToolTransform{
+				Emit:        rule.Emit,
+				FlowType:    rule.FlowType,
+				Description: text,
+				ArgsFrom:    rule.ArgsFrom,
+			}
+			r.mu.Unlock()
 		}
-	case toolSSEEmitClientFlow:
-		if text != "" {
-			r.enqueueEvent("client_flow", map[string]any{
-				"flow_id":     newFlowID(),
-				"type":        rule.FlowType,
-				"description": text,
-				"run_id":      r.id,
-				"message_id":  r.messageID,
-			})
+	} else {
+		switch rule.Emit {
+		case toolSSEEmitThinking:
+			if text != "" {
+				r.appendThinkingLine(text)
+			}
+		case toolSSEEmitClientFlow:
+			if text != "" {
+				r.emitClientFlowTransform(rule.FlowType, text, input, rule.ArgsFrom)
+			}
 		}
 	}
 	if rule.Suppress {
@@ -389,6 +406,10 @@ func (r *runState) flushDelta() error {
 		return err
 	}
 	if err := r.flushToolResultEvents(); err != nil {
+		return err
+	}
+	// when=tool_result may append thinking during result flush; emit it now.
+	if err := r.flushThinkingDelta(); err != nil {
 		return err
 	}
 	if err := r.flushAnswerDelta(); err != nil {
@@ -523,8 +544,16 @@ func (r *runState) flushToolResultEvents() error {
 		r.mu.Lock()
 		toolCallID := r.nextToolCallIDLocked(res.Name)
 		r.toolResultMatchIndex++
+		pendingXform, hasPending := r.pendingTransforms[toolCallID]
+		if hasPending {
+			delete(r.pendingTransforms, toolCallID)
+		}
 		suppressed := r.suppressedToolCallIDs[toolCallID]
 		r.mu.Unlock()
+
+		if hasPending {
+			r.applyDeferredToolTransform(pendingXform, res.Output)
+		}
 		if suppressed {
 			continue
 		}
@@ -554,6 +583,36 @@ func (r *runState) flushToolResultEvents() error {
 		}
 	}
 	return nil
+}
+
+func (r *runState) applyDeferredToolTransform(xform pendingToolTransform, output string) {
+	switch xform.Emit {
+	case toolSSEEmitThinking:
+		if xform.Description != "" {
+			r.appendThinkingLine(xform.Description)
+		}
+	case toolSSEEmitClientFlow:
+		r.emitClientFlowTransform(xform.FlowType, xform.Description, output, xform.ArgsFrom)
+	}
+}
+
+func (r *runState) emitClientFlowTransform(flowType, description, jsonSource, argsFrom string) {
+	if description == "" || flowType == "" {
+		return
+	}
+	payload := map[string]any{
+		"flow_id":     newFlowID(),
+		"type":        flowType,
+		"description": description,
+		"run_id":      r.id,
+		"message_id":  r.messageID,
+	}
+	if argsFrom != "" {
+		if args, ok := extractJSONPathArg(jsonSource, argsFrom); ok && args != "" {
+			payload["args"] = args
+		}
+	}
+	r.enqueueEvent("client_flow", payload)
 }
 
 func (r *runState) nextToolCallIDLocked(_ string) string {

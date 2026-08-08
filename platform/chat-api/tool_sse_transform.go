@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/chenhg5/cc-connect/core"
@@ -13,15 +14,21 @@ import (
 const (
 	toolSSEEmitThinking   = "thinking"
 	toolSSEEmitClientFlow = "client_flow"
+
+	toolSSEWhenCall   = "tool_call"
+	toolSSEWhenResult = "tool_result"
 )
 
 type toolSSETransformRule struct {
-	Tool      string            `json:"tool"`
-	Emit      string            `json:"emit"`
-	Suppress  bool              `json:"suppress"`
-	FlowType  string            `json:"flow_type"`
-	Text      map[string]string `json:"text"`
-	toolLower string
+	Tool           string            `json:"tool"`
+	Emit           string            `json:"emit"`
+	When           string            `json:"when"`
+	Suppress       bool              `json:"suppress"`
+	FlowType       string            `json:"flow_type"`
+	ArgsFrom       string            `json:"args_from"`
+	ArgsFromResult string            `json:"args_from_result"` // alias of args_from
+	Text           map[string]string `json:"text"`
+	toolLower      string
 }
 
 type toolSSETransformFile struct {
@@ -95,12 +102,41 @@ func normalizeToolSSETransformRule(rule toolSSETransformRule, index int) (toolSS
 
 func normalizeToolSSETransformRuleBody(rule toolSSETransformRule) (toolSSETransformRule, error) {
 	rule.Emit = strings.ToLower(strings.TrimSpace(rule.Emit))
+	rule.When = strings.ToLower(strings.TrimSpace(rule.When))
+	if rule.When == "" {
+		rule.When = toolSSEWhenCall
+	}
+	switch rule.When {
+	case toolSSEWhenCall, toolSSEWhenResult:
+	default:
+		return toolSSETransformRule{}, fmt.Errorf("when must be tool_call or tool_result, got %q", rule.When)
+	}
+
+	argsFrom := strings.TrimSpace(rule.ArgsFrom)
+	alias := strings.TrimSpace(rule.ArgsFromResult)
+	if argsFrom != "" && alias != "" && argsFrom != alias {
+		return toolSSETransformRule{}, fmt.Errorf("args_from and args_from_result conflict")
+	}
+	if argsFrom == "" {
+		argsFrom = alias
+	}
+	rule.ArgsFrom = argsFrom
+	rule.ArgsFromResult = ""
+
 	switch rule.Emit {
 	case toolSSEEmitThinking:
+		if rule.ArgsFrom != "" {
+			return toolSSETransformRule{}, fmt.Errorf("args_from is only valid for client_flow emit")
+		}
 	case toolSSEEmitClientFlow:
 		rule.FlowType = core.NormalizeAskUserEvent(rule.FlowType)
 		if rule.FlowType == "" {
 			return toolSSETransformRule{}, fmt.Errorf("flow_type is required for client_flow emit")
+		}
+		if rule.ArgsFrom != "" {
+			if _, err := normalizeArgsFromPath(rule.ArgsFrom); err != nil {
+				return toolSSETransformRule{}, err
+			}
 		}
 	default:
 		return toolSSETransformRule{}, fmt.Errorf("emit must be thinking or client_flow, got %q", rule.Emit)
@@ -122,6 +158,76 @@ func normalizeToolSSETransformRuleBody(rule toolSSETransformRule) (toolSSETransf
 	}
 	rule.Text = clean
 	return rule, nil
+}
+
+// normalizeArgsFromPath accepts object-field paths like $.task_id,
+// $.data.task_id, or data.task_id. Array indexes / filters are not supported.
+func normalizeArgsFromPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("args_from path is empty")
+	}
+	segments := splitArgsFromPath(path)
+	if len(segments) == 0 {
+		return "", fmt.Errorf("args_from path is empty")
+	}
+	for _, seg := range segments {
+		if seg == "" || strings.ContainsAny(seg, "[]*?()") {
+			return "", fmt.Errorf("args_from path %q is invalid", path)
+		}
+	}
+	return strings.Join(segments, "."), nil
+}
+
+func splitArgsFromPath(path string) []string {
+	path = strings.TrimSpace(path)
+	path = strings.TrimPrefix(path, "$.")
+	path = strings.TrimPrefix(path, "$")
+	path = strings.TrimPrefix(path, ".")
+	if path == "" {
+		return nil
+	}
+	return strings.Split(path, ".")
+}
+
+// extractJSONPathArg walks a simple object-field path in JSON text.
+// Returns (value, true) for string/number/bool leaves; otherwise ("", false).
+func extractJSONPathArg(raw, path string) (string, bool) {
+	segments := splitArgsFromPath(path)
+	if len(segments) == 0 {
+		return "", false
+	}
+	var root any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &root); err != nil {
+		return "", false
+	}
+	cur := root
+	for _, seg := range segments {
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		next, ok := obj[seg]
+		if !ok {
+			return "", false
+		}
+		cur = next
+	}
+	switch v := cur.(type) {
+	case string:
+		return v, true
+	case float64:
+		if v == float64(int64(v)) {
+			return strconv.FormatInt(int64(v), 10), true
+		}
+		return strconv.FormatFloat(v, 'f', -1, 64), true
+	case bool:
+		return strconv.FormatBool(v), true
+	case json.Number:
+		return v.String(), true
+	default:
+		return "", false
+	}
 }
 
 func normalizeTransformLocale(raw string) string {
