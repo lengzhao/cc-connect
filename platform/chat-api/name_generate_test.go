@@ -24,6 +24,7 @@ func TestGetConversationDetailRequiresOwner(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+s.ID, nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "other")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -44,6 +45,7 @@ func TestGetConversationDetailReturnsView(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+s.ID, nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -82,6 +84,7 @@ func TestGenerateConversationNameAsync(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/conversations/"+s.ID+"/name/generate", strings.NewReader(`{"force":false}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -136,6 +139,7 @@ func TestGenerateConversationNameUsesDedicatedModel(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/conversations/"+s.ID+"/name/generate", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -179,6 +183,7 @@ func TestGenerateConversationNameFallsBackToHeuristicWhenProviderFails(t *testin
 	req := httptest.NewRequest(http.MethodPost, "/v1/conversations/"+s.ID+"/name/generate", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -231,6 +236,7 @@ func TestGenerateConversationNameUsesClaudeMessagesAPI(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/conversations/"+s.ID+"/name/generate", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -261,6 +267,7 @@ func TestGenerateConversationNameSkipsWhenNamedUnlessForce(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/conversations/"+s.ID+"/name/generate", strings.NewReader(`{"force":false}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

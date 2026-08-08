@@ -12,21 +12,21 @@ import (
 
 const previewMaxRunes = 200
 
-type pairedMessage struct {
+type historyMessage struct {
 	ID        string
-	Query     string
-	Answer    string
+	Role      string
+	Content   string
 	UserID    string
 	UserName  string
 	CreatedAt int64
-	TurnIndex int
+	Index     int
 }
 
-func messageID(conversationID string, turnIndex int) string {
-	return fmt.Sprintf("%s:%d", conversationID, turnIndex)
+func messageID(conversationID string, entryIndex int) string {
+	return fmt.Sprintf("%s:%d", conversationID, entryIndex)
 }
 
-func parseMessageCursor(cursor string) (conversationID string, turnIndex int, err error) {
+func parseMessageCursor(cursor string) (conversationID string, entryIndex int, err error) {
 	if cursor == "" {
 		return "", -1, nil
 	}
@@ -35,44 +35,68 @@ func parseMessageCursor(cursor string) (conversationID string, turnIndex int, er
 		return "", 0, fmt.Errorf("invalid cursor")
 	}
 	conversationID = cursor[:idx]
-	turnIndex, err = strconv.Atoi(cursor[idx+1:])
-	if err != nil || turnIndex < 0 {
+	entryIndex, err = strconv.Atoi(cursor[idx+1:])
+	if err != nil || entryIndex < 0 {
 		return "", 0, fmt.Errorf("invalid cursor")
 	}
-	return conversationID, turnIndex, nil
+	return conversationID, entryIndex, nil
 }
 
-func pairHistory(conversationID string, entries []core.HistoryEntry) []pairedMessage {
-	var out []pairedMessage
-	turn := 0
+// historyMessages maps session history entries 1:1 for GET /messages.
+func historyMessages(conversationID string, entries []core.HistoryEntry) []historyMessage {
+	out := make([]historyMessage, len(entries))
+	for i, e := range entries {
+		out[i] = historyMessage{
+			ID:        messageID(conversationID, i),
+			Role:      e.Role,
+			Content:   e.Content,
+			UserID:    e.UserID,
+			UserName:  e.UserName,
+			CreatedAt: e.Timestamp.Unix(),
+			Index:     i,
+		}
+	}
+	return out
+}
+
+func historyMessageToAPI(m historyMessage) map[string]any {
+	msg := map[string]any{
+		"id":         m.ID,
+		"role":       m.Role,
+		"content":    m.Content,
+		"created_at": m.CreatedAt,
+	}
+	if m.UserID != "" {
+		msg["user_id"] = m.UserID
+	}
+	if m.UserName != "" {
+		msg["user_name"] = m.UserName
+	}
+	// Legacy query/answer fields for clients that still expect turn-shaped rows.
+	switch m.Role {
+	case "user":
+		msg["query"] = m.Content
+	case "assistant":
+		msg["answer"] = m.Content
+	}
+	return msg
+}
+
+func countCompletedTurns(entries []core.HistoryEntry) int {
+	n := 0
 	for i := 0; i < len(entries); {
 		if entries[i].Role != "user" {
 			i++
 			continue
 		}
-		user := entries[i]
 		i++
 		if i >= len(entries) || entries[i].Role != "assistant" {
-			continue
+			break
 		}
-		assistant := entries[i]
+		n++
 		i++
-		out = append(out, pairedMessage{
-			ID:        messageID(conversationID, turn),
-			Query:     user.Content,
-			Answer:    assistant.Content,
-			UserID:    user.UserID,
-			UserName:  user.UserName,
-			CreatedAt: user.Timestamp.Unix(),
-			TurnIndex: turn,
-		})
-		turn++
 	}
-	return out
-}
-
-func countCompletedTurns(entries []core.HistoryEntry) int {
-	return len(pairHistory("", entries))
+	return n
 }
 
 func truncateRunes(s string, max int) string {
@@ -168,22 +192,22 @@ func paginateConversations(sessions []*core.Session, cursor string, limit int) (
 	return out, hasMore, nextCursor, nil
 }
 
-func paginateMessages(pairs []pairedMessage, cursor string, limit int) ([]pairedMessage, bool, string, error) {
+func paginateMessages(items []historyMessage, cursor string, limit int) ([]historyMessage, bool, string, error) {
 	limit = clampLimit(limit)
 	// Newest first.
-	for i, j := 0, len(pairs)-1; i < j; i, j = i+1, j-1 {
-		pairs[i], pairs[j] = pairs[j], pairs[i]
+	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+		items[i], items[j] = items[j], items[i]
 	}
 
 	start := 0
 	if cursor != "" {
-		_, turnIndex, err := parseMessageCursor(cursor)
+		_, entryIndex, err := parseMessageCursor(cursor)
 		if err != nil {
 			return nil, false, "", err
 		}
 		found := false
-		for i, m := range pairs {
-			if m.TurnIndex == turnIndex {
+		for i, m := range items {
+			if m.Index == entryIndex {
 				start = i + 1
 				found = true
 				break
@@ -195,11 +219,11 @@ func paginateMessages(pairs []pairedMessage, cursor string, limit int) ([]paired
 	}
 
 	end := start + limit
-	hasMore := end < len(pairs)
-	if end > len(pairs) {
-		end = len(pairs)
+	hasMore := end < len(items)
+	if end > len(items) {
+		end = len(items)
 	}
-	page := pairs[start:end]
+	page := items[start:end]
 	var nextCursor string
 	if hasMore && len(page) > 0 {
 		nextCursor = page[len(page)-1].ID

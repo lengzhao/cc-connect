@@ -101,6 +101,7 @@ func TestE2E_NewConversationsProcessInParallel(t *testing.T) {
 			strings.NewReader(`{"query":"first long task"}`))
 		req.Header.Set("Authorization", "Bearer e2e-token")
 		req.Header.Set("X-Chat-API-User", "user_parallel")
+		req.Header.Set("X-Chat-API-Channel", testChannel)
 		req.Header.Set("Accept", "text/event-stream")
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := http.DefaultClient.Do(req)
@@ -124,6 +125,7 @@ func TestE2E_NewConversationsProcessInParallel(t *testing.T) {
 		strings.NewReader(`{"query":"second independent"}`))
 	req2.Header.Set("Authorization", "Bearer e2e-token")
 	req2.Header.Set("X-Chat-API-User", "user_parallel")
+	req2.Header.Set("X-Chat-API-Channel", testChannel)
 	req2.Header.Set("Accept", "text/event-stream")
 	req2.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: 3 * time.Second}

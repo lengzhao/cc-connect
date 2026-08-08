@@ -32,6 +32,16 @@ func bindTestSessions(t *testing.T, p *Platform) *core.SessionManager {
 	return sm
 }
 
+const testChannel = "test-channel"
+
+func setChatWriteHeaders(req *http.Request, token, user string) {
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Chat-API-User", user)
+	req.Header.Set("X-Chat-API-Channel", testChannel)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+}
+
 func TestNewDefaults(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{})
 	if p.listenAddr != ":8030" {
@@ -60,40 +70,47 @@ func TestNewDefaults(t *testing.T) {
 	}
 }
 
-func TestPairHistoryAndMessageID(t *testing.T) {
+func TestHistoryMessagesAndMessageID(t *testing.T) {
 	entries := []core.HistoryEntry{
 		{Role: "user", Content: "q1", Timestamp: time.Unix(100, 0)},
 		{Role: "assistant", Content: "a1", Timestamp: time.Unix(101, 0)},
 		{Role: "user", Content: "q2", Timestamp: time.Unix(200, 0)},
 	}
-	pairs := pairHistory("s1", entries)
-	if len(pairs) != 1 {
-		t.Fatalf("pairs len = %d, want 1 (incomplete turn excluded)", len(pairs))
+	msgs := historyMessages("s1", entries)
+	if len(msgs) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(msgs))
 	}
-	if pairs[0].ID != "s1:0" {
-		t.Fatalf("id = %q, want s1:0", pairs[0].ID)
+	if msgs[0].ID != "s1:0" || msgs[0].Role != "user" || msgs[0].Content != "q1" {
+		t.Fatalf("first = %+v", msgs[0])
+	}
+	if msgs[2].ID != "s1:2" || msgs[2].Content != "q2" {
+		t.Fatalf("third = %+v", msgs[2])
 	}
 	if countCompletedTurns(entries) != 1 {
 		t.Fatalf("completed turns = %d, want 1", countCompletedTurns(entries))
 	}
 }
 
-func TestPairHistoryWithUserIdentity(t *testing.T) {
+func TestHistoryMessagesWithUserIdentity(t *testing.T) {
 	entries := []core.HistoryEntry{
 		{Role: "user", Content: "q1", UserID: "uid_a", UserName: "Alice", Timestamp: time.Unix(100, 0)},
 		{Role: "assistant", Content: "a1", Timestamp: time.Unix(101, 0)},
 		{Role: "user", Content: "q2", UserID: "uid_b", Timestamp: time.Unix(200, 0)},
 		{Role: "assistant", Content: "a2", Timestamp: time.Unix(201, 0)},
 	}
-	pairs := pairHistory("s1", entries)
-	if len(pairs) != 2 {
-		t.Fatalf("pairs len = %d, want 2", len(pairs))
+	msgs := historyMessages("s1", entries)
+	if len(msgs) != 4 {
+		t.Fatalf("messages len = %d, want 4", len(msgs))
 	}
-	if pairs[0].UserID != "uid_a" || pairs[0].UserName != "Alice" {
-		t.Fatalf("first pair user = %+v", pairs[0])
+	if msgs[0].UserID != "uid_a" || msgs[0].UserName != "Alice" {
+		t.Fatalf("first user = %+v", msgs[0])
 	}
-	if pairs[1].UserID != "uid_b" || pairs[1].UserName != "" {
-		t.Fatalf("second pair user = %+v", pairs[1])
+	if msgs[2].UserID != "uid_b" || msgs[2].UserName != "" {
+		t.Fatalf("third user = %+v", msgs[2])
+	}
+	api := historyMessageToAPI(msgs[0])
+	if api["query"] != "q1" || api["role"] != "user" {
+		t.Fatalf("api = %+v", api)
 	}
 }
 
@@ -123,16 +140,27 @@ func TestMessagesHTTPReturnsUserIdentity(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(resp.Data.Messages) != 2 {
+	if len(resp.Data.Messages) != 4 {
 		t.Fatalf("messages = %+v", resp.Data.Messages)
 	}
 	latest := resp.Data.Messages[0]
-	if latest["user_id"] != "uid_b" || latest["user_name"] != "Bob" {
-		t.Fatalf("latest message user fields = %+v", latest)
+	if latest["role"] != "assistant" || latest["content"] != "sure" {
+		t.Fatalf("latest message = %+v", latest)
 	}
-	older := resp.Data.Messages[1]
-	if older["user_id"] != "uid_a" || older["user_name"] != "Alice" {
-		t.Fatalf("older message user fields = %+v", older)
+	if latest["user_id"] != nil || latest["user_name"] != nil {
+		t.Fatalf("assistant should not carry user fields = %+v", latest)
+	}
+	third := resp.Data.Messages[2]
+	if third["role"] != "assistant" || third["content"] != "hi" {
+		t.Fatalf("third message = %+v", third)
+	}
+	second := resp.Data.Messages[1]
+	if second["user_id"] != "uid_b" || second["user_name"] != "Bob" {
+		t.Fatalf("second message user fields = %+v", second)
+	}
+	oldest := resp.Data.Messages[3]
+	if oldest["user_id"] != "uid_a" || oldest["user_name"] != "Alice" {
+		t.Fatalf("oldest message user fields = %+v", oldest)
 	}
 }
 
@@ -216,6 +244,7 @@ func TestChatMessagesPassesUserNameToHandler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("X-Chat-API-User-Name", "Alice")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
@@ -248,6 +277,7 @@ func TestSharedChannelGuestCanPostAndRead(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_b")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("X-Chat-API-User-Name", "Bob")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
@@ -256,7 +286,7 @@ func TestSharedChannelGuestCanPostAndRead(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("guest post status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	wantKey := engineSessionKey(defaultWorkspaceChannelID, ownerSession.ID)
+	wantKey := engineSessionKey(testChannel, ownerSession.ID)
 	if guestSessionKey != wantKey {
 		t.Fatalf("guest session key = %q, want %q", guestSessionKey, wantKey)
 	}
@@ -294,6 +324,7 @@ func TestGuestCannotPatchOwnedConversation(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPatch, "/v1/conversations/"+s.ID, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_b")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
@@ -327,20 +358,20 @@ func TestPaginateConversations(t *testing.T) {
 }
 
 func TestPaginateMessages(t *testing.T) {
-	pairs := []pairedMessage{
-		{ID: "s1:0", TurnIndex: 0},
-		{ID: "s1:1", TurnIndex: 1},
-		{ID: "s1:2", TurnIndex: 2},
+	items := []historyMessage{
+		{ID: "s1:0", Index: 0},
+		{ID: "s1:1", Index: 1},
+		{ID: "s1:2", Index: 2},
 	}
-	page, hasMore, next, err := paginateMessages(pairs, "", 2)
+	page, hasMore, next, err := paginateMessages(items, "", 2)
 	if err != nil {
 		t.Fatalf("paginate error = %v", err)
 	}
 	if len(page) != 2 || !hasMore || next != "s1:1" {
 		t.Fatalf("page = %+v hasMore=%v next=%q", page, hasMore, next)
 	}
-	if page[0].TurnIndex != 2 {
-		t.Fatalf("newest first: got turn %d", page[0].TurnIndex)
+	if page[0].Index != 2 {
+		t.Fatalf("newest first: got index %d", page[0].Index)
 	}
 }
 
@@ -352,6 +383,7 @@ func TestListConversationsHTTP(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/conversations?limit=10", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
 
@@ -396,6 +428,7 @@ func TestChatMessagesSSEStreaming(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -427,6 +460,7 @@ func TestChatMessagesImplicitCreate(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_new")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -436,7 +470,7 @@ func TestChatMessagesImplicitCreate(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %d, want 1", len(sessions))
 	}
-	wantKey := engineSessionKey(defaultWorkspaceChannelID, sessions[0].ID)
+	wantKey := engineSessionKey(testChannel, sessions[0].ID)
 	if gotKey != wantKey {
 		t.Fatalf("session key = %q, want %q", gotKey, wantKey)
 	}
@@ -477,6 +511,7 @@ func TestChatMessagesHistoryReadableByConversationID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -507,11 +542,23 @@ func TestChatMessagesHistoryReadableByConversationID(t *testing.T) {
 	if err := json.Unmarshal(msgRec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(resp.Data.Messages) != 1 {
-		t.Fatalf("messages = %+v, want 1 paired turn", resp.Data.Messages)
+	if len(resp.Data.Messages) != 2 {
+		t.Fatalf("messages = %+v, want 2 history entries", resp.Data.Messages)
 	}
-	if resp.Data.Messages[0]["query"] != "ping" || resp.Data.Messages[0]["answer"] != "hello back" {
-		t.Fatalf("message pair = %+v", resp.Data.Messages[0])
+	var userMsg, assistantMsg map[string]any
+	for _, m := range resp.Data.Messages {
+		switch m["role"] {
+		case "user":
+			userMsg = m
+		case "assistant":
+			assistantMsg = m
+		}
+	}
+	if userMsg == nil || userMsg["query"] != "ping" {
+		t.Fatalf("user message = %+v", userMsg)
+	}
+	if assistantMsg == nil || assistantMsg["answer"] != "hello back" {
+		t.Fatalf("assistant message = %+v", assistantMsg)
 	}
 }
 
@@ -530,6 +577,7 @@ func TestChatMessagesQueuedReply(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -553,6 +601,7 @@ func TestChatMessagesRejectBusy(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -589,6 +638,7 @@ func TestPatchConversation(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPatch, "/v1/conversations/"+s.ID, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
@@ -623,6 +673,7 @@ func TestCancelRunEndpoint(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
@@ -652,6 +703,7 @@ func TestCancelRunEndpoint(t *testing.T) {
 	cancelReq := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/cancel", nil)
 	cancelReq.Header.Set("Authorization", "Bearer secret")
 	cancelReq.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	cancelRec := httptest.NewRecorder()
 	p.routes().ServeHTTP(cancelRec, cancelReq)
 	if cancelRec.Code != http.StatusOK {
@@ -680,6 +732,7 @@ func TestDisconnectDoesNotRemoveRun(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	ctx, cancel := context.WithCancel(req.Context())

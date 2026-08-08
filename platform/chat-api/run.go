@@ -14,6 +14,7 @@ var (
 	errInteractionTimedOut  = errors.New("interaction timed out")
 	errInteractionResponded = errors.New("interaction already responded")
 	errInteractionExpired   = errors.New("interaction expired")
+	errRunAlreadyAttached   = errors.New("run already attached")
 )
 
 type pendingResult struct {
@@ -66,8 +67,10 @@ type runState struct {
 	messageID       string
 	created         time.Time
 	requestDeadline time.Time
+	platform        *Platform
 
 	mu                   sync.Mutex
+	flushMu              sync.Mutex // serializes attach/detach/flushDelta
 	latestThinking       string
 	sentThinking         string
 	answerText           string
@@ -79,11 +82,13 @@ type runState struct {
 	finalized            bool
 	streamingCardCreated bool
 	structuredPrimary    bool // true after first TurnStreamEvent; skip markdown re-parse
-	sse                  *sseWriter
+	sink                 runEventSink
 	detached             bool
+	attaching            bool
 	pendingEvents        []pendingSSEEvent
 	interaction          *interactionState
 	interactionTimer     *time.Timer
+	lastRecoverableEvent *recoverableEvent
 
 	notify chan struct{}
 	done   chan pendingResult
@@ -94,27 +99,21 @@ type pendingStore struct {
 	mu   sync.Mutex
 	runs map[string]*runState
 	max  int
-	ttl  time.Duration
 }
 
-func newPendingStore(max int, ttl time.Duration) *pendingStore {
+func newPendingStore(max int) *pendingStore {
 	if max <= 0 {
 		max = defaultMaxRuns
-	}
-	if ttl <= 0 {
-		ttl = defaultRunTTL
 	}
 	return &pendingStore{
 		runs: make(map[string]*runState),
 		max:  max,
-		ttl:  ttl,
 	}
 }
 
 func (s *pendingStore) create(run *runState) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cleanupLocked(time.Now())
 	if len(s.runs) >= s.max {
 		return false
 	}
@@ -137,17 +136,7 @@ func (s *pendingStore) delete(id string) {
 	delete(s.runs, id)
 }
 
-func (s *pendingStore) cleanupLocked(now time.Time) {
-	for id, run := range s.runs {
-		if now.Sub(run.created) > s.ttl {
-			run.stopInteractionTimer()
-			run.complete(pendingResult{err: context.DeadlineExceeded})
-			delete(s.runs, id)
-		}
-	}
-}
-
-func newRunState(id, user, channelKey, sessionKey, conversationID, messageID string, sse *sseWriter, requestDeadline time.Time) *runState {
+func newRunState(id, user, channelKey, sessionKey, conversationID, messageID string, p *Platform, sse *sseWriter, requestDeadline time.Time) *runState {
 	return &runState{
 		id:              id,
 		user:            user,
@@ -157,7 +146,8 @@ func newRunState(id, user, channelKey, sessionKey, conversationID, messageID str
 		messageID:       messageID,
 		created:         time.Now(),
 		requestDeadline: requestDeadline,
-		sse:             sse,
+		platform:        p,
+		sink:            &sseEventSink{w: sse},
 		sentToolCallIDs: make(map[string]bool),
 		notify:          make(chan struct{}, 1),
 		done:            make(chan pendingResult, 1),
@@ -234,6 +224,12 @@ func (r *runState) signal() {
 	case r.notify <- struct{}{}:
 	default:
 	}
+	r.mu.Lock()
+	detached := r.detached
+	r.mu.Unlock()
+	if detached {
+		_ = r.flushDelta()
+	}
 }
 
 func (r *runState) applyCardContent(content string) {
@@ -276,13 +272,63 @@ func (r *runState) enqueueEvent(name string, payload any) {
 }
 
 func (r *runState) detach() {
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
+	r.detachUnderFlush()
+}
+
+// detachUnderFlush switches to the virtual sink. Caller must hold flushMu.
+func (r *runState) detachUnderFlush() {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.detached {
+		return
+	}
 	r.detached = true
-	r.sse = nil
+	r.sink = &detachedEventSink{run: r}
+	if r.lastRecoverableEvent == nil {
+		r.lastRecoverableEvent = &recoverableEvent{
+			name: "ping",
+			payload: map[string]any{
+				"run_id": r.id,
+				"ts":     time.Now().Unix(),
+			},
+			createdAt: time.Now(),
+		}
+	}
+}
+
+func (r *runState) beginAttach() error {
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.attaching || (r.sink != nil && r.sink.Active()) {
+		return errRunAlreadyAttached
+	}
+	r.attaching = true
+	return nil
+}
+
+func (r *runState) finishAttach(sse *sseWriter) {
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.detached = false
+	r.attaching = false
+	r.sink = &sseEventSink{w: sse}
+}
+
+func (r *runState) cancelAttach() {
+	r.mu.Lock()
+	r.attaching = false
 	r.mu.Unlock()
 }
 
 func (r *runState) flushDelta() error {
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
 	if err := r.flushThinkingDelta(); err != nil {
 		return err
 	}
@@ -302,15 +348,14 @@ func (r *runState) flushEvents() error {
 	r.mu.Lock()
 	events := r.pendingEvents
 	r.pendingEvents = nil
-	sse := r.sse
-	detached := r.detached
+	sink := r.sink
 	r.mu.Unlock()
-	if sse == nil || detached {
+	if sink == nil {
 		return nil
 	}
 	for _, ev := range events {
-		if err := sse.Event(ev.name, ev.payload); err != nil {
-			r.detach()
+		if err := sink.Event(ev.name, ev.payload); err != nil {
+			r.detachUnderFlush()
 			return err
 		}
 	}
@@ -319,22 +364,42 @@ func (r *runState) flushEvents() error {
 
 func (r *runState) flushThinkingDelta() error {
 	r.mu.Lock()
-	sse := r.sse
+	sink := r.sink
 	messageID := r.messageID
-	if sse == nil || r.detached {
+	curr := r.latestThinking
+	prev := r.sentThinking
+	active := sink != nil && sink.Active()
+	r.mu.Unlock()
+	if sink == nil {
+		return nil
+	}
+	if !active {
+		if curr == "" || curr == prev {
+			return nil
+		}
+		// Prefer answer snapshots when both exist; thinking alone is recoverable.
+		r.mu.Lock()
+		hasAnswer := strings.TrimSpace(r.answerText) != ""
+		r.mu.Unlock()
+		if hasAnswer {
+			return nil
+		}
+		payload := replaceDeltaPayload(messageID, curr)
+		if err := sink.Event("thinking_delta", payload); err != nil {
+			return err
+		}
+		r.mu.Lock()
+		r.sentThinking = curr
 		r.mu.Unlock()
 		return nil
 	}
-	curr := r.latestThinking
-	prev := r.sentThinking
-	r.mu.Unlock()
 
 	payload, ok := deltaPayload(messageID, prev, curr)
 	if !ok {
 		return nil
 	}
-	if err := sse.Event("thinking_delta", payload); err != nil {
-		r.detach()
+	if err := sink.Event("thinking_delta", payload); err != nil {
+		r.detachUnderFlush()
 		return err
 	}
 	r.mu.Lock()
@@ -345,9 +410,9 @@ func (r *runState) flushThinkingDelta() error {
 
 func (r *runState) flushToolCallEvents() error {
 	r.mu.Lock()
-	sse := r.sse
+	sink := r.sink
 	messageID := r.messageID
-	if sse == nil || r.detached {
+	if sink == nil || !sink.Active() {
 		r.mu.Unlock()
 		return nil
 	}
@@ -369,8 +434,8 @@ func (r *runState) flushToolCallEvents() error {
 		if tc.Input != "" {
 			payload["input"] = tc.Input
 		}
-		if err := sse.Event("tool_call", payload); err != nil {
-			r.detach()
+		if err := sink.Event("tool_call", payload); err != nil {
+			r.detachUnderFlush()
 			return err
 		}
 		r.mu.Lock()
@@ -382,9 +447,9 @@ func (r *runState) flushToolCallEvents() error {
 
 func (r *runState) flushToolResultEvents() error {
 	r.mu.Lock()
-	sse := r.sse
+	sink := r.sink
 	messageID := r.messageID
-	if sse == nil || r.detached {
+	if sink == nil || !sink.Active() {
 		r.mu.Unlock()
 		return nil
 	}
@@ -417,8 +482,8 @@ func (r *runState) flushToolResultEvents() error {
 		if res.Output != "" {
 			payload["output"] = res.Output
 		}
-		if err := sse.Event("tool_result", payload); err != nil {
-			r.detach()
+		if err := sink.Event("tool_result", payload); err != nil {
+			r.detachUnderFlush()
 			return err
 		}
 	}
@@ -435,22 +500,35 @@ func (r *runState) nextToolCallIDLocked(_ string) string {
 
 func (r *runState) flushAnswerDelta() error {
 	r.mu.Lock()
-	sse := r.sse
+	sink := r.sink
 	messageID := r.messageID
-	if sse == nil || r.detached {
+	curr := r.answerText
+	prev := r.sentAnswer
+	active := sink != nil && sink.Active()
+	r.mu.Unlock()
+	if sink == nil {
+		return nil
+	}
+	if !active {
+		if curr == "" || curr == prev {
+			return nil
+		}
+		payload := replaceDeltaPayload(messageID, curr)
+		if err := sink.Event("text_delta", payload); err != nil {
+			return err
+		}
+		r.mu.Lock()
+		r.sentAnswer = curr
 		r.mu.Unlock()
 		return nil
 	}
-	curr := r.answerText
-	prev := r.sentAnswer
-	r.mu.Unlock()
 
 	payload, ok := deltaPayload(messageID, prev, curr)
 	if !ok {
 		return nil
 	}
-	if err := sse.Event("text_delta", payload); err != nil {
-		r.detach()
+	if err := sink.Event("text_delta", payload); err != nil {
+		r.detachUnderFlush()
 		return err
 	}
 	r.mu.Lock()
@@ -464,6 +542,7 @@ func (r *runState) complete(result pendingResult) bool {
 	r.once.Do(func() {
 		r.stopInteractionTimer()
 		r.done <- result
+		logSSEEnd(r, result)
 		ok = true
 	})
 	return ok
@@ -641,6 +720,7 @@ func (s *pendingStore) finish(id string, result pendingResult) bool {
 	if result.answer == "" {
 		result.answer = run.answerText
 	}
+	run.lastRecoverableEvent = nil
 	run.mu.Unlock()
 	if !run.complete(result) {
 		return false
@@ -678,6 +758,10 @@ func (s *pendingStore) cancelTimeout(id string) bool {
 	if run == nil {
 		return false
 	}
+	run.mu.Lock()
+	run.finalized = true
+	run.lastRecoverableEvent = nil
+	run.mu.Unlock()
 	if !run.complete(pendingResult{err: context.DeadlineExceeded}) {
 		return false
 	}
@@ -690,6 +774,10 @@ func (s *pendingStore) cancelInteractionTimeout(id, kind string) bool {
 	if run == nil {
 		return false
 	}
+	run.mu.Lock()
+	run.finalized = true
+	run.lastRecoverableEvent = nil
+	run.mu.Unlock()
 	if !run.complete(pendingResult{
 		err:                    errInteractionTimedOut,
 		interactionTimedOut:    true,

@@ -34,19 +34,19 @@ func requireWorkingAgentCLI(t *testing.T) {
 	if _, err := exec.LookPath("agent"); err != nil {
 		t.Skip("agent CLI not in PATH")
 	}
-	ctx, cancel := shortTestContext(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "agent", "models").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "agent", "--version").CombinedOutput()
 	if err != nil {
 		t.Skipf("agent CLI is not runnable in this environment: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
 }
 
 func TestFetchModelsFromAgentCLI(t *testing.T) {
+	requireWorkingAgentCLI(t)
 	ctx, cancel := shortTestContext(t)
 	defer cancel()
-	requireWorkingAgentCLI(t)
 
 	models := fetchModelsFromAgentCLI(ctx, "agent", nil)
 	if len(models) == 0 {

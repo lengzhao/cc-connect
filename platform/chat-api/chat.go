@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chenhg5/cc-connect/core"
 )
@@ -20,9 +21,8 @@ import (
 const (
 	maxRequestBody            = 10 << 20 // 10 MiB
 	defaultMaxRuns            = 1000
-	defaultRunTTL             = 2 * time.Hour
 	defaultInteractionTimeout = 10 * time.Minute
-	defaultSSEPingInterval    = 15 * time.Second
+	defaultSSEPingInterval    = 5 * time.Second
 	busyPolicyQueue           = "queue"
 	busyPolicyReject          = "reject"
 )
@@ -38,6 +38,7 @@ type chatInput struct {
 type chatRequest struct {
 	ConversationID   string         `json:"conversation_id"`
 	Query            string         `json:"query"`
+	RunID            string         `json:"run_id"`
 	Inputs           []chatInput    `json:"inputs"`
 	AutoGenerateName *bool          `json:"auto_generate_name"`
 	Metadata         map[string]any `json:"metadata"`
@@ -67,12 +68,6 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	channelKey = p.channelKeyForMessage(channelKey)
-	sessions := p.sessionsOrReload()
-	if sessions == nil {
-		writeErr(w, http.StatusInternalServerError, "internal error")
-		return
-	}
 	accept := r.Header.Get("Accept")
 	if accept != "" && !strings.Contains(accept, "text/event-stream") && !strings.Contains(accept, "*/*") {
 		writeErr(w, http.StatusBadRequest, "invalid request")
@@ -91,6 +86,16 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if runID := strings.TrimSpace(body.RunID); runID != "" {
+		p.handleChatResume(w, r, user, runID, strings.TrimSpace(body.ConversationID))
+		return
+	}
+
+	sessions := p.sessionsOrReload()
+	if sessions == nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	query := strings.TrimSpace(body.Query)
@@ -150,7 +155,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestDeadline := time.Now().Add(p.requestTimeout)
-	run := newRunState(runID, user, channelKey, engineSessionKey, session.ID, msgID, sse, requestDeadline)
+	run := newRunState(runID, user, channelKey, engineSessionKey, session.ID, msgID, p, sse, requestDeadline)
 	if !p.pending.create(run) {
 		_ = sse.Error("too many concurrent requests")
 		return
@@ -164,14 +169,16 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		headers:        collectForwardedHeaders(p.forwardHeaders, r),
 	}
 
-	if err := sse.Event("message", map[string]string{
+	if err := sse.Event("message", map[string]any{
 		"conversation_id": session.ID,
 		"message_id":      msgID,
 		"run_id":          runID,
 	}); err != nil {
+		logSSELifecycle("disconnect", run, "reason", "write_error", "error", err.Error())
 		run.detach()
 		return
 	}
+	logSSELifecycle("start", run)
 
 	autoName := body.AutoGenerateName == nil || *body.AutoGenerateName
 	chatName, _ := p.ResolveChannelName(channelKey)
@@ -209,14 +216,84 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reqCtx := r.Context()
 	go func() {
 		handler(p, &msg)
 		p.finishPlainReplyIfNeeded(runID)
 	}()
 
-	deadline := time.NewTimer(p.requestTimeout)
-	defer deadline.Stop()
+	p.serveRunSSE(r.Context(), run, sse, engineSessionKey, user, channelKey, rc)
+}
+
+func (p *Platform) handleChatResume(w http.ResponseWriter, r *http.Request, user, runID, conversationID string) {
+	run := p.pending.get(runID)
+	if run == nil || run.user != user {
+		reason := "run_not_found"
+		if run != nil {
+			reason = "user_mismatch"
+		}
+		logSSELifecyclePartial("resume_miss", runID, user, conversationID, "reason", reason)
+		p.writeResumeMessageEnd(w, conversationID)
+		return
+	}
+
+	if err := run.beginAttach(); err != nil {
+		logSSELifecycle("resume_rejected", run, "reason", "already_attached")
+		writeErr(w, http.StatusConflict, "run already attached")
+		return
+	}
+
+	sse, err := newSSEWriter(w)
+	if err != nil {
+		run.cancelAttach()
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	run.finishAttach(sse)
+	replayEvent := ""
+	if ev := run.peekLastRecoverable(); ev != nil {
+		replayEvent = ev.name
+		if err := sse.Event(ev.name, ev.payload); err != nil {
+			logSSELifecycle("disconnect", run, "reason", "write_error", "error", err.Error())
+			run.detach()
+			return
+		}
+		run.clearLastRecoverable()
+	}
+	if replayEvent != "" {
+		logSSELifecycle("resume", run, "replay_event", replayEvent)
+	} else {
+		logSSELifecycle("resume", run)
+	}
+
+	rc := run.replyContext()
+	p.serveRunSSE(r.Context(), run, sse, run.sessionKey, user, run.channelKey, rc)
+}
+
+func (p *Platform) writeResumeMessageEnd(w http.ResponseWriter, conversationID string) {
+	sse, err := newSSEWriter(w)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	payload := map[string]any{}
+	if conversationID != "" {
+		payload["conversation_id"] = conversationID
+	}
+	_ = sse.Event("message_end", payload)
+}
+
+func (p *Platform) serveRunSSE(reqCtx context.Context, run *runState, sse *sseWriter, engineSessionKey, user, channelKey string, rc *replyContext) {
+	var deadlineC <-chan time.Time
+	var deadline *time.Timer
+	remaining := p.requestTimeout
+	if !run.requestDeadline.IsZero() {
+		remaining = time.Until(run.requestDeadline)
+	}
+	if remaining > 0 {
+		deadline = time.NewTimer(remaining)
+		defer deadline.Stop()
+		deadlineC = deadline.C
+	}
 
 	var pingTicker *time.Ticker
 	var pingC <-chan time.Time
@@ -230,22 +307,25 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-run.notify:
 			if err := run.flushDelta(); err != nil {
+				logSSELifecycle("disconnect", run, "reason", "write_error", "error", err.Error())
 				return
 			}
 		case result := <-run.done:
 			p.emitTerminalSSE(run, result)
+			p.pending.delete(run.id)
 			return
 		case <-pingC:
 			run.enqueueEvent("ping", map[string]any{
-				"run_id": runID,
+				"run_id": run.id,
 				"ts":     time.Now().Unix(),
 			})
-		case <-deadline.C:
+		case <-deadlineC:
 			p.dispatchStop(engineSessionKey, user, channelKey, rc)
-			p.pending.cancelTimeout(runID)
+			p.pending.cancelTimeout(run.id)
 			_ = sse.Error("request timed out")
 			return
 		case <-reqCtx.Done():
+			logSSELifecycle("disconnect", run, "reason", "client_gone")
 			run.detach()
 			return
 		}
@@ -254,25 +334,25 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 
 func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 	run.mu.Lock()
-	sse := run.sse
+	sink := run.sink
 	msgID := run.messageID
 	conversationID := run.conversationID
 	run.mu.Unlock()
-	if sse == nil {
+	if sink == nil || !sink.Active() {
 		return
 	}
 	_ = run.flushDelta()
 
 	switch {
 	case result.queued:
-		_ = sse.Event("message_queued", map[string]any{
+		_ = sink.Event("message_queued", map[string]any{
 			"message_id":  msgID,
 			"queue_depth": result.queueDepth,
 		})
 	case result.queueFull:
-		_ = sse.Error(result.errMsg)
+		_ = sink.Event("error", map[string]string{"error": result.errMsg})
 	case result.userCanceled:
-		_ = sse.Error(errUserCanceled.Error())
+		_ = sink.Event("error", map[string]string{"error": errUserCanceled.Error()})
 	case result.interactionTimedOut || errors.Is(result.err, errInteractionTimedOut):
 		payload := map[string]any{
 			"error": errInteractionTimedOut.Error(),
@@ -280,9 +360,9 @@ func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 		if result.interactionTimeoutKind != "" {
 			payload["kind"] = result.interactionTimeoutKind
 		}
-		_ = sse.Event("error", payload)
+		_ = sink.Event("error", payload)
 	case result.err != nil:
-		_ = sse.Error(result.err.Error())
+		_ = sink.Event("error", map[string]string{"error": result.err.Error()})
 	default:
 		payload := map[string]string{
 			"message_id":      msgID,
@@ -293,7 +373,7 @@ func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 				payload["answer"] = ans
 			}
 		}
-		_ = sse.Event("message_end", payload)
+		_ = sink.Event("message_end", payload)
 	}
 }
 
@@ -311,7 +391,28 @@ func deltaPayload(messageID, prev, curr string) (map[string]any, bool) {
 		}
 		return map[string]any{"message_id": messageID, "text": suffix}, true
 	}
-	return map[string]any{"message_id": messageID, "text": curr, "replace": true}, true
+	return replaceDeltaPayload(messageID, curr), true
+}
+
+const logContentLimit = 40
+
+func truncateForLog(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= maxLen {
+		return s
+	}
+	return string([]rune(s)[:maxLen])
+}
+
+// replaceDeltaPayload builds a full-text delta with replace=true and warns.
+func replaceDeltaPayload(messageID, curr string) map[string]any {
+	slog.Warn("chat-api: emitting SSE delta with replace=true",
+		"message_id", messageID,
+		"text", truncateForLog(curr, logContentLimit),
+	)
+	return map[string]any{"message_id": messageID, "text": curr, "replace": true}
 }
 
 func inputsToCore(inputs []chatInput) ([]core.ImageAttachment, []core.FileAttachment, *core.AudioAttachment, error) {

@@ -51,6 +51,7 @@ func TestStructuredStreamNoMarkdownUpdate(t *testing.T) {
 		strings.NewReader(`{"query":"ETH/USDT"}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -102,6 +103,7 @@ func TestStructuredStreamToolEventsSkipMarkdownSniff(t *testing.T) {
 		strings.NewReader(`{"query":"time"}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -126,8 +128,8 @@ func TestStructuredStreamAnswerReplace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
-	card := &streamingCard{platform: &Platform{pending: newPendingStore(10, time.Hour)}, rc: &replyContext{runID: "run1"}}
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", &Platform{}, sse, time.Time{})
+	card := &streamingCard{platform: &Platform{pending: newPendingStore(10)}, rc: &replyContext{runID: "run1"}}
 	card.platform.pending.create(run)
 
 	_ = card.OnTurnStreamEvent(context.Background(), core.TurnStreamEvent{

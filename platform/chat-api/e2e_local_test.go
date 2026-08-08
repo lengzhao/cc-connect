@@ -128,6 +128,11 @@ func e2eRequestWithHeaders(t *testing.T, method, url, token, user string, header
 	if user != "" {
 		req.Header.Set("X-Chat-API-User", user)
 	}
+	if user != "" && method == http.MethodPost && strings.Contains(url, "/chat-messages") {
+		if req.Header.Get("X-Chat-API-Channel") == "" {
+			req.Header.Set("X-Chat-API-Channel", "e2e-channel")
+		}
+	}
 	if accept != "" {
 		req.Header.Set("Accept", accept)
 	}
@@ -314,7 +319,7 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 	}
 
 	// 3. History (wait briefly for engine to persist assistant turn)
-	waitForHistory(t, base, token, convID, 1)
+	waitForHistory(t, base, token, convID, 2)
 
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
 	if resp.StatusCode != http.StatusOK {
@@ -329,15 +334,32 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &histResp); err != nil {
 		t.Fatalf("decode messages: %v", err)
 	}
-	if len(histResp.Data.Messages) != 1 {
-		t.Fatalf("messages = %+v, want 1", histResp.Data.Messages)
+	if len(histResp.Data.Messages) != 2 {
+		t.Fatalf("messages = %+v, want 2 entries", histResp.Data.Messages)
 	}
-	if histResp.Data.Messages[0]["query"] != "用一句话介绍你自己" {
-		t.Fatalf("query = %v", histResp.Data.Messages[0]["query"])
+	var userEntry map[string]any
+	for _, m := range histResp.Data.Messages {
+		if m["role"] == "user" {
+			userEntry = m
+			break
+		}
 	}
-	answer, _ := histResp.Data.Messages[0]["answer"].(string)
+	if userEntry == nil || userEntry["query"] != "用一句话介绍你自己" {
+		t.Fatalf("user entry = %+v", userEntry)
+	}
+	var assistantEntry map[string]any
+	for _, m := range histResp.Data.Messages {
+		if m["role"] == "assistant" {
+			assistantEntry = m
+			break
+		}
+	}
+	if assistantEntry == nil {
+		t.Fatalf("missing assistant entry: %+v", histResp.Data.Messages)
+	}
+	answer, _ := assistantEntry["answer"].(string)
 	if answer == "" {
-		t.Fatalf("empty answer in history: %+v", histResp.Data.Messages[0])
+		t.Fatalf("empty answer in history: %+v", assistantEntry)
 	}
 
 	// 4. Continue conversation
@@ -350,7 +372,7 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 		t.Fatalf("continue SSE missing message_end: %s", raw)
 	}
 
-	waitForHistory(t, base, token, convID, 2)
+	waitForHistory(t, base, token, convID, 4)
 
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
 	var hist2 struct {
@@ -359,8 +381,8 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 		} `json:"data"`
 	}
 	_ = json.Unmarshal([]byte(raw), &hist2)
-	if len(hist2.Data.Messages) != 2 {
-		t.Fatalf("after continue messages = %d, want 2", len(hist2.Data.Messages))
+	if len(hist2.Data.Messages) != 4 {
+		t.Fatalf("after continue messages = %d, want 4", len(hist2.Data.Messages))
 	}
 
 	// 5. Rename
@@ -466,7 +488,7 @@ func TestE2ELocalChatAPIAgentContextInjection(t *testing.T) {
 		t.Fatalf("agent prompt missing context: %q", prompt)
 	}
 
-	waitForHistory(t, base, "e2e-token", convID, 1)
+	waitForHistory(t, base, "e2e-token", convID, 2)
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", "e2e-token", "", nil, "")
 	var hist struct {
 		Data struct {
@@ -476,10 +498,16 @@ func TestE2ELocalChatAPIAgentContextInjection(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &hist); err != nil {
 		t.Fatalf("decode history: %v body=%s", err, raw)
 	}
-	if len(hist.Data.Messages) != 1 {
+	if len(hist.Data.Messages) != 2 {
 		t.Fatalf("messages = %+v", hist.Data.Messages)
 	}
-	q, _ := hist.Data.Messages[0]["query"].(string)
+	var q string
+	for _, m := range hist.Data.Messages {
+		if m["role"] == "user" {
+			q, _ = m["query"].(string)
+			break
+		}
+	}
 	if q != "hello with context" {
 		t.Fatalf("history query = %q, want raw user text", q)
 	}
@@ -514,7 +542,7 @@ func TestE2ELocalChatAPIMultiWorkspaceChannelHistory(t *testing.T) {
 		t.Fatalf("missing conversation_id in SSE: %s", raw)
 	}
 
-	waitForHistory(t, base, token, convID, 1)
+	waitForHistory(t, base, token, convID, 2)
 
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
 	if resp.StatusCode != http.StatusOK {
@@ -528,21 +556,53 @@ func TestE2ELocalChatAPIMultiWorkspaceChannelHistory(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &hist); err != nil {
 		t.Fatalf("decode messages: %v", err)
 	}
-	if len(hist.Data.Messages) != 1 {
+	if len(hist.Data.Messages) != 2 {
 		t.Fatalf("messages = %+v, want workspace turn history readable by conversation id", hist.Data.Messages)
 	}
-	if hist.Data.Messages[0]["query"] != "进入 workspace 后回复一句" {
-		t.Fatalf("query = %v", hist.Data.Messages[0]["query"])
+	var userEntry map[string]any
+	for _, m := range hist.Data.Messages {
+		if m["role"] == "user" {
+			userEntry = m
+			break
+		}
+	}
+	if userEntry == nil || userEntry["query"] != "进入 workspace 后回复一句" {
+		t.Fatalf("user entry = %+v", userEntry)
 	}
 }
 
-func TestE2ELocalChatAPIMultiWorkspaceDefaultWorkDirWithoutChannel(t *testing.T) {
+func TestE2ELocalChatAPIMultiWorkspaceRequiresChannel(t *testing.T) {
+	_, base, _, _ := startLocalChatAPIMultiWorkspaceServer(t)
+	req, err := http.NewRequest(http.MethodPost, base+"/chat-messages", strings.NewReader(`{"query":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer e2e-token")
+	req.Header.Set("X-Chat-API-User", "e2e_user")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s, want 400", resp.StatusCode, string(raw))
+	}
+	if !strings.Contains(string(raw), "channel required") {
+		t.Fatalf("body = %s", raw)
+	}
+}
+
+func TestE2ELocalChatAPIMultiWorkspaceExplicitDefaultChannel(t *testing.T) {
 	_, base, _, baseDir := startLocalChatAPIMultiWorkspaceServer(t)
 	const user = "e2e_user"
 	const token = "e2e-token"
 
 	body := `{"query":"hi","auto_generate_name":true}`
-	resp, raw := e2eRequest(t, http.MethodPost, base+"/chat-messages", token, user, strings.NewReader(body), "text/event-stream")
+	headers := map[string]string{"X-Chat-API-Channel": defaultWorkspaceChannelID}
+	resp, raw := e2eRequestWithHeaders(t, http.MethodPost, base+"/chat-messages", token, user, headers, strings.NewReader(body), "text/event-stream")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("chat status = %d body=%s", resp.StatusCode, raw)
 	}
@@ -604,7 +664,8 @@ func TestE2ELocalChatAPIMultiWorkspaceDefaultChannelWithInjectedCCBaseDir(t *tes
 	const user = "e2e_user"
 	const token = "e2e-token"
 	body := `{"query":"hi","auto_generate_name":true}`
-	resp, raw := e2eRequest(t, http.MethodPost, base+"/chat-messages", token, user, strings.NewReader(body), "text/event-stream")
+	headers := map[string]string{"X-Chat-API-Channel": defaultWorkspaceChannelID}
+	resp, raw := e2eRequestWithHeaders(t, http.MethodPost, base+"/chat-messages", token, user, headers, strings.NewReader(body), "text/event-stream")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("chat status = %d body=%s", resp.StatusCode, raw)
 	}

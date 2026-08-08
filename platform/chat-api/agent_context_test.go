@@ -100,6 +100,7 @@ func TestChatMessagesPassesAgentContext(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("X-Language", "ja")

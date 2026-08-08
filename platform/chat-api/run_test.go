@@ -8,9 +8,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chenhg5/cc-connect/core"
 )
+
+func TestTruncateForLog(t *testing.T) {
+	if got := truncateForLog("短文本", 40); got != "短文本" {
+		t.Fatalf("short = %q", got)
+	}
+	long := strings.Repeat("测", 50)
+	if got := truncateForLog(long, 40); got != strings.Repeat("测", 40) {
+		t.Fatalf("truncated len=%d got=%q", utf8.RuneCountInString(got), got)
+	}
+}
 
 func TestRunStateThinkingAndAnswerDeltas(t *testing.T) {
 	rec := httptest.NewRecorder()
@@ -18,7 +29,7 @@ func TestRunStateThinkingAndAnswerDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", &Platform{}, sse, time.Time{})
 
 	run.setStreamContent("plan", "")
 	if err := run.flushDelta(); err != nil {
@@ -48,7 +59,7 @@ func TestEmitTerminalSSEFlushesPendingDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", &Platform{}, sse, time.Time{})
 	run.setStreamContent("", "pending tail")
 	// Do not flush manually — emitTerminalSSE must drain before message_end.
 	p.emitTerminalSSE(run, pendingResult{answer: "pending tail"})
@@ -89,6 +100,7 @@ func TestFinalizeSyncsStreamBeforeFinish(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -145,7 +157,7 @@ func TestMessageEndOmitsAnswerByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", &Platform{}, sse, time.Time{})
 	run.setStreamContent("", "hello")
 	p.emitTerminalSSE(run, pendingResult{answer: "hello"})
 	if strings.Contains(rec.Body.String(), `"answer"`) {
@@ -160,7 +172,7 @@ func TestMessageEndIncludesAnswerWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", &Platform{}, sse, time.Time{})
 	run.setStreamContent("", "hello")
 	p.emitTerminalSSE(run, pendingResult{answer: "hello"})
 	if !strings.Contains(rec.Body.String(), `"answer":"hello"`) {
@@ -212,6 +224,7 @@ func TestToolCallAndResultSSENotInTextDelta(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(`{"query":"现在是什么时间"}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	rec := httptest.NewRecorder()
@@ -279,7 +292,7 @@ func TestAnswerDeltaReplaceOnNonPrefixChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
 	}
-	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", sse, time.Time{})
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", &Platform{}, sse, time.Time{})
 
 	run.setStreamContent("", "正在获取 ETH/USDT 实时行情。")
 	if err := run.flushDelta(); err != nil {

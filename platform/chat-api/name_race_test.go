@@ -84,6 +84,7 @@ func TestE2E_AIAutoNameDoesNotQueueFirstChatMessage(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, p.ResolvedBaseURL()+"/chat-messages", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer e2e-token")
 	req.Header.Set("X-Chat-API-User", "user_name_race")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)

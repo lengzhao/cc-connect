@@ -94,10 +94,6 @@ func New(opts map[string]any) (core.Platform, error) {
 	if err != nil {
 		return nil, fmt.Errorf("chat-api: max_runs: %w", err)
 	}
-	runTTL, err := durationOption(opts, "run_ttl", defaultRunTTL)
-	if err != nil {
-		return nil, fmt.Errorf("chat-api: run_ttl: %w", err)
-	}
 
 	userHeader, err := userHeaderOption(opts)
 	if err != nil {
@@ -143,7 +139,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		nameProviderType:          strings.ToLower(stringOption(opts, "name_provider_type", defaultNameProviderType)),
 		nameModel:                 strings.TrimSpace(stringOption(opts, "name_model", "")),
 		projectName:               stringOption(opts, "cc_project", ""),
-		pending:                   newPendingStore(maxRuns, runTTL),
+		pending:                   newPendingStore(maxRuns),
 		dataDir:                   stringOption(opts, "cc_data_dir", ""),
 		multiWorkspaceBaseDir:     multiWorkspaceBaseDirFromOpts(opts),
 		debugUI:                   boolOption(opts, "debug_ui", false),
