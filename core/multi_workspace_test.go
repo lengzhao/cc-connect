@@ -434,6 +434,20 @@ func TestLooksLikeLocalDir(t *testing.T) {
 	}
 }
 
+func TestWorkspaceInitFlow_CustomCommandPassesThroughWithLocalPaths(t *testing.T) {
+	baseDir := t.TempDir()
+	e := newTestEngineWithMultiWorkspace(t, baseDir)
+	e.SetWorkspaceInitAllowLocalPaths(true)
+	e.AddCommand("skills-sync", "sync skills", "", "echo ok", "", "config")
+
+	p := &mockChannelResolver{names: map[string]string{"C010": "test-channel"}}
+	msg := &Message{SessionKey: "mock:C010:user1", Content: "/skills-sync"}
+
+	if consumed := e.handleWorkspaceInitFlow(p, msg, "test-channel"); consumed {
+		t.Fatal("expected custom slash command to bypass workspace init flow")
+	}
+}
+
 func TestWorkspaceInitFlow_SlashCommandCleansUpExistingFlow(t *testing.T) {
 	baseDir := t.TempDir()
 	e := newTestEngineWithMultiWorkspace(t, baseDir)
