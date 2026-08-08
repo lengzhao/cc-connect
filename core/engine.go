@@ -6470,6 +6470,34 @@ func splitCommandArgs(s string) []string {
 	return tokens
 }
 
+// isRegisteredSlashCommand reports whether raw is a cc-connect builtin, config
+// custom command, or skill slash command. Used to keep command dispatch ahead
+// of multi-workspace local-path init heuristics.
+func (e *Engine) isRegisteredSlashCommand(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "/") {
+		return false
+	}
+	parts := splitCommandArgs(raw)
+	if len(parts) == 0 {
+		return false
+	}
+	cmd := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
+	if cmd == "" {
+		return false
+	}
+	if matchPrefix(cmd, builtinCommands) != "" {
+		return true
+	}
+	if _, ok := e.commands.Resolve(cmd); ok {
+		return true
+	}
+	if e.skills.Resolve(cmd) != nil {
+		return true
+	}
+	return false
+}
+
 func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 	parts := splitCommandArgs(raw)
 	cmd := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
@@ -16690,11 +16718,18 @@ func (e *Engine) resolveWorkspace(p Platform, channelID string) (string, string,
 func (e *Engine) handleWorkspaceInitFlow(p Platform, msg *Message, channelName string) bool {
 	channelKey := effectiveWorkspaceChannelKey(msg)
 
+	content := strings.TrimSpace(msg.Content)
+	if e.isRegisteredSlashCommand(content) {
+		e.initFlowsMu.Lock()
+		delete(e.initFlows, channelKey)
+		e.initFlowsMu.Unlock()
+		return false
+	}
+
 	e.initFlowsMu.Lock()
 	flow, exists := e.initFlows[channelKey]
 	e.initFlowsMu.Unlock()
 
-	content := strings.TrimSpace(msg.Content)
 	looksLikeAllowedLocalDir := e.workspaceInitAllowLocalPaths && looksLikeLocalDir(content)
 
 	if !exists {
