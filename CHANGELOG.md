@@ -1,5 +1,13 @@
 ﻿# Changelog
 
+## v9.1.20 (2026-08-08)
+
+### Added
+- **chat-api tool SSE transforms `when` / `args_from`**: transform rules can emit at `tool_call` (default) or `tool_result`; `client_flow.args` can be filled from tool call input or result JSON via `args_from` (alias `args_from_result`).
+
+### Changed
+- **`cc_connect_client_flow` MCP enum**: Agent-facing schema now only exposes `connect_account` / `view_task` / `view_task_template`. Types `create_task` / `task_generating` / `task_center_approval` / `credits_insufficient` are intended to be emitted by chat-api `tool_sse_transforms_file` when matching business tools run.
+
 ## v9.1.19 (2026-08-07)
 
 ### Added
