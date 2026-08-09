@@ -34,7 +34,7 @@ func (p *Platform) handleGenerateConversationName(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	sessions := p.sessionsOrReload()
+	sessions := p.sessionsForUser(user)
 	if sessions == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return

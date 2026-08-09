@@ -321,6 +321,7 @@ type SessionManager struct {
 	userMeta      map[string]*UserMeta // sessionKey → display info
 	counter       int64
 	storePath     string // empty = no persistence
+	saveHook      func(*SessionManager, SessionSnapshot)
 
 	// legacyData is true when sessions were loaded from a snapshot that
 	// predates PastAgentSessionIDs tracking. In this state, many sessions
@@ -694,6 +695,10 @@ func (sm *SessionManager) Save() {
 }
 
 func (sm *SessionManager) saveLocked() {
+	if sm.saveHook != nil {
+		sm.saveHook(sm, sm.exportSnapshotLocked())
+		return
+	}
 	if sm.storePath == "" {
 		return
 	}

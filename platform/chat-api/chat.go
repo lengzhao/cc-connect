@@ -94,7 +94,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessions := p.sessionsOrReload()
+	sessions := p.sessionsForUser(user)
 	if sessions == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return

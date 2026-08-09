@@ -898,7 +898,7 @@ task_id = "X-Task-ID"
 | `question_notify_timeout` | `5s` | webhook HTTP 超时 |
 | `tool_sse_transforms_file` | 空 | 外部 JSON：将指定 tool 转为 `thinking_delta` / `client_flow`；`when` 默认 `tool_call`，可选 `tool_result`；`args_from` 按时机从 call input / result output 填 `args`（见 §3.3） |
 
-会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态（确认窗口不支持多副本共享）。可配置 `response_header` 在响应中携带 pod 等信息，由 gateway 实现粘连。详见 [response header 设计](./plans/2026-08-02-chat-api-pod-affinity-design.md)。
+会话持久化按用户分片，扁平布局：`sessions/{project}/users/{user}/conversations.json`（会话索引）+ `{conversation_id}.jsonl`（消息 append-only）。多副本共享 PVC 时需保证同一 user 路由到同一 Pod。`pendingStore` 仍为进程内内存态。可配置 `response_header` 在响应中携带 pod 等信息，由 gateway 实现粘连。详见 [response header 设计](./plans/2026-08-02-chat-api-pod-affinity-design.md)。
 
 ---
 

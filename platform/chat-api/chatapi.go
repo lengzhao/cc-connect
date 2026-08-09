@@ -47,7 +47,9 @@ type Platform struct {
 	nameProviderType          string
 	nameModel                 string
 	projectName               string
+	sessionUsersBase          string
 	sessionStorePath          string
+	sessionShards             *userShardCache
 	dataDir                   string
 	multiWorkspaceBaseDir     string
 	resolvedAddr              string
@@ -179,7 +181,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		return nil, err
 	}
 	p.toolSSETransforms = transforms
-	p.sessionStorePath = sessionStorePathFromOpts(opts)
+	p.initSessionStore(opts)
 	return p, nil
 }
 

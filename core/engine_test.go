@@ -4229,6 +4229,30 @@ func TestCmdHelp_UsesLegacyTextOnPlatformWithoutCardSupport(t *testing.T) {
 	}
 }
 
+func TestCmdHelp_UsesLegacyTextOnPlatformWithoutCardNavigation(t *testing.T) {
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "chat-api"}}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangChinese)
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
+
+	e.cmdHelp(p, msg)
+
+	if len(p.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(p.sent))
+	}
+	if got := p.sent[0]; got != e.i18n.T(MsgHelp) {
+		t.Fatalf("help text = %q, want legacy help text", got)
+	}
+	if len(p.repliedCards) != 0 {
+		t.Fatal("help should not send tabbed card without in-place navigation")
+	}
+	if !strings.Contains(p.sent[0], "/provider [list|add|remove|switch|clear]") {
+		t.Fatalf("help text = %q, want full command list including agent section", p.sent[0])
+	}
+	if !strings.Contains(p.sent[0], "/doctor") {
+		t.Fatalf("help text = %q, want full command list including system section", p.sent[0])
+	}
+}
+
 func TestCmdList_UsesLegacyTextOnPlatformWithoutCardSupport(t *testing.T) {
 	p := &stubPlatformEngine{n: "plain"}
 	sessions := []AgentSessionInfo{{ID: "session-a", Summary: "First session", MessageCount: 3, ModifiedAt: time.Date(2026, 3, 11, 2, 0, 0, 0, time.UTC)}}

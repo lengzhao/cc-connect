@@ -115,6 +115,12 @@ type WorkspaceSessionStorePolicy interface {
 	UseWorkspaceSessionStore() bool
 }
 
+// UserShardedSessionStore marks platforms that persist sessions per end-user
+// under sessions/{project}/users/{user}/conversations.json (+ {conversation_id}.jsonl).
+type UserShardedSessionStore interface {
+	SessionsForUser(userID string) *SessionManager
+}
+
 // UserTimezoneProvider is an optional platform capability that returns the
 // sender's IANA timezone (e.g. "Asia/Shanghai") when known.
 type UserTimezoneProvider interface {

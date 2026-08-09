@@ -13,7 +13,7 @@ func (p *Platform) handleConversations(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if p.sessionsOrReload() == nil {
+	if !p.sessionStoreReady() {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -22,7 +22,7 @@ func (p *Platform) handleConversations(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
-		sessions := p.sessionsOrReload()
+		sessions := p.sessionsForUser(user)
 		conversations, hasMore, nextCursor, err := paginateConversations(sessions.ListSessions(sessionKeyForUser(user)), cursor, limit)
 		if err != nil {
 			writeErr(w, http.StatusNotFound, "not found")
@@ -45,7 +45,7 @@ func (p *Platform) handleConversations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Platform) handleCreateConversation(w http.ResponseWriter, r *http.Request, user string) {
-	sessions := p.sessionsOrReload()
+	sessions := p.sessionsForUser(user)
 	if sessions == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
@@ -127,7 +127,7 @@ func (p *Platform) handleGetConversation(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		return
 	}
-	sessions := p.sessionsOrReload()
+	sessions := p.sessionsForUser(user)
 	if sessions == nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
@@ -145,11 +145,11 @@ func (p *Platform) handlePatchConversation(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if p.sessionsOrReload() == nil {
+	if !p.sessionStoreReady() {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	sessions := p.sessionsOrReload()
+	sessions := p.sessionsForUser(user)
 	s := p.findOwnedConversation(sessions, user, conversationID)
 	if s == nil {
 		writeErr(w, http.StatusNotFound, "not found")
@@ -185,11 +185,11 @@ func (p *Platform) handleDeleteConversation(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	if p.sessionsOrReload() == nil {
+	if !p.sessionStoreReady() {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	sessions := p.sessionsOrReload()
+	sessions := p.sessionsForUser(user)
 	if !p.sessionOwnedByUser(sessions, user, conversationID) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
@@ -206,9 +206,13 @@ func (p *Platform) handleConversationMessages(w http.ResponseWriter, r *http.Req
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 		return
 	}
-	sessions := p.sessionsOrReload()
-	if sessions == nil {
+	if !p.sessionStoreReady() {
 		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	sessions := p.sessionsForConversation(conversationID)
+	if sessions == nil {
+		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 	s := p.findConversation(sessions, conversationID)

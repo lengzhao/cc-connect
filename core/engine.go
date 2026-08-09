@@ -2970,6 +2970,11 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 			sessions = wsSessions
 		}
 	}
+	if shard, ok := p.(UserShardedSessionStore); ok {
+		if userID := strings.TrimSpace(msg.UserID); userID != "" {
+			sessions = shard.SessionsForUser(userID)
+		}
+	}
 
 	if len(msg.Images) == 0 && strings.HasPrefix(content, "/") {
 		if e.handleCommand(p, msg, content) {
@@ -9594,7 +9599,7 @@ func langDisplayName(lang Language) string {
 }
 
 func (e *Engine) cmdHelp(p Platform, msg *Message) {
-	if !supportsCards(p) {
+	if !supportsCards(p) || !supportsCardNavigation(p) {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgHelp))
 		return
 	}
@@ -12328,6 +12333,11 @@ func (e *Engine) replyWithButtons(p Platform, replyCtx any, content string, butt
 
 func supportsCards(p Platform) bool {
 	_, ok := p.(CardSender)
+	return ok
+}
+
+func supportsCardNavigation(p Platform) bool {
+	_, ok := p.(CardNavigable)
 	return ok
 }
 
