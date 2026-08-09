@@ -412,6 +412,16 @@ func main() {
 		startInitialRefreshIfReady(agent, providerWiring)
 		sessionFile := sessionStorePath(cfg.DataDir, proj.Name, effectiveWorkDir)
 
+		storeSettings := proj.SessionStoreSettings()
+		var storeCfg core.SessionStoreConfig
+		if storeSettings.UseJSONLChannel {
+			storeCfg = core.SessionStoreConfig{
+				Mode:      core.SessionStoreJSONLChannel,
+				Dir:       storeSettings.Dir,
+				KeyPrefix: storeSettings.KeyPrefix,
+			}
+		}
+
 		// Parse language setting
 		var lang core.Language
 		switch cfg.Language {
@@ -430,6 +440,9 @@ func main() {
 		}
 
 		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile, lang)
+		if storeSettings.UseJSONLChannel {
+			engine.SetSessionStoreConfig(storeCfg)
+		}
 		engine.SetProjectEnv(projectEnvFromOptions(proj.Agent.Options))
 		// Wire display settings including show_context_indicator and reply_footer
 		// Global [display] config can be overridden by project-level settings

@@ -18,6 +18,7 @@ const (
 	defaultListenAddr             = ":8030"
 	defaultPath                   = "/v1/"
 	defaultTimeout                = 30 * time.Minute
+	defaultMaxUploadSize          = 50 << 20 // 50 MiB
 	autoGenerateNameModeHeuristic = "heuristic"
 	autoGenerateNameModeAI        = "ai"
 	defaultNameRequestTimeout     = 30 * time.Second
@@ -51,6 +52,7 @@ type Platform struct {
 	multiWorkspaceBaseDir     string
 	resolvedAddr              string
 	debugUI                   bool
+	maxUploadSize             int64
 
 	server   *http.Server
 	handler  core.MessageHandler
@@ -93,6 +95,13 @@ func New(opts map[string]any) (core.Platform, error) {
 	maxRuns, err := intOption(opts, "max_runs", defaultMaxRuns)
 	if err != nil {
 		return nil, fmt.Errorf("chat-api: max_runs: %w", err)
+	}
+	maxUploadSize, err := intOption(opts, "max_upload_size", defaultMaxUploadSize)
+	if err != nil {
+		return nil, fmt.Errorf("chat-api: max_upload_size: %w", err)
+	}
+	if maxUploadSize <= 0 {
+		return nil, errors.New("chat-api: max_upload_size must be positive")
 	}
 
 	userHeader, err := userHeaderOption(opts)
@@ -143,6 +152,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		dataDir:                   stringOption(opts, "cc_data_dir", ""),
 		multiWorkspaceBaseDir:     multiWorkspaceBaseDirFromOpts(opts),
 		debugUI:                   boolOption(opts, "debug_ui", false),
+		maxUploadSize:             int64(maxUploadSize),
 	}
 	if p.autoGenerateNameMode != autoGenerateNameModeHeuristic && p.autoGenerateNameMode != autoGenerateNameModeAI {
 		return nil, errors.New("chat-api: auto_generate_name_mode must be heuristic or ai")
@@ -267,6 +277,8 @@ func (p *Platform) routes() http.Handler {
 	mux.HandleFunc(p.path+"conversations", wrap(p.handleConversations))
 	mux.HandleFunc(p.path+"conversations/", wrap(p.handleConversationSub))
 	mux.HandleFunc(p.path+"chat-messages", wrap(p.handleChatMessages))
+	mux.HandleFunc(p.path+"files", wrap(p.handleFiles))
+	mux.HandleFunc(p.path+"files/", wrap(p.handleFileRoutes))
 	mux.HandleFunc(p.path+"runs/", wrap(p.handleRunRoutes))
 	p.registerDebugUI(mux)
 	return mux
@@ -280,6 +292,7 @@ var _ core.Platform = (*Platform)(nil)
 var _ core.StreamingCardPlatform = (*Platform)(nil)
 var _ core.InlineButtonSender = (*Platform)(nil)
 var _ core.CardSender = (*Platform)(nil)
+var _ core.FileSender = (*Platform)(nil)
 var _ core.HookContextProvider = (*Platform)(nil)
 var _ core.ProcessingEndNotifier = (*Platform)(nil)
 var _ core.SessionManagerBinder = (*Platform)(nil)

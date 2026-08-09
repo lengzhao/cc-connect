@@ -8,7 +8,7 @@ import (
 )
 
 func (p *Platform) handleConversations(w http.ResponseWriter, r *http.Request) {
-	user, ok := p.resolveUser(w, r, false)
+	channel, ok := p.resolveChannel(w, r)
 	if !ok {
 		return
 	}
@@ -22,7 +22,7 @@ func (p *Platform) handleConversations(w http.ResponseWriter, r *http.Request) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
 		sessions := p.sessionsOrReload()
-		conversations, hasMore, nextCursor, err := paginateConversations(sessions.ListSessions(sessionKeyForUser(user)), cursor, limit)
+		conversations, hasMore, nextCursor, err := paginateConversations(sessions.ListSessions(sessionKeyForChannel(channel)), cursor, limit)
 		if err != nil {
 			writeErr(w, http.StatusNotFound, "not found")
 			return
@@ -74,7 +74,7 @@ func (p *Platform) handleConversationSub(w http.ResponseWriter, r *http.Request)
 	case http.MethodPatch:
 		p.handlePatchConversation(w, r, conversationID)
 	case http.MethodDelete:
-		p.handleDeleteConversation(w, r, conversationID)
+		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 	}
@@ -85,7 +85,7 @@ func (p *Platform) handleGetConversation(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 		return
 	}
-	user, ok := p.resolveUser(w, r, true)
+	channel, ok := p.resolveChannel(w, r)
 	if !ok {
 		return
 	}
@@ -94,7 +94,7 @@ func (p *Platform) handleGetConversation(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	s := p.findOwnedConversation(sessions, user, conversationID)
+	s := p.findConversationInChannel(sessions, channel, conversationID)
 	if s == nil {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
@@ -103,8 +103,11 @@ func (p *Platform) handleGetConversation(w http.ResponseWriter, r *http.Request,
 }
 
 func (p *Platform) handlePatchConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	user, ok := p.resolveUser(w, r, true)
+	channel, ok := p.resolveChannel(w, r)
 	if !ok {
+		return
+	}
+	if _, ok := p.resolveUser(w, r, true); !ok {
 		return
 	}
 	if p.sessionsOrReload() == nil {
@@ -112,7 +115,7 @@ func (p *Platform) handlePatchConversation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	sessions := p.sessionsOrReload()
-	s := p.findOwnedConversation(sessions, user, conversationID)
+	s := p.findConversationInChannel(sessions, channel, conversationID)
 	if s == nil {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
@@ -138,34 +141,13 @@ func (p *Platform) handlePatchConversation(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func (p *Platform) handleDeleteConversation(w http.ResponseWriter, r *http.Request, conversationID string) {
-	if r.Method != http.MethodDelete {
-		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
-		return
-	}
-	user, ok := p.resolveUser(w, r, true)
-	if !ok {
-		return
-	}
-	if p.sessionsOrReload() == nil {
-		writeErr(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	sessions := p.sessionsOrReload()
-	if !p.sessionOwnedByUser(sessions, user, conversationID) {
-		writeErr(w, http.StatusNotFound, "not found")
-		return
-	}
-	if !sessions.DeleteByID(conversationID) {
-		writeErr(w, http.StatusNotFound, "not found")
-		return
-	}
-	writeOK(w, http.StatusOK, map[string]string{"result": "success"})
-}
-
 func (p *Platform) handleConversationMessages(w http.ResponseWriter, r *http.Request, conversationID string) {
 	if r.Method != http.MethodGet {
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
+		return
+	}
+	channel, ok := p.resolveChannel(w, r)
+	if !ok {
 		return
 	}
 	sessions := p.sessionsOrReload()
@@ -173,7 +155,7 @@ func (p *Platform) handleConversationMessages(w http.ResponseWriter, r *http.Req
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	s := p.findConversation(sessions, conversationID)
+	s := p.findConversationInChannel(sessions, channel, conversationID)
 	if s == nil {
 		writeErr(w, http.StatusNotFound, "not found")
 		return

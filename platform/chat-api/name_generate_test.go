@@ -11,10 +11,10 @@ import (
 	"github.com/chenhg5/cc-connect/core"
 )
 
-func TestGetConversationDetailRequiresOwner(t *testing.T) {
+func TestGetConversationDetailWrongChannelNotFound(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	sm := bindTestSessions(t, p)
-	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
+	s, err := sm.NewSessionWithID(testChannelSessionKey(), "conv1", "default")
 	if err != nil {
 		t.Fatalf("NewSessionWithID: %v", err)
 	}
@@ -23,8 +23,7 @@ func TestGetConversationDetailRequiresOwner(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+s.ID, nil)
 	req.Header.Set("Authorization", "Bearer secret")
-	req.Header.Set("X-Chat-API-User", "other")
-	req.Header.Set("X-Chat-API-Channel", testChannel)
+	req.Header.Set("X-Chat-API-Channel", "other-channel")
 	rec := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -35,7 +34,7 @@ func TestGetConversationDetailRequiresOwner(t *testing.T) {
 func TestGetConversationDetailReturnsView(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	sm := bindTestSessions(t, p)
-	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "my chat")
+	s, err := sm.NewSessionWithID(testChannelSessionKey(), "conv1", "my chat")
 	if err != nil {
 		t.Fatalf("NewSessionWithID: %v", err)
 	}
@@ -69,7 +68,7 @@ func TestGetConversationDetailReturnsView(t *testing.T) {
 func TestGenerateConversationNameAsync(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	sm := bindTestSessions(t, p)
-	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
+	s, err := sm.NewSessionWithID(testChannelSessionKey(), "conv1", "default")
 	if err != nil {
 		t.Fatalf("NewSessionWithID: %v", err)
 	}
@@ -129,7 +128,7 @@ func TestGenerateConversationNameUsesDedicatedModel(t *testing.T) {
 		"name_model":             "cheap-model",
 	})
 	sm := bindTestSessions(t, p)
-	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
+	s, err := sm.NewSessionWithID(testChannelSessionKey(), "conv1", "default")
 	if err != nil {
 		t.Fatalf("NewSessionWithID: %v", err)
 	}
@@ -173,7 +172,7 @@ func TestGenerateConversationNameFallsBackToHeuristicWhenProviderFails(t *testin
 		"name_model":             "cheap-model",
 	})
 	sm := bindTestSessions(t, p)
-	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
+	s, err := sm.NewSessionWithID(testChannelSessionKey(), "conv1", "default")
 	if err != nil {
 		t.Fatalf("NewSessionWithID: %v", err)
 	}
@@ -226,7 +225,7 @@ func TestGenerateConversationNameUsesClaudeMessagesAPI(t *testing.T) {
 		"name_model":             "claude-haiku",
 	})
 	sm := bindTestSessions(t, p)
-	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
+	s, err := sm.NewSessionWithID(testChannelSessionKey(), "conv1", "default")
 	if err != nil {
 		t.Fatalf("NewSessionWithID: %v", err)
 	}
@@ -259,7 +258,7 @@ func TestGenerateConversationNameUsesClaudeMessagesAPI(t *testing.T) {
 func TestGenerateConversationNameSkipsWhenNamedUnlessForce(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	sm := bindTestSessions(t, p)
-	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "manual name")
+	s, err := sm.NewSessionWithID(testChannelSessionKey(), "conv1", "manual name")
 	if err != nil {
 		t.Fatalf("NewSessionWithID: %v", err)
 	}

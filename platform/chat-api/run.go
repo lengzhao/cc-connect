@@ -257,13 +257,6 @@ func (r *runState) mergeToolCallsLocked(tools []streamToolCall) {
 	}
 }
 
-func (r *runState) enqueueToolResult(res streamToolResult) {
-	r.mu.Lock()
-	r.pendingToolResults = append(r.pendingToolResults, res)
-	r.mu.Unlock()
-	r.signal()
-}
-
 func (r *runState) enqueueEvent(name string, payload any) {
 	r.mu.Lock()
 	r.pendingEvents = append(r.pendingEvents, pendingSSEEvent{name: name, payload: payload})
@@ -674,15 +667,6 @@ func (s *pendingStore) setStreamContent(id, content string) bool {
 		return false
 	}
 	run.applyCardContent(content)
-	return true
-}
-
-func (s *pendingStore) enqueueToolResult(id string, res streamToolResult) bool {
-	run := s.get(id)
-	if run == nil {
-		return false
-	}
-	run.enqueueToolResult(res)
 	return true
 }
 

@@ -29,12 +29,20 @@ func (p *Platform) handleRunRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Platform) handleCancelRun(w http.ResponseWriter, r *http.Request, runID string) {
+	channel, ok := p.resolveChannel(w, r)
+	if !ok {
+		return
+	}
 	user, ok := p.resolveUser(w, r, true)
 	if !ok {
 		return
 	}
 	run := p.pending.get(runID)
 	if run == nil || run.user != user {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if run.channelKey != channel {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}

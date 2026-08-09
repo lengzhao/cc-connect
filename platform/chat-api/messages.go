@@ -231,11 +231,11 @@ func paginateMessages(items []historyMessage, cursor string, limit int) ([]histo
 	return page, hasMore, nextCursor, nil
 }
 
-func (p *Platform) sessionOwnedByUser(sessions *core.SessionManager, user, conversationID string) bool {
+func (p *Platform) sessionInChannel(sessions *core.SessionManager, channel, conversationID string) bool {
 	if sessions == nil {
 		return false
 	}
-	key := sessionKeyForUser(user)
+	key := sessionKeyForChannel(channel)
 	for _, s := range sessions.ListSessions(key) {
 		if s.ID == conversationID {
 			return true
@@ -244,15 +244,8 @@ func (p *Platform) sessionOwnedByUser(sessions *core.SessionManager, user, conve
 	return false
 }
 
-func (p *Platform) findConversation(sessions *core.SessionManager, conversationID string) *core.Session {
-	if sessions == nil {
-		return nil
-	}
-	return sessions.FindByID(conversationID)
-}
-
-func (p *Platform) findOwnedConversation(sessions *core.SessionManager, user, conversationID string) *core.Session {
-	if !p.sessionOwnedByUser(sessions, user, conversationID) {
+func (p *Platform) findConversationInChannel(sessions *core.SessionManager, channel, conversationID string) *core.Session {
+	if !p.sessionInChannel(sessions, channel, conversationID) {
 		return nil
 	}
 	return sessions.FindByID(conversationID)

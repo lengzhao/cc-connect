@@ -128,10 +128,8 @@ func e2eRequestWithHeaders(t *testing.T, method, url, token, user string, header
 	if user != "" {
 		req.Header.Set("X-Chat-API-User", user)
 	}
-	if user != "" && method == http.MethodPost && strings.Contains(url, "/chat-messages") {
-		if req.Header.Get("X-Chat-API-Channel") == "" {
-			req.Header.Set("X-Chat-API-Channel", "e2e-channel")
-		}
+	if req.Header.Get("X-Chat-API-Channel") == "" {
+		req.Header.Set("X-Chat-API-Channel", "e2e-channel")
 	}
 	if accept != "" {
 		req.Header.Set("Accept", accept)
@@ -319,7 +317,7 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 	}
 
 	// 3. History (wait briefly for engine to persist assistant turn)
-	waitForHistory(t, base, token, convID, 2)
+	waitForHistory(t, base, token, "e2e-channel", convID, 2)
 
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
 	if resp.StatusCode != http.StatusOK {
@@ -372,7 +370,7 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 		t.Fatalf("continue SSE missing message_end: %s", raw)
 	}
 
-	waitForHistory(t, base, token, convID, 4)
+	waitForHistory(t, base, token, "e2e-channel", convID, 4)
 
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
 	var hist2 struct {
@@ -396,23 +394,6 @@ func TestE2ELocalChatAPIFlow(t *testing.T) {
 	_ = json.Unmarshal([]byte(raw), &listResp)
 	if listResp.Data.Conversations[0].Name != "E2E 测试会话" {
 		t.Fatalf("renamed name = %q", listResp.Data.Conversations[0].Name)
-	}
-
-	// 6. Delete
-	resp, raw = e2eRequest(t, http.MethodDelete, base+"/conversations/"+convID, token, user, nil, "")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("delete status = %d body=%s", resp.StatusCode, raw)
-	}
-
-	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations?limit=20", token, user, nil, "")
-	_ = json.Unmarshal([]byte(raw), &listResp)
-	if len(listResp.Data.Conversations) != 0 {
-		t.Fatalf("after delete conversations = %+v", listResp.Data.Conversations)
-	}
-
-	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("deleted messages status = %d, want 404", resp.StatusCode)
 	}
 }
 
@@ -488,7 +469,7 @@ func TestE2ELocalChatAPIAgentContextInjection(t *testing.T) {
 		t.Fatalf("agent prompt missing context: %q", prompt)
 	}
 
-	waitForHistory(t, base, "e2e-token", convID, 2)
+	waitForHistory(t, base, "e2e-token", "e2e-channel", convID, 2)
 	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", "e2e-token", "", nil, "")
 	var hist struct {
 		Data struct {
@@ -542,9 +523,9 @@ func TestE2ELocalChatAPIMultiWorkspaceChannelHistory(t *testing.T) {
 		t.Fatalf("missing conversation_id in SSE: %s", raw)
 	}
 
-	waitForHistory(t, base, token, convID, 2)
+	waitForHistory(t, base, token, channel, convID, 2)
 
-	resp, raw = e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
+	resp, raw = e2eRequestWithHeaders(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", headers, nil, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("messages status = %d body=%s", resp.StatusCode, raw)
 	}
@@ -792,11 +773,12 @@ func TestE2ELocalChatAPIMultiWorkspaceConventionMatchExistingChannelDir(t *testi
 	}
 }
 
-func waitForHistory(t *testing.T, base, token, convID string, want int) {
+func waitForHistory(t *testing.T, base, token, channel, convID string, want int) {
 	t.Helper()
+	headers := map[string]string{"X-Chat-API-Channel": channel}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, raw := e2eRequest(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", nil, "")
+		resp, raw := e2eRequestWithHeaders(t, http.MethodGet, base+"/conversations/"+convID+"/messages?limit=20", token, "", headers, nil, "")
 		if resp.StatusCode != http.StatusOK {
 			time.Sleep(50 * time.Millisecond)
 			continue

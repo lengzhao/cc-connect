@@ -31,6 +31,7 @@ type chatInput struct {
 	Type           string `json:"type"`
 	TransferMethod string `json:"transfer_method"`
 	Data           string `json:"data"`
+	UploadFileID   string `json:"upload_file_id"`
 	MimeType       string `json:"mime_type"`
 	Filename       string `json:"filename"`
 }
@@ -104,7 +105,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionKey := sessionKeyForUser(user)
+	sessionKey := sessionKeyForChannel(channelKey)
 	var session *core.Session
 	implicitCreate := strings.TrimSpace(body.ConversationID) == ""
 	if implicitCreate {
@@ -120,15 +121,14 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, "internal error")
 			return
 		}
+		session.SetCreatedBy(user)
 	} else {
-		session = sessions.FindByID(body.ConversationID)
+		session = p.findConversationInChannel(sessions, channelKey, body.ConversationID)
 		if session == nil {
 			writeErr(w, http.StatusNotFound, "not found")
 			return
 		}
-		if p.sessionOwnedByUser(sessions, user, body.ConversationID) {
-			_, _ = sessions.SwitchSession(sessionKey, body.ConversationID)
-		}
+		_, _ = sessions.SwitchSession(sessionKey, body.ConversationID)
 	}
 	engineSessionKey := engineSessionKey(channelKey, session.ID)
 	sessions.BindActiveSession(engineSessionKey, session.ID)
@@ -138,10 +138,13 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	images, files, audio, err := inputsToCore(body.Inputs)
+	images, files, audio, uploadPaths, err := p.inputsToCore(channelKey, body.Inputs)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request")
 		return
+	}
+	if len(uploadPaths) > 0 {
+		query = core.AppendFileRefs(query, uploadPaths)
 	}
 
 	turnIndex := countCompletedTurns(session.GetHistory(0))
@@ -413,46 +416,6 @@ func replaceDeltaPayload(messageID, curr string) map[string]any {
 		"text", truncateForLog(curr, logContentLimit),
 	)
 	return map[string]any{"message_id": messageID, "text": curr, "replace": true}
-}
-
-func inputsToCore(inputs []chatInput) ([]core.ImageAttachment, []core.FileAttachment, *core.AudioAttachment, error) {
-	var images []core.ImageAttachment
-	var files []core.FileAttachment
-	var audio *core.AudioAttachment
-	for _, in := range inputs {
-		if !strings.EqualFold(in.TransferMethod, "base64") {
-			return nil, nil, nil, fmt.Errorf("unsupported transfer_method")
-		}
-		data, err := base64.StdEncoding.DecodeString(in.Data)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		switch strings.ToLower(in.Type) {
-		case "image":
-			images = append(images, core.ImageAttachment{
-				MimeType: in.MimeType,
-				Data:     data,
-				FileName: in.Filename,
-			})
-		case "file":
-			files = append(files, core.FileAttachment{
-				MimeType: in.MimeType,
-				Data:     data,
-				FileName: in.Filename,
-			})
-		case "audio":
-			if audio != nil {
-				return nil, nil, nil, fmt.Errorf("only one audio input supported")
-			}
-			audio = &core.AudioAttachment{
-				MimeType: in.MimeType,
-				Data:     data,
-			}
-		default:
-			return nil, nil, nil, fmt.Errorf("unsupported input type")
-		}
-	}
-	return images, files, audio, nil
 }
 
 func newRunID() string {

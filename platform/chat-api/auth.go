@@ -157,6 +157,6 @@ func validChannel(channel string) bool {
 	return true
 }
 
-func sessionKeyForUser(user string) string {
-	return "chat-api:" + user
+func sessionKeyForChannel(channel string) string {
+	return "chat-api:" + channel
 }

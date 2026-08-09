@@ -20,6 +20,7 @@ const ContinueSession = "__continue__"
 type Session struct {
 	ID                  string   `json:"id"`
 	Name                string   `json:"name"`
+	CreatedBy           string   `json:"created_by,omitempty"`
 	AgentSessionID      string   `json:"agent_session_id"`
 	AgentType           string   `json:"agent_type,omitempty"`
 	PastAgentSessionIDs []string `json:"past_agent_session_ids,omitempty"`
@@ -321,6 +322,9 @@ type SessionManager struct {
 	userMeta      map[string]*UserMeta // sessionKey → display info
 	counter       int64
 	storePath     string // empty = no persistence
+	storeCfg      SessionStoreConfig
+	channelStore  *jsonlChannelStore
+	persistSnap   map[string]sessionPersistSnap
 
 	// legacyData is true when sessions were loaded from a snapshot that
 	// predates PastAgentSessionIDs tracking. In this state, many sessions
@@ -433,6 +437,12 @@ func (sm *SessionManager) NewSideSession(userKey, name string) *Session {
 
 func (sm *SessionManager) createLocked(userKey, name string) *Session {
 	return sm.createLockedWithID(userKey, sm.nextID(), name)
+}
+
+func (s *Session) SetCreatedBy(user string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.CreatedBy = user
 }
 
 func (sm *SessionManager) createLockedWithID(userKey, id, name string) *Session {
@@ -694,7 +704,35 @@ func (sm *SessionManager) Save() {
 }
 
 func (sm *SessionManager) saveLocked() {
+	if sm.storePath == "" && !sm.storeCfg.usesJSONLChannel() {
+		return
+	}
+
+	if sm.storeCfg.usesJSONLChannel() {
+		sm.appendJSONLChannelDeltas()
+	}
+
 	if sm.storePath == "" {
+		return
+	}
+
+	if sm.storeCfg.usesJSONLChannel() {
+		snap := sm.snapshotExcludingChannelKeys()
+		data, err := json.MarshalIndent(snap, "", "  ")
+		if err != nil {
+			slog.Error("session: failed to marshal", "error", err)
+			return
+		}
+		if len(snap.Sessions) == 0 && len(snap.UserSessions) == 0 {
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(sm.storePath), 0o755); err != nil {
+			slog.Error("session: failed to create dir", "error", err)
+			return
+		}
+		if err := AtomicWriteFile(sm.storePath, data, 0o644); err != nil {
+			slog.Error("session: failed to write", "path", sm.storePath, "error", err)
+		}
 		return
 	}
 
@@ -710,6 +748,7 @@ func (sm *SessionManager) saveLocked() {
 		snapSessions[id] = &Session{
 			ID:                  s.ID,
 			Name:                s.Name,
+			CreatedBy:           s.CreatedBy,
 			AgentSessionID:      agentSID,
 			AgentType:           s.AgentType,
 			PastAgentSessionIDs: append([]string(nil), s.PastAgentSessionIDs...),

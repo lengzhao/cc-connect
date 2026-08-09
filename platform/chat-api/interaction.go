@@ -227,6 +227,10 @@ func (p *Platform) onInteractionTimeout(runID, interactionID string) {
 }
 
 func (p *Platform) handleRespondInteraction(w http.ResponseWriter, r *http.Request, runID, interactionID string) {
+	channel, ok := p.resolveChannel(w, r)
+	if !ok {
+		return
+	}
 	user, ok := p.resolveUser(w, r, true)
 	if !ok {
 		return
@@ -234,6 +238,10 @@ func (p *Platform) handleRespondInteraction(w http.ResponseWriter, r *http.Reque
 
 	run := p.pending.get(runID)
 	if run == nil || run.user != user {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if run.channelKey != channel {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}

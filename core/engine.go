@@ -1388,7 +1388,14 @@ func (e *Engine) SetDataDir(dir string) {
 	e.dataDir = dir
 }
 
-// RemoveCommand removes a custom command by name. Returns false if not found.
+// SetSessionStoreConfig enables optional JSONL channel-sharded session persistence.
+func (e *Engine) SetSessionStoreConfig(cfg SessionStoreConfig) {
+	if e.sessions == nil {
+		return
+	}
+	e.sessions.SetStoreConfig(cfg)
+}
+
 func (e *Engine) RemoveCommand(name string) bool {
 	return e.commands.Remove(name)
 }

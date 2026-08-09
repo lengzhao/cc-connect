@@ -473,6 +473,15 @@ type ProjectConfig struct {
 	Name    string `toml:"name"`
 	Mode    string `toml:"mode,omitempty"`     // "" or "multi-workspace"
 	BaseDir string `toml:"base_dir,omitempty"` // parent dir for workspaces
+	// SessionStore overrides the default chat-api JSONL backend ("" or
+	// "jsonl_channel" on chat-api projects). Set "json" to keep monolithic JSON only.
+	SessionStore string `toml:"session_store,omitempty"`
+	// SessionStoreDir overrides the default chat-api records directory
+	// (~/.cc-connect/chat-api/records).
+	SessionStoreDir string `toml:"session_store_dir,omitempty"`
+	// SessionStoreKeyPrefix limits jsonl_channel persistence to session keys
+	// with this prefix (default "chat-api:").
+	SessionStoreKeyPrefix string `toml:"session_store_key_prefix,omitempty"`
 	SkipGit *bool  `toml:"skip_git,omitempty"`
 	// WorkspaceInitAllowLocalPaths allows /workspace init and the conversational
 	// init flow to bind existing local directories. Default false keeps init

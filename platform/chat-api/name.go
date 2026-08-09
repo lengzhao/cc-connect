@@ -30,8 +30,11 @@ func (p *Platform) handleGenerateConversationName(w http.ResponseWriter, r *http
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 		return
 	}
-	user, ok := p.resolveUser(w, r, true)
+	channel, ok := p.resolveChannel(w, r)
 	if !ok {
+		return
+	}
+	if _, ok := p.resolveUser(w, r, true); !ok {
 		return
 	}
 	sessions := p.sessionsOrReload()
@@ -39,7 +42,7 @@ func (p *Platform) handleGenerateConversationName(w http.ResponseWriter, r *http
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	session := p.findOwnedConversation(sessions, user, conversationID)
+	session := p.findConversationInChannel(sessions, channel, conversationID)
 	if session == nil {
 		writeErr(w, http.StatusNotFound, "not found")
 		return

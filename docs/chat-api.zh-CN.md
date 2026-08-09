@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.2.2**（2026-07-21）<br>
+> 版本：**v1.3.0**（2026-08-09）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
 
 ## 1. 概述
 
@@ -11,7 +11,7 @@
 
 **v1 能力**
 
-- 会话列表、重命名、删除
+- 会话列表、重命名（无删除）
 - 会话历史（游标分页）
 - 发送消息：**SSE 流式**（`message` → `thinking_delta?` → `tool_call?` / `tool_result?` → `text_delta` → `message_end`）
 - 用户确认窗口：权限 / AskUserQuestion；公共 respond 字段、`ping` 保活、单槽 supersede
@@ -72,7 +72,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 |----|------|------|
 | 服务 | `Authorization: Bearer <api_token>` | 调用方鉴权（BFF / 后端） |
 | 终端用户 | `user` | 创建者 / 发送者 |
-| 工作区频道 | `channel`（可选） | multi-workspace 绑定键；共享/隔离 `work_dir` |
+| 工作区频道 | `channel`（**必填** header） | multi-workspace 绑定键；SessionManager 分片键 |
 
 > **生产环境必须配置 `api_token`（别名 `token`）。** 未配置时跳过 Bearer 校验。
 
@@ -83,28 +83,33 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | 概念 | 行为 |
 |------|------|
 | 创建 | 首条 `POST /chat-messages` 不带 `conversation_id` |
-| 列表 | `GET /conversations` 仅返回该 user **创建**的会话 |
-| 参与 | 持有 `conversation_id` 即可发消息、读历史（不必在列表中） |
-| Engine | `session_key = chat-api:{channel}:{conversation_id}`（`channel` 省略时入口分配 `default_channel`；`conversation_id` 仍为 API 侧的 `conv_*`） |
-| 工作区 | 可选 `channel` → `Message.ChannelKey`，供 Engine multi-workspace 解析 `work_dir`；未传则使用 `default_channel` → `<base_dir>/default_channel` |
-| 管理 | 重命名 / 删除仅**创建者**（owner）可操作 |
+| 列表 | `GET /conversations` 返回该 **channel** 下全部会话（须 `X-Chat-API-Channel`） |
+| 参与 | 持有 `conversation_id` 且 channel 匹配即可发消息、读历史 |
+| SessionManager | `session_key = chat-api:{channel}`（与 IM 的 `platform:chatID` 同构） |
+| Engine | `session_key = chat-api:{channel}:{conversation_id}` |
+| 工作区 | `channel` → `Message.ChannelKey`，供 Engine multi-workspace 解析 `work_dir` |
+| 管理 | 仅支持 **重命名**（`PATCH`）；不提供删除 API |
 
-`conversation_id` 与 `channel` **正交**：前者决定 agent 对话上下文，后者决定工作目录绑定（同 channel 下多个 conversation 可共享目录）。未传 `X-Chat-API-Channel` 时，API 入口分配 `default_channel`，与显式传入相同，走 `<base_dir>/default_channel` 约定匹配。
+`conversation_id` 在 channel 内创建与管理；跨 channel 访问同一 `conversation_id` 返回 `404`。
 
-在 `mode = "multi-workspace"` 下，`X-Chat-API-Channel`（含默认 `default_channel`）会作为 channel 名称参与 Engine 约定匹配。chat-api 在消息进入 Engine 前会尝试自动初始化：项目级 `base_dir` 会注入为 `cc_base_dir`（也可在 platform options 写 `base_dir`，或设环境变量 `AGENT_WORK_DIR`）；配合 `cc_data_dir`、`cc_project` 时，会创建 `<base_dir>/<channel>` 并写入 `workspace_bindings.json`，普通消息（如 `hi`）可直接进入 agent，而不会被误判为本地目录路径。未配置任何 base_dir 时，行为与 IM 平台一致：目录不存在则进入 workspace 初始化/绑定引导，SSE 会在提示结束后正常返回 `message_end`。
+**`X-Chat-API-Channel` 为所有 REST 接口必填**（含列表、读历史、cancel、interaction respond）。缺省返回 `400 channel required`。
+
+在 `mode = "multi-workspace"` 下，`X-Chat-API-Channel` 作为 channel 名称参与 Engine 约定匹配。chat-api 在消息进入 Engine 前会尝试自动初始化：项目级 `base_dir` 会注入为 `cc_base_dir`（也可在 platform options 写 `base_dir`，或设环境变量 `AGENT_WORK_DIR`）；配合 `cc_data_dir`、`cc_project` 时，会创建 `<base_dir>/<channel>` 并写入 `workspace_bindings.json`，普通消息（如 `hi`）可直接进入 agent，而不会被误判为本地目录路径。未配置任何 base_dir 时，行为与 IM 平台一致：目录不存在则进入 workspace 初始化/绑定引导，SSE 会在提示结束后正常返回 `message_end`。
+
+**多副本持久化**：含 `chat-api` 平台的项目**默认**启用 channel 分片 JSONL 存储，目录为 `~/.cc-connect/chat-api/records/`（无需配置）。仅需 monolithic JSON 时可设 `session_store = "json"`；自定义目录可设 `session_store_dir`（详见 [channel 会话存储设计](./plans/2026-08-09-chat-api-channel-session-store-design.md)）。
 
 **`user` 传递**
 
-| 场景 | 需要 `user`？ | 方式 |
-|------|---------------|------|
-| `GET /conversations` | 是 | `user_header` 或 `?user=` |
-| `GET …/messages` | 否 | `api_token` + `conversation_id` |
-| `POST /chat-messages` | 是 | `user_header` |
-| `PATCH` / `DELETE` | 是（须 owner） | `user_header` |
-| `POST …/cancel` | 是（须发起者） | `user_header` |
-| `POST …/interactions/…/respond` | 是（须发起者） | `user_header` |
+| 场景 | 需要 `user`？ | 需要 `channel`？ |
+|------|---------------|------------------|
+| `GET /conversations` | 否 | 是 |
+| `GET …/messages` | 否 | 是 |
+| `POST /chat-messages` | 是 | 是 |
+| `PATCH` | 是 | 是 |
+| `POST …/cancel` | 是 | 是 |
+| `POST …/interactions/…/respond` | 是 | 是 |
 
-默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（可选，仅 `POST /chat-messages` 读取；cancel / interaction respond 使用 run 内保存的 channel）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`；路径段不得为 `.` / `..` / 空，且不得以 `/` 开头或结尾（段内允许 `a.b` 这类点号）。省略时入口分配 `default_channel`。
+默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（**必填**）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`；路径段不得为 `.` / `..` / 空，且不得以 `/` 开头或结尾（段内允许 `a.b` 这类点号）。
 
 历史按轮次返回 `user_id` / `user_name`（有记录时）。v1 不返回 `owner_id`。
 
@@ -125,7 +130,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | HTTP | `error` | 说明 |
 |------|---------|------|
 | 401 | `unauthorized` | Token 无效 |
-| 400 | `user required` | 缺少 user |
+| 400 | `channel required` | 缺少 channel header |
 | 400 | `invalid request` | 参数错误 |
 | 400 | `exactly one of decision, option_id, option_ids, answer required` | 确认回传字段互斥/缺省 |
 | 400 | `invalid decision` / `unknown option` | 确认回传内容无效 |
@@ -326,6 +331,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 | `tool_call` | `message_id`, `tool_call_id`, `name`, `input?` | 工具调用（可选） |
 | `tool_result` | `message_id`, `tool_call_id`, `name?`, `status?`, `exit_code?`, `success?`, `output?` | 工具结果（可选） |
 | `text_delta` | `message_id`, `text`, `replace?` | 正文增量（不含工具 markdown）；`replace:true` 时客户端应丢弃已有缓冲并整体替换 |
+| `file_ready` | `message_id`, `file_id`, `filename`, `mime_type`, `size` | Agent 产出文件可下载（§4.10） |
 | `permission_request` | 见 §3.5 | 工具权限确认窗口 |
 | `question_request` | 见 §3.5 | AskUserQuestion 确认窗口 |
 | `interaction_superseded` | `interaction_id`, `replacement_id`, `run_id`, `message_id` | 同一 run 上新确认替换旧确认 |
@@ -356,6 +362,8 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 
 ### 3.4 Input（多模态）
 
+**base64 直传**
+
 ```json
 {
   "type": "image",
@@ -366,7 +374,17 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 }
 ```
 
-`transfer_method` 仅支持 `base64`。`type`：`image` | `file` | `audio`（audio 每请求最多一条）。
+**引用已上传文件**（见 §4.10）
+
+```json
+{
+  "type": "file",
+  "transfer_method": "local_file",
+  "upload_file_id": "file_abc..."
+}
+```
+
+`transfer_method`：`base64`（默认）| `local_file`。`type`：`image` | `file` | `audio`（audio 每请求最多一条）。
 
 ### 3.5 用户确认窗口
 
@@ -553,31 +571,25 @@ Content-Type: application/json
 
 ```http
 PATCH /conversations/{conversation_id}
+X-Chat-API-Channel: project-a
 X-Chat-API-User: user_001
 Content-Type: application/json
 
 {"name": "代码解释"}
 ```
 
-须 owner。响应 `data`：`id`、`name`、`updated_at`。
+会话须属于该 channel。响应 `data`：`id`、`name`、`updated_at`。
 
-### 4.5 删除
-
-```http
-DELETE /conversations/{conversation_id}
-X-Chat-API-User: user_001
-```
-
-须 owner。`{"ok": true, "data": {"result": "success"}}`
-
-### 4.6 历史消息
+### 4.5 历史消息
 
 ```http
 GET /conversations/{conversation_id}/messages?limit=20
+X-Chat-API-Channel: project-a
 GET /conversations/{conversation_id}/messages?cursor=s1a2b3c:5&limit=20
+X-Chat-API-Channel: project-a
 ```
 
-持有 `conversation_id` 即可，不需要 `user`。
+持有 `conversation_id` 且 channel 匹配即可，不需要 `user`。
 
 ```json
 {
@@ -674,6 +686,99 @@ Content-Type: application/json
 
 响应成功后，原 SSE 可发送 `interaction_ack`，随后 agent 继续输出 `thinking_delta` / `text_delta`，最终 `message_end`。确认回执**不会**提前结束轮次。
 
+### 4.10 文件上传 / 下载
+
+文件按 **workspace**（由 `X-Chat-API-Channel` 对应 `base_dir/<channel>`）隔离。上传/下载接口**必须**携带 `X-Chat-API-Channel`。
+
+| 来源 | 磁盘路径 | 说明 |
+|------|----------|------|
+| 客户端上传 | `{workspace}/uploads/` | Agent 可直接读取；`local_file` 引用时不复制到 attachments |
+| Agent 发送（`FileSender`） | `{workspace}/.cc-connect/chat-api/download/` | SSE `file_ready` 通知；客户端再 `GET /files/{id}` 下载 |
+
+**列表**
+
+```http
+GET /files?kind=all&limit=20
+X-Chat-API-Channel: team-alpha/backend
+Authorization: Bearer <api_token>
+```
+
+`kind`：`upload`（客户端上传）| `download`（Agent 产出）| `all`（默认）。按 `created_at` 降序；分页参数 `limit` / `cursor` / `has_more` / `next_cursor` 与会话列表一致。
+
+```json
+{
+  "ok": true,
+  "data": {
+    "limit": 20,
+    "has_more": false,
+    "files": [
+      {
+        "id": "file_abc123",
+        "kind": "upload",
+        "filename": "report.pdf",
+        "mime_type": "application/pdf",
+        "size": 12345,
+        "created_at": 1780000000,
+        "user_id": "user_001"
+      },
+      {
+        "id": "file_def456",
+        "kind": "download",
+        "filename": "out.html",
+        "mime_type": "text/html",
+        "size": 4096,
+        "created_at": 1780000001
+      }
+    ]
+  }
+}
+```
+
+**上传**
+
+```http
+POST /files
+X-Chat-API-User: user_001
+X-Chat-API-Channel: team-alpha/backend
+Content-Type: multipart/form-data
+
+file=<binary>
+```
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": "file_abc123",
+    "filename": "report.pdf",
+    "mime_type": "application/pdf",
+    "size": 12345,
+    "created_at": 1780000000
+  }
+}
+```
+
+**下载**
+
+```http
+GET /files/{file_id}
+X-Chat-API-Channel: team-alpha/backend
+Authorization: Bearer <api_token>
+```
+
+返回原始文件字节。会在 `uploads/` 与 `.cc-connect/chat-api/download/` 中查找。
+
+**Agent 产出文件（SSE）**
+
+```text
+event: file_ready
+data: {"message_id":"conv:1","file_id":"file_xyz","filename":"out.html","mime_type":"text/html","size":4096}
+```
+
+单文件上限 `max_upload_size`（默认 `50MiB`）。需配置项目 `base_dir`（multi-workspace），否则文件 API 返回 `500`。
+
+详见 [文件上传设计](./plans/2026-08-09-chat-api-file-upload-design.md)。
+
 ---
 
 ## 5. 接口清单
@@ -684,11 +789,13 @@ Content-Type: application/json
 | `GET` | `/conversations/{id}` | 会话详情 |
 | `POST` | `/conversations/{id}/name/generate` | 异步生成 name |
 | `PATCH` | `/conversations/{id}` | 重命名 |
-| `DELETE` | `/conversations/{id}` | 删除 |
 | `GET` | `/conversations/{id}/messages` | 历史 |
 | `POST` | `/chat-messages` | 发消息（SSE） |
 | `POST` | `/runs/{run_id}/cancel` | 取消轮次 |
 | `POST` | `/runs/{run_id}/interactions/{interaction_id}/respond` | 响应确认窗口 |
+| `GET` | `/files` | 列表（upload / download） |
+| `POST` | `/files` | 上传文件 |
+| `GET` | `/files/{file_id}` | 下载文件 |
 
 **v1 不提供**：`POST /conversations`、`response_mode=blocking`、历史附件 replay、`/health`。
 
@@ -753,6 +860,7 @@ task_id = "X-Task-ID"
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
 | `max_runs` | `1000` | 内存 pending run 上限 |
 | `run_ttl` | `2h` | run 记录 TTL |
+| `max_upload_size` | `50MiB` | 单文件 multipart 上传上限 |
 
 会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态（确认窗口不支持多副本共享）。
 
@@ -762,6 +870,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.3.0 | 2026-08-09 | 文件 API：上传至 workspace `uploads/`、Agent `FileSender` 写入 `.cc-connect/chat-api/download/`、SSE `file_ready`；需 `X-Chat-API-Channel` |
 | v1.2.2 | 2026-07-21 | SSE `text_delta`/`thinking_delta` 支持可选 `replace`；流式卡片解析不再因答案内 `---` 截断；Engine 双写 `StructuredStreamingCard` 事件后 chat-api 优先走结构化路径 |
 | v1.2.1 | 2026-07-21 | 新增 `forward_headers`：白名单入站 header 仅进 hooks（对齐 a2a） |
 | v1.2.0 | 2026-07-16 | 新增会话详情、异步 Name 生成及 `auto_generate_name_mode` |
