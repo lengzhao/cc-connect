@@ -1042,6 +1042,33 @@ func TestInteractionSuperseded(t *testing.T) {
 	<-done
 }
 
+func TestCardPlainText_AppendsNavHints(t *testing.T) {
+	card := core.NewCard().
+		Title("cc-connect 帮助", "blue").
+		ButtonsEqual(
+			core.PrimaryBtn("会话管理", "nav:/help session"),
+			core.DefaultBtn("Agent 配置", "nav:/help agent"),
+		).
+		ButtonsEqual(
+			core.DefaultBtn("工具与自动化", "nav:/help tools"),
+			core.DefaultBtn("系统", "nav:/help system"),
+		).
+		ListItem("**/list**  列出会话", "▶", "nav:/list").
+		ListItem("**/new**  创建新会话", "▶", "act:/new").
+		Build()
+
+	text := cardPlainText(card)
+	if !strings.Contains(text, "[会话管理]") || !strings.Contains(text, "**/new**") {
+		t.Fatalf("unexpected body: %q", text)
+	}
+	if !strings.Contains(text, "切换分组: /help session · /help agent · /help tools · /help system") {
+		t.Fatalf("missing nav hints: %q", text)
+	}
+	if strings.Contains(text, "/list") && strings.Contains(text, "切换分组:") && strings.Contains(text, "· /list") {
+		t.Fatalf("help nav hints must not include command actions: %q", text)
+	}
+}
+
 func TestPlainCardDoesNotEmitQuestionRequest(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
 	bindTestSessions(t, p)

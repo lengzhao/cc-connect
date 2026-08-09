@@ -126,7 +126,7 @@ func (p *Platform) emitCardInteraction(replyTo any, card *core.Card) error {
 		return p.emitInteraction(rc, kind, prompt, actions, multiSelect)
 	}
 	// Cards without structured askq/perm buttons are plain text — do not invent a confirmation window.
-	return p.Reply(context.Background(), replyTo, card.RenderText())
+	return p.Reply(context.Background(), replyTo, cardPlainText(card))
 }
 
 func publicActionID(id string) string {
@@ -449,4 +449,47 @@ func (p *Platform) dispatchInteractionContent(run *runState, interactionID, cont
 		ReplyCtx:             rc,
 		IsPermissionResponse: isPermission,
 	})
+}
+
+// cardPlainText renders a card as SSE plain text. Reuses core.Card.RenderText() and
+// appends nav tab hints when the card carries nav: actions (e.g. /help sections).
+func cardPlainText(card *core.Card) string {
+	text := strings.TrimRight(card.RenderText(), "\n")
+	if hints := collectNavHints(card); len(hints) > 0 {
+		text += "\n\n切换分组: " + strings.Join(hints, " · ")
+	}
+	return text
+}
+
+func collectNavHints(card *core.Card) []string {
+	if card == nil {
+		return nil
+	}
+	var hints []string
+	seen := make(map[string]struct{})
+	for _, row := range card.CollectButtons() {
+		for _, btn := range row {
+			value := strings.TrimSpace(btn.Data)
+			if !strings.HasPrefix(value, "nav:") {
+				continue
+			}
+			cmd := strings.TrimSpace(strings.TrimPrefix(value, "nav:"))
+			if cmd == "" {
+				continue
+			}
+			if !strings.HasPrefix(cmd, "/") {
+				cmd = "/" + cmd
+			}
+			// Help tabs only — ignore per-command nav actions like nav:/list.
+			if !strings.HasPrefix(cmd, "/help ") {
+				continue
+			}
+			if _, ok := seen[cmd]; ok {
+				continue
+			}
+			seen[cmd] = struct{}{}
+			hints = append(hints, cmd)
+		}
+	}
+	return hints
 }
