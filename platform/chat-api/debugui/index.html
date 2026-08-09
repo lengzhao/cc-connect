@@ -185,6 +185,70 @@
       line-height: 1.4;
     }
 
+    .file-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    .file-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+      align-items: start;
+      padding: 8px 10px;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .file-item.attached { border-color: var(--accent); }
+    .file-item .info { min-width: 0; }
+    .file-item .fname {
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .file-item .fmeta {
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.35;
+      margin-top: 2px;
+      word-break: break-all;
+    }
+    .file-item .factions { display: flex; flex-direction: column; gap: 4px; }
+    .file-item .factions button { padding: 4px 8px; font-size: 10px; }
+
+    .attach-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 0;
+    }
+    .attach-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--accent-dim);
+      background: rgba(47, 211, 200, 0.08);
+      font-size: 11px;
+      color: var(--accent);
+    }
+    .attach-chip button {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      padding: 0 2px;
+      font-size: 12px;
+      line-height: 1;
+    }
+    .bubble.file-out {
+      align-self: flex-start;
+      border-color: #2a4a4a;
+      background: #101a1a;
+    }
+    .bubble.file-out a {
+      color: var(--accent);
+      word-break: break-all;
+    }
+
     .chat {
       display: grid;
       grid-template-rows: 1fr auto;
@@ -438,8 +502,30 @@
             <input id="userName" value="Local Tester" />
           </div>
         </div>
-        <label>Channel (optional)</label>
-        <input id="channel" placeholder="team-alpha/backend" />
+        <label>Channel</label>
+        <input id="channel" placeholder="team-alpha/backend" required />
+
+        <details class="advanced" open>
+          <summary>Files</summary>
+          <div class="row" style="margin-top:8px">
+            <div>
+              <label>Kind</label>
+              <select id="fileKind">
+                <option value="all">all</option>
+                <option value="upload">upload</option>
+                <option value="download">download</option>
+              </select>
+            </div>
+            <div style="display:flex;align-items:flex-end">
+              <button type="button" id="btnRefreshFiles" style="width:100%">刷新列表</button>
+            </div>
+          </div>
+          <input type="file" id="filePicker" multiple style="display:none" />
+          <div class="btn-row">
+            <button type="button" id="btnPickFiles" class="primary">上传文件</button>
+          </div>
+          <div id="fileList" class="file-list"></div>
+        </details>
 
         <details class="advanced" open>
           <summary>AgentContext headers</summary>
@@ -485,6 +571,7 @@
     <main class="chat">
       <div id="messages" class="messages"></div>
       <div class="composer">
+        <div id="attachChips" class="attach-chips"></div>
         <textarea id="query" rows="3" placeholder="输入消息… Enter 发送，Shift+Enter 换行"></textarea>
         <div class="composer-actions">
           <div class="left">
@@ -531,6 +618,8 @@
       activeStreams: 0,
       activeInteractionId: null,
       interactionRunId: null,
+      pendingFiles: [],
+      cachedFiles: [],
     };
 
     const fields = ["baseUrl", "token", "userId", "userName", "channel", "lang", "taskId", "traceId", "tenantId"];
@@ -628,6 +717,175 @@
       $("messages").appendChild(el);
       $("messages").scrollTop = $("messages").scrollHeight;
       return { el, body };
+    }
+
+    function requireChannel() {
+      const channel = $("channel").value.trim();
+      if (!channel) {
+        alert("请先填写 Channel（X-Chat-API-Channel）");
+        return "";
+      }
+      return channel;
+    }
+
+    function renderAttachChips() {
+      const wrap = $("attachChips");
+      wrap.innerHTML = "";
+      for (const f of state.pendingFiles) {
+        const chip = document.createElement("span");
+        chip.className = "attach-chip";
+        chip.innerHTML = `<span>${escapeHtml(f.filename || f.id)}</span>`;
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.textContent = "×";
+        rm.title = "移除附件";
+        rm.addEventListener("click", () => {
+          state.pendingFiles = state.pendingFiles.filter((x) => x.id !== f.id);
+          renderAttachChips();
+          renderFileList();
+        });
+        chip.appendChild(rm);
+        wrap.appendChild(chip);
+      }
+    }
+
+    function isAttached(fileId) {
+      return state.pendingFiles.some((f) => f.id === fileId);
+    }
+
+    function toggleAttach(file) {
+      if (isAttached(file.id)) {
+        state.pendingFiles = state.pendingFiles.filter((f) => f.id !== file.id);
+      } else {
+        state.pendingFiles.push({ id: file.id, filename: file.filename });
+      }
+      renderAttachChips();
+      renderFileList();
+    }
+
+    function renderFileList(files) {
+      if (files) state.cachedFiles = files;
+      const list = $("fileList");
+      list.innerHTML = "";
+      for (const f of state.cachedFiles || []) {
+        const row = document.createElement("div");
+        row.className = "file-item" + (isAttached(f.id) ? " attached" : "");
+        const kind = f.kind || "?";
+        const size = f.size != null ? f.size + " B" : "";
+        row.innerHTML = `<div class="info">
+          <div class="fname">${escapeHtml(f.filename || f.id)}</div>
+          <div class="fmeta">${escapeHtml(kind)} · ${escapeHtml(f.mime_type || "")}${size ? " · " + escapeHtml(size) : ""}<br/>${escapeHtml(f.id)}</div>
+        </div>`;
+        const actions = document.createElement("div");
+        actions.className = "factions";
+        const btnDl = document.createElement("button");
+        btnDl.type = "button";
+        btnDl.textContent = "下载";
+        btnDl.addEventListener("click", () => downloadFile(f.id, f.filename).catch(console.error));
+        actions.appendChild(btnDl);
+        if (kind === "upload") {
+          const btnAt = document.createElement("button");
+          btnAt.type = "button";
+          btnAt.textContent = isAttached(f.id) ? "已附加" : "附加";
+          btnAt.addEventListener("click", () => toggleAttach(f));
+          actions.appendChild(btnAt);
+        }
+        row.appendChild(actions);
+        list.appendChild(row);
+      }
+    }
+
+    async function refreshFiles() {
+      if (!requireChannel()) return;
+      const kind = $("fileKind").value || "all";
+      const res = await fetch(`${apiBase()}/files?kind=${encodeURIComponent(kind)}&limit=50`, {
+        headers: authHeaders(),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        addBubble("sys", "list files failed: " + JSON.stringify(json));
+        return;
+      }
+      renderFileList(json.data.files || []);
+    }
+
+    async function uploadFiles(fileList) {
+      if (!requireChannel()) return;
+      if (!fileList || !fileList.length) return;
+      for (const file of fileList) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch(`${apiBase()}/files`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: fd,
+        });
+        const json = await res.json().catch(() => ({}));
+        logSSE("upload", json, res.ok ? "" : "err");
+        if (!res.ok || !json.ok) {
+          addBubble("sys", `upload failed (${file.name}): ` + (json.error || res.status));
+          continue;
+        }
+        const meta = json.data || {};
+        addBubble("sys", `uploaded: ${meta.filename || file.name} → ${meta.id}`);
+        if (meta.id) {
+          state.pendingFiles.push({ id: meta.id, filename: meta.filename || file.name });
+        }
+      }
+      renderAttachChips();
+      await refreshFiles();
+    }
+
+    async function downloadFile(fileId, filename) {
+      if (!requireChannel()) return;
+      const res = await fetch(`${apiBase()}/files/${encodeURIComponent(fileId)}`, {
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        addBubble("sys", `download failed: HTTP ${res.status} ${text}`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename || fileId;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function addFileReadyBubble(data) {
+      const el = document.createElement("div");
+      el.className = "bubble file-out";
+      const tag = document.createElement("div");
+      tag.className = "tag";
+      tag.textContent = "file_ready";
+      el.appendChild(tag);
+      const body = document.createElement("div");
+      body.className = "body";
+      const name = data.filename || data.file_id || "file";
+      body.textContent = name;
+      if (data.size != null) {
+        const meta = document.createElement("div");
+        meta.style.marginTop = "6px";
+        meta.style.color = "var(--muted)";
+        meta.style.fontSize = "11px";
+        meta.textContent = `${data.mime_type || ""} · ${data.size} B · ${data.file_id || ""}`.trim();
+        body.appendChild(meta);
+      }
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "下载";
+      btn.style.marginTop = "8px";
+      btn.addEventListener("click", () => downloadFile(data.file_id, data.filename).catch(console.error));
+      body.appendChild(btn);
+      el.appendChild(body);
+      $("messages").appendChild(el);
+      $("messages").scrollTop = $("messages").scrollHeight;
+      refreshFiles().catch(() => {});
     }
 
     async function ping() {
@@ -763,7 +1021,11 @@
       const parallel = state.sending && !!state.activeInteractionId;
       if (state.sending && !parallel) return;
       const query = $("query").value.trim();
-      if (!query) return;
+      if (!query && !state.pendingFiles.length) return;
+      if (!requireChannel()) return;
+
+      const sentAttachments = state.pendingFiles.slice();
+      const effectiveQuery = query || (sentAttachments.length ? "请分析附件文件。" : "");
 
       saveConfig();
       if (!parallel) {
@@ -780,7 +1042,10 @@
       const interactionBubbles = new Map();
       const primaryRunId = state.runId;
 
-      addBubble("user", query, $("userId").value.trim() || "user");
+      addBubble("user", effectiveQuery, $("userId").value.trim() || "user");
+      if (sentAttachments.length) {
+        addBubble("sys", "attachments: " + sentAttachments.map((f) => f.filename || f.id).join(", "));
+      }
       if (parallel) {
         addBubble("sys", "并行发送中（用于验证：question 期间新 POST chat-messages）");
       }
@@ -996,11 +1261,18 @@
       }
 
       const body = {
-        query,
+        query: effectiveQuery,
         auto_generate_name: true,
         metadata: { source: "chat-api-debug-ui" },
       };
       if (state.conversationId) body.conversation_id = state.conversationId;
+      if (sentAttachments.length) {
+        body.inputs = sentAttachments.map((f) => ({
+          type: "file",
+          transfer_method: "local_file",
+          upload_file_id: f.id,
+        }));
+      }
 
       const controller = new AbortController();
       state.abort = controller;
@@ -1035,6 +1307,11 @@
           buf = parseSSEChunk(buf, (event, data) => {
             logSSE(event, data, event === "error" ? "err" : event === "message_queued" || event === "ping" ? "warn" : "");
             if (event === "message") {
+              if (sentAttachments.length) {
+                state.pendingFiles = [];
+                renderAttachChips();
+                renderFileList();
+              }
               if (data.conversation_id) {
                 state.conversationId = data.conversation_id;
                 setConvLabel();
@@ -1080,6 +1357,8 @@
               else answer += data.text || "";
               answerBubble.body.textContent = answer;
               $("messages").scrollTop = $("messages").scrollHeight;
+            } else if (event === "file_ready") {
+              addFileReadyBubble(data);
             } else if (event === "permission_request" || event === "question_request") {
               renderInteraction(event, data);
             } else if (event === "interaction_superseded") {
@@ -1136,6 +1415,14 @@
       }
     }
 
+    $("btnRefreshFiles").addEventListener("click", () => refreshFiles().catch(console.error));
+    $("fileKind").addEventListener("change", () => refreshFiles().catch(console.error));
+    $("btnPickFiles").addEventListener("click", () => $("filePicker").click());
+    $("filePicker").addEventListener("change", (e) => {
+      const files = e.target.files;
+      if (files && files.length) uploadFiles(Array.from(files)).catch(console.error);
+      e.target.value = "";
+    });
     $("btnSave").addEventListener("click", () => { saveConfig(); ping(); });
     $("btnHealth").addEventListener("click", ping);
     $("btnRefresh").addEventListener("click", () => refreshConversations().catch(console.error));
@@ -1166,7 +1453,7 @@
     loadConfig();
     setConvLabel();
     ping().then((ok) => {
-      if (ok) return refreshConversations();
+      if (ok) return Promise.all([refreshConversations(), refreshFiles()]);
     }).then(() => {
       if (state.conversationId) return openConversation(state.conversationId);
     }).catch(console.error);

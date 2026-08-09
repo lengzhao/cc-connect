@@ -58,6 +58,12 @@ func TestDebugUIServesPage(t *testing.T) {
 	if !strings.Contains(html, `id="btnIxClose"`) || !strings.Contains(html, "unlockComposer") {
 		t.Fatalf("debug UI must allow hiding confirmation modal to send a parallel chat-messages")
 	}
+	if !strings.Contains(html, `id="btnPickFiles"`) || !strings.Contains(html, "file_ready") {
+		t.Fatalf("debug UI must support file upload/download")
+	}
+	if !strings.Contains(html, "refreshFiles") || !strings.Contains(html, "downloadFile") {
+		t.Fatalf("debug UI must implement file list and download helpers")
+	}
 	// Debug page itself must not require auth (otherwise hard to open).
 	if rec.Header().Get("Content-Type") == "" || !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("content-type = %q", rec.Header().Get("Content-Type"))
