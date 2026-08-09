@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.21 (2026-08-09)
+
+### Changed
+- **chat-api default channel**: omitting `X-Chat-API-Channel` no longer assigns shared `default_channel`; the API falls back to `user` as channel (`session_key = chat-api:{user}:{conversation_id}`, workspace `<base_dir>/<user>`) so each user gets an isolated workspace.
+
 ## v9.1.20 (2026-08-08)
 
 ### Added
