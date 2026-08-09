@@ -6596,7 +6596,7 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 	case "cancel":
 		e.cmdCancel(p, msg)
 	case "help":
-		e.cmdHelp(p, msg)
+		e.cmdHelp(p, msg, args)
 	case "start":
 		e.cmdStart(p, msg)
 	case "version":
@@ -9299,12 +9299,16 @@ func langDisplayName(lang Language) string {
 	}
 }
 
-func (e *Engine) cmdHelp(p Platform, msg *Message) {
+func (e *Engine) cmdHelp(p Platform, msg *Message, args []string) {
 	if !supportsCards(p) {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgHelp))
 		return
 	}
-	e.replyWithCard(p, msg.ReplyCtx, e.renderHelpCard())
+	groupKey := defaultHelpGroup
+	if len(args) > 0 {
+		groupKey = strings.ToLower(strings.TrimSpace(args[0]))
+	}
+	e.replyWithCard(p, msg.ReplyCtx, e.renderHelpGroupCard(groupKey))
 }
 
 // cmdStart handles the `/start` slash command.
@@ -9469,8 +9473,53 @@ func (e *Engine) renderHelpGroupCard(groupKey string) *Card {
 	for _, item := range current.items {
 		cb.ListItem(commandText(item.command), "▶", item.action)
 	}
+	if current.key == defaultHelpGroup {
+		if customs := e.helpCustomCommandsForHelp(); len(customs) > 0 {
+			cb.Divider()
+			cb.Markdown(e.i18n.T(MsgHelpCustomCommandsHeader))
+			for _, c := range customs {
+				cb.ListItem(e.customCommandHelpText(c), "▶", "cmd:/"+c.Name)
+			}
+		}
+	}
 	cb.Note(e.i18n.T(MsgHelpTip))
 	return cb.Build()
+}
+
+func (e *Engine) helpCustomCommandsForHelp() []*CustomCommand {
+	e.userRolesMu.RLock()
+	disabledCmds := e.disabledCmds
+	e.userRolesMu.RUnlock()
+
+	var out []*CustomCommand
+	for _, c := range e.commands.ListAll() {
+		if disabledCmds[strings.ToLower(c.Name)] {
+			continue
+		}
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out
+}
+
+func (e *Engine) customCommandHelpText(c *CustomCommand) string {
+	desc := c.Description
+	if desc == "" {
+		if c.Exec != "" {
+			desc = "$ " + truncateStr(c.Exec, 60)
+		} else {
+			desc = truncateStr(c.Prompt, 60)
+		}
+	}
+	tag := ""
+	if c.Source == "agent" {
+		tag = e.i18n.T(MsgCommandsTagAgent)
+	} else if c.Exec != "" {
+		tag = e.i18n.T(MsgCommandsTagShell)
+	}
+	return "**/" + c.Name + "**" + tag + "  " + desc
 }
 
 // GetAllCommands returns all available commands for bot menu registration.

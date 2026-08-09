@@ -4141,7 +4141,7 @@ func TestCmdHelp_UsesLegacyTextOnPlatformWithoutCardSupport(t *testing.T) {
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangChinese)
 	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
 
-	e.cmdHelp(p, msg)
+	e.cmdHelp(p, msg, nil)
 
 	if len(p.sent) != 1 {
 		t.Fatalf("sent messages = %d, want 1", len(p.sent))
@@ -6785,6 +6785,92 @@ func TestRenderHelpCard_DefaultsToSessionTab(t *testing.T) {
 	}
 	if strings.Contains(text, "**/model**") {
 		t.Fatalf("default help text = %q, should not include agent commands", text)
+	}
+}
+
+func TestRenderHelpCard_IncludesCustomCommandsOnDefaultTab(t *testing.T) {
+	e := NewEngine("test", &stubAgent{}, []Platform{&stubPlatformEngine{n: "test"}}, "", LangEnglish)
+	e.AddCommand("deploy", "Deploy app", "ship it", "", "", "config")
+	e.AddCommand("push", "Git push", "", "git push", "", "config")
+
+	card := e.renderHelpCard()
+	text := card.RenderText()
+
+	if !strings.Contains(text, "**Custom Commands**") {
+		t.Fatalf("help text = %q, want custom commands section", text)
+	}
+	if !strings.Contains(text, "**/deploy**") || !strings.Contains(text, "Deploy app") {
+		t.Fatalf("help text = %q, want /deploy entry", text)
+	}
+	if !strings.Contains(text, "**/push**") {
+		t.Fatalf("help text = %q, want /push entry", text)
+	}
+	btn, ok := findCardAction(card, "cmd:/deploy")
+	if !ok {
+		t.Fatal("expected cmd:/deploy action on help card")
+	}
+	if btn.Text != "▶" {
+		t.Fatalf("deploy action button = %q", btn.Text)
+	}
+}
+
+func TestRenderHelpCard_CustomCommandsNotOnOtherTabs(t *testing.T) {
+	e := NewEngine("test", &stubAgent{}, []Platform{&stubPlatformEngine{n: "test"}}, "", LangEnglish)
+	e.AddCommand("deploy", "Deploy app", "ship it", "", "", "config")
+
+	card := e.renderHelpGroupCard("agent")
+	text := card.RenderText()
+
+	if strings.Contains(text, "**Custom Commands**") || strings.Contains(text, "**/deploy**") {
+		t.Fatalf("agent help text = %q, should not include custom commands", text)
+	}
+}
+
+func TestCmdHelp_GroupArgRendersGroupCard(t *testing.T) {
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
+
+	e.cmdHelp(p, msg, []string{"agent"})
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.repliedCards) != 1 {
+		t.Fatalf("replied cards = %d, want 1", len(p.repliedCards))
+	}
+	text := p.repliedCards[0].RenderText()
+	if !strings.Contains(text, "**/model**") {
+		t.Fatalf("agent help text = %q, want agent commands", text)
+	}
+	if strings.Contains(text, "**/new**") {
+		t.Fatalf("agent help text = %q, should not include session commands", text)
+	}
+	btn, ok := findCardAction(p.repliedCards[0], "nav:/help agent")
+	if !ok || btn.Type != "primary" {
+		t.Fatalf("agent tab should be primary, card = %#v", p.repliedCards[0])
+	}
+}
+
+func TestHandleCommand_HelpGroupArg(t *testing.T) {
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx", UserID: "user1"}
+
+	if !e.handleCommand(p, msg, "/help system") {
+		t.Fatal("expected /help system to be handled as command")
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.repliedCards) != 1 {
+		t.Fatalf("replied cards = %d, want 1", len(p.repliedCards))
+	}
+	text := p.repliedCards[0].RenderText()
+	if !strings.Contains(text, "**/status**") {
+		t.Fatalf("system help text = %q, want system commands", text)
+	}
+	if strings.Contains(text, "**/new**") {
+		t.Fatalf("system help text = %q, should not include session commands", text)
 	}
 }
 

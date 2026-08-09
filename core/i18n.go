@@ -212,6 +212,7 @@ const (
 	MsgHelpToolsSection          MsgKey = "help_tools_section"
 	MsgHelpSystemSection         MsgKey = "help_system_section"
 	MsgHelpTip                   MsgKey = "help_tip"
+	MsgHelpCustomCommandsHeader  MsgKey = "help_custom_commands_header"
 	MsgListTitle                 MsgKey = "list_title"
 	MsgListTitlePaged            MsgKey = "list_title_paged"
 	MsgListEmpty                 MsgKey = "list_empty"
@@ -1393,6 +1394,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "提示：命令支持前綴匹配，如 /pro l = /provider list",
 		LangJapanese:           "ヒント：コマンドはプレフィックスマッチに対応、例: /pro l = /provider list",
 		LangSpanish:            "Consejo: Los comandos admiten coincidencia por prefijo, ej. /pro l = /provider list",
+	},
+	MsgHelpCustomCommandsHeader: {
+		LangEnglish:            "**Custom Commands**",
+		LangChinese:            "**自定义命令**",
+		LangTraditionalChinese: "**自訂命令**",
+		LangJapanese:           "**カスタムコマンド**",
+		LangSpanish:            "**Comandos personalizados**",
 	},
 	MsgListTitle: {
 		LangEnglish:            "**%s Sessions** (%d)\n\n",
