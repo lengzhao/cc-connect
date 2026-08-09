@@ -1,5 +1,18 @@
 ﻿# Changelog
 
+## v9.1.22 (2026-08-09)
+
+### Added
+- **chat-api per-user flat session storage**: sessions are sharded under `sessions/{project}/users/{user}/` with `conversations.json` index and append-only `{conversation_id}.jsonl` message files; legacy `sessions.json` is migrated on first load.
+- **SessionManager persistence hooks**: `SetSaveHook`, `ExportSnapshot`, and `ImportSnapshot` let platforms plug in custom backends without changing core session logic.
+- **Engine user-sharded sessions**: platforms implementing `UserShardedSessionStore` route slash commands to the correct per-user session manager.
+
+### Changed
+- **chat-api `/help` on non-navigable platforms**: falls back to plain-text help when the platform supports cards but not in-place card navigation (e.g. chat-api).
+
+### Fixed
+- **chat-api flat history clear**: `ClearHistory` now removes or rewrites the conversation jsonl so cleared history does not reappear after reload.
+
 ## v9.1.21 (2026-08-09)
 
 ### Changed
