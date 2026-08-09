@@ -68,7 +68,7 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	channelKey = p.channelKeyForMessage(channelKey)
+	channelKey = channelKeyForMessage(channelKey, user)
 	accept := r.Header.Get("Accept")
 	if accept != "" && !strings.Contains(accept, "text/event-stream") && !strings.Contains(accept, "*/*") {
 		writeErr(w, http.StatusBadRequest, "invalid request")

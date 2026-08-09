@@ -8,8 +8,8 @@ func TestEngineSessionKey(t *testing.T) {
 		conv    string
 		want    string
 	}{
-		{defaultWorkspaceChannelID, "conv_abc123", "chat-api:default_channel:conv_abc123"},
-		{"", "conv_abc123", "chat-api:default_channel:conv_abc123"},
+		{"default_channel", "conv_abc123", "chat-api:default_channel:conv_abc123"},
+		{"", "conv_abc123", "chat-api::conv_abc123"},
 		{"chat-123", "conv_abc123", "chat-api:chat-123:conv_abc123"},
 		{"team/backend", "conv_abc123", "chat-api:team/backend:conv_abc123"},
 		{"team:alpha", "conv_abc123", "chat-api:team%3Aalpha:conv_abc123"},
@@ -23,9 +23,11 @@ func TestEngineSessionKey(t *testing.T) {
 
 func TestConversationIDFromEngineSessionKey(t *testing.T) {
 	conv := "conv_abcdefghijklmnopqrstuv"
-	key := engineSessionKey("chat-123", conv)
-	if got := conversationIDFromEngineSessionKey(key); got != conv {
-		t.Fatalf("got %q, want %q", got, conv)
+	for _, channel := range []string{"chat-123", ""} {
+		key := engineSessionKey(channel, conv)
+		if got := conversationIDFromEngineSessionKey(key); got != conv {
+			t.Fatalf("channel %q: got %q, want %q", channel, got, conv)
+		}
 	}
 	if got := conversationIDFromEngineSessionKey(conv); got != "" {
 		t.Fatalf("bare conv id should not parse, got %q", got)
@@ -34,8 +36,8 @@ func TestConversationIDFromEngineSessionKey(t *testing.T) {
 
 func TestEngineSessionKeyGuestSharesConversation(t *testing.T) {
 	conv := "conv_abcdefghijklmnopqrstuv"
-	ownerKey := engineSessionKey(defaultWorkspaceChannelID, conv)
-	guestKey := engineSessionKey(defaultWorkspaceChannelID, conv)
+	ownerKey := engineSessionKey("", conv)
+	guestKey := engineSessionKey("", conv)
 	if ownerKey != guestKey {
 		t.Fatalf("guest key %q != owner key %q", guestKey, ownerKey)
 	}

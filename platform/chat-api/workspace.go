@@ -2,18 +2,14 @@ package chatapi
 
 import "strings"
 
-// defaultWorkspaceChannelID is assigned at the API entry layer when the client
-// omits X-Chat-API-Channel. It is a real channel (base_dir/default_channel), not
-// a sentinel mapped to the project root.
-const defaultWorkspaceChannelID = "default_channel"
-
-// channelKeyForMessage maps an omitted channel header to the default workspace
-// channel so Engine can convention-match base_dir/<channel>.
-func (p *Platform) channelKeyForMessage(headerChannel string) string {
-	if strings.TrimSpace(headerChannel) != "" {
-		return headerChannel
+// channelKeyForMessage resolves the workspace channel for a chat message.
+// An omitted channel header falls back to userID so each user gets an isolated
+// workspace instead of sharing a global default channel.
+func channelKeyForMessage(headerChannel, userID string) string {
+	if ch := strings.TrimSpace(headerChannel); ch != "" {
+		return ch
 	}
-	return defaultWorkspaceChannelID
+	return userID
 }
 
 // ResolveChannelName implements core.ChannelNameResolver for multi-workspace mode.

@@ -12,9 +12,6 @@ const engineSessionKeyPrefix = "chat-api:"
 // conversation_id (not user_id) so guests sharing a conversation_id reuse the
 // same agent context.
 func engineSessionKey(channelKey, conversationID string) string {
-	if channelKey == "" {
-		channelKey = defaultWorkspaceChannelID
-	}
 	return fmt.Sprintf("%s%s:%s", engineSessionKeyPrefix, encodeSessionChannelSegment(channelKey), conversationID)
 }
 
@@ -31,7 +28,7 @@ func conversationIDFromEngineSessionKey(sessionKey string) string {
 	}
 	rest := strings.TrimPrefix(sessionKey, engineSessionKeyPrefix)
 	idx := strings.LastIndex(rest, ":")
-	if idx <= 0 {
+	if idx < 0 {
 		return ""
 	}
 	convID := rest[idx+1:]

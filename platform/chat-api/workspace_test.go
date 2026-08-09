@@ -11,19 +11,18 @@ import (
 )
 
 func TestChannelKeyForMessage(t *testing.T) {
-	p := &Platform{}
-	if got := p.channelKeyForMessage(""); got != defaultWorkspaceChannelID {
-		t.Fatalf("empty header = %q, want %q", got, defaultWorkspaceChannelID)
+	if got := channelKeyForMessage("", "user_001"); got != "user_001" {
+		t.Fatalf("empty header = %q, want user_001", got)
 	}
-	if got := p.channelKeyForMessage("team/backend"); got != "team/backend" {
+	if got := channelKeyForMessage("team/backend", "user_001"); got != "team/backend" {
 		t.Fatalf("explicit channel = %q", got)
 	}
 }
 
 func TestResolveChannelName(t *testing.T) {
 	p := &Platform{}
-	if got, err := p.ResolveChannelName(defaultWorkspaceChannelID); err != nil || got != defaultWorkspaceChannelID {
-		t.Fatalf("default channel name = %q, %v; want %q", got, err, defaultWorkspaceChannelID)
+	if got, err := p.ResolveChannelName("default_channel"); err != nil || got != "default_channel" {
+		t.Fatalf("explicit default channel name = %q, %v; want default_channel", got, err)
 	}
 	if got, err := p.ResolveChannelName("chat-123"); err != nil || got != "chat-123" {
 		t.Fatalf("explicit channel name = %q, %v; want chat-123", got, err)
@@ -34,10 +33,13 @@ func TestResolveChannelName(t *testing.T) {
 	if got, err := p.ResolveChannelName("../escape"); err != nil || got != "" {
 		t.Fatalf("unsafe channel name = %q, %v; want empty", got, err)
 	}
+	if got, err := p.ResolveChannelName(""); err != nil || got != "" {
+		t.Fatalf("empty channel name = %q, %v; want empty", got, err)
+	}
 }
 
 func TestIsSafeWorkspaceChannelPath(t *testing.T) {
-	valid := []string{"chat-123", "team-alpha/backend", "a.b", "repo_v2", defaultWorkspaceChannelID}
+	valid := []string{"chat-123", "team-alpha/backend", "a.b", "repo_v2", "default_channel"}
 	for _, ch := range valid {
 		if !isSafeWorkspaceChannelPath(ch) {
 			t.Fatalf("%q should be valid", ch)
@@ -51,7 +53,7 @@ func TestIsSafeWorkspaceChannelPath(t *testing.T) {
 	}
 }
 
-func TestChatMessagesUsesDefaultWorkspaceChannelWhenHeaderOmitted(t *testing.T) {
+func TestChatMessagesUsesUserIDAsWorkspaceChannelWhenHeaderOmitted(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{
 		"token": "secret",
 	})
@@ -81,11 +83,11 @@ func TestChatMessagesUsesDefaultWorkspaceChannelWhenHeaderOmitted(t *testing.T) 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if gotChannel != defaultWorkspaceChannelID {
-		t.Fatalf("ChannelKey = %q, want %q", gotChannel, defaultWorkspaceChannelID)
+	if gotChannel != "user_001" {
+		t.Fatalf("ChannelKey = %q, want user_001 when header omitted", gotChannel)
 	}
-	if !strings.HasPrefix(gotSessionKey, "chat-api:"+defaultWorkspaceChannelID+":") {
-		t.Fatalf("SessionKey = %q, want prefix chat-api:%s:", gotSessionKey, defaultWorkspaceChannelID)
+	if !strings.HasPrefix(gotSessionKey, "chat-api:user_001:") {
+		t.Fatalf("SessionKey = %q, want prefix chat-api:user_001:", gotSessionKey)
 	}
 }
 

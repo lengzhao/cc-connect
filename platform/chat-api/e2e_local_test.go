@@ -549,7 +549,7 @@ func TestE2ELocalChatAPIMultiWorkspaceChannelHistory(t *testing.T) {
 	}
 }
 
-func TestE2ELocalChatAPIMultiWorkspaceDefaultWorkDirWithoutChannel(t *testing.T) {
+func TestE2ELocalChatAPIMultiWorkspaceWithoutChannelUsesUserIDAsChannel(t *testing.T) {
 	_, base, _, baseDir := startLocalChatAPIMultiWorkspaceServer(t)
 	const user = "e2e_user"
 	const token = "e2e-token"
@@ -565,15 +565,20 @@ func TestE2ELocalChatAPIMultiWorkspaceDefaultWorkDirWithoutChannel(t *testing.T)
 	if !hasEvent(parseSSEEvents(raw), "message_end") {
 		t.Fatalf("chat SSE missing message_end: %s", raw)
 	}
-	channelDir := filepath.Join(baseDir, defaultWorkspaceChannelID)
-	if st, err := os.Stat(channelDir); err != nil || !st.IsDir() {
-		t.Fatalf("expected auto-created default channel dir %q: %v", channelDir, err)
+	userDir := filepath.Join(baseDir, user)
+	if st, err := os.Stat(userDir); err != nil || !st.IsDir() {
+		t.Fatalf("expected auto-created user channel dir %q: %v", userDir, err)
+	}
+	defaultDir := filepath.Join(baseDir, "default_channel")
+	if _, err := os.Stat(defaultDir); err == nil {
+		t.Fatalf("did not expect shared default channel dir %q when header omitted", defaultDir)
 	}
 }
 
-func TestE2ELocalChatAPIMultiWorkspaceDefaultChannelWithInjectedCCBaseDir(t *testing.T) {
+func TestE2ELocalChatAPIMultiWorkspaceWithoutChannelWithInjectedCCBaseDir(t *testing.T) {
 	// Simulates production: project multi-workspace base_dir is injected as
-	// cc_base_dir; platform options do not duplicate base_dir.
+	// cc_base_dir; without X-Chat-API-Channel the request falls back to user id
+	// as channel and bootstraps <base_dir>/<user>.
 	dataDir := t.TempDir()
 	baseDir := t.TempDir()
 	bindingPath := filepath.Join(dataDir, "workspace_bindings.json")
@@ -621,15 +626,19 @@ func TestE2ELocalChatAPIMultiWorkspaceDefaultChannelWithInjectedCCBaseDir(t *tes
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("chat status = %d body=%s", resp.StatusCode, raw)
 	}
-	if strings.Contains(raw, "此频道未找到工作区") || strings.Contains(raw, "Directory not found") || strings.Contains(raw, "目录不存在") {
+	if strings.Contains(raw, "Directory not found") || strings.Contains(raw, "目录不存在") {
 		t.Fatalf("unexpected workspace init when cc_base_dir is injected: %s", raw)
 	}
 	if !hasEvent(parseSSEEvents(raw), "message_end") {
 		t.Fatalf("chat SSE missing message_end: %s", raw)
 	}
-	channelDir := filepath.Join(baseDir, defaultWorkspaceChannelID)
-	if st, err := os.Stat(channelDir); err != nil || !st.IsDir() {
-		t.Fatalf("expected auto-created default channel dir %q: %v", channelDir, err)
+	userDir := filepath.Join(baseDir, user)
+	if st, err := os.Stat(userDir); err != nil || !st.IsDir() {
+		t.Fatalf("expected auto-created user channel dir %q: %v", userDir, err)
+	}
+	defaultDir := filepath.Join(baseDir, "default_channel")
+	if _, err := os.Stat(defaultDir); err == nil {
+		t.Fatalf("did not expect shared default channel dir %q when header omitted", defaultDir)
 	}
 }
 

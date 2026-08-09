@@ -86,13 +86,13 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | 创建 | 首条 `POST /chat-messages` 不带 `conversation_id`，或 `POST /conversations` 显式创建空会话 |
 | 列表 | `GET /conversations` 仅返回该 user **创建**的会话 |
 | 参与 | 持有 `conversation_id` 即可发消息、读历史（不必在列表中） |
-| Engine | `session_key = chat-api:{channel}:{conversation_id}`（`channel` 省略时入口分配 `default_channel`；`conversation_id` 仍为 API 侧的 `conv_*`） |
-| 工作区 | 可选 `channel` → `Message.ChannelKey`，供 Engine multi-workspace 解析 `work_dir`；未传则使用 `default_channel` → `<base_dir>/default_channel` |
+| Engine | `session_key = chat-api:{channel}:{conversation_id}`（`channel` 省略时回退为 `user`；`conversation_id` 仍为 API 侧的 `conv_*`） |
+| 工作区 | 可选 `channel` → `Message.ChannelKey`，供 Engine multi-workspace 解析 `work_dir`；未传则使用 `user` → `<base_dir>/<user>` |
 | 管理 | 重命名 / 删除仅**创建者**（owner）可操作 |
 
-`conversation_id` 与 `channel` **正交**：前者决定 agent 对话上下文，后者决定工作目录绑定（同 channel 下多个 conversation 可共享目录）。未传 `X-Chat-API-Channel` 时，API 入口分配 `default_channel`，与显式传入相同，走 `<base_dir>/default_channel` 约定匹配。
+`conversation_id` 与 `channel` **正交**：前者决定 agent 对话上下文，后者决定工作目录绑定（同 channel 下多个 conversation 可共享目录）。未传 `X-Chat-API-Channel` 时，API 入口以 `user` 作为 channel（`session_key = chat-api:{user}:{conversation_id}`），每个用户拥有独立工作目录，避免共用 `default_channel`。访客若要与创建者共享同一 agent 上下文，需显式传入与创建者相同的 channel。
 
-在 `mode = "multi-workspace"` 下，`X-Chat-API-Channel`（含默认 `default_channel`）会作为 channel 名称参与 Engine 约定匹配。chat-api 在消息进入 Engine 前会尝试自动初始化：项目级 `base_dir` 会注入为 `cc_base_dir`（也可在 platform options 写 `base_dir`，或设环境变量 `AGENT_WORK_DIR`）；配合 `cc_data_dir`、`cc_project` 时，会创建 `<base_dir>/<channel>` 并写入 `workspace_bindings.json`，普通消息（如 `hi`）可直接进入 agent，而不会被误判为本地目录路径。未配置任何 base_dir 时，行为与 IM 平台一致：目录不存在则进入 workspace 初始化/绑定引导，SSE 会在提示结束后正常返回 `message_end`。
+在 `mode = "multi-workspace"` 下，显式传入的 `X-Chat-API-Channel`（或回退的 `user`）会作为 channel 名称参与 Engine 约定匹配。chat-api 在消息进入 Engine 前会尝试自动初始化：项目级 `base_dir` 会注入为 `cc_base_dir`（也可在 platform options 写 `base_dir`，或设环境变量 `AGENT_WORK_DIR`）；配合 `cc_data_dir`、`cc_project` 时，会创建 `<base_dir>/<channel>` 并写入 `workspace_bindings.json`，普通消息（如 `hi`）可直接进入 agent，而不会被误判为本地目录路径。未配置任何 base_dir 时，行为与 IM 平台一致：目录不存在则进入 workspace 初始化/绑定引导，SSE 会在提示结束后正常返回 `message_end`。
 
 **`user` 传递**
 
@@ -106,7 +106,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | `POST …/cancel` | 是（须发起者） | `user_header` |
 | `POST …/conversations/messages/respond` | 是（须发起者） | `user_header` |
 
-默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（可选，仅 `POST /chat-messages` 读取；cancel / interaction respond 使用 run 内保存的 channel）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`；路径段不得为 `.` / `..` / 空，且不得以 `/` 开头或结尾（段内允许 `a.b` 这类点号）。省略时入口分配 `default_channel`。
+默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（可选，仅 `POST /chat-messages` 读取；cancel / interaction respond 使用 run 内保存的 channel）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`；路径段不得为 `.` / `..` / 空，且不得以 `/` 开头或结尾（段内允许 `a.b` 这类点号）。省略 channel 时回退为 `user`。
 
 历史按轮次返回 `user_id` / `user_name`（有记录时）。v1 不返回 `owner_id`。
 
@@ -724,7 +724,7 @@ Content-Type: application/json
 Accept: text/event-stream
 ```
 
-`X-Chat-API-Channel` 可选。省略时入口分配 `default_channel`（工作目录 `<base_dir>/default_channel`）；填写时写入 Engine `ChannelKey`。非法路径会被拒绝（400）。在 `mode = "multi-workspace"` 下，项目级 `base_dir` 会注入为 platform `cc_base_dir`（也可在 options 显式配置 `base_dir`）；chat-api 会自动创建 `<base_dir>/<channel>` 并持久化绑定。未拿到任何 base_dir 时，行为与 IM 平台一致：目录不存在则进入 workspace 初始化/绑定流程。cancel / interaction 使用 run 内保存的 channel，无需再传 header。
+`X-Chat-API-Channel` 可选。省略时以 `user` 作为 channel（工作目录 `<base_dir>/<user>`）；填写时写入 Engine `ChannelKey`。非法路径会被拒绝（400）。在 `mode = "multi-workspace"` 下，项目级 `base_dir` 会注入为 platform `cc_base_dir`（也可在 options 显式配置 `base_dir`）；chat-api 会自动创建 `<base_dir>/<channel>` 并持久化绑定。未拿到任何 base_dir 时，行为与 IM 平台一致：目录不存在则进入 workspace 初始化/绑定流程。cancel / interaction 使用 run 内保存的 channel，无需再传 header。
 
 请求体与 SSE 见 §3.3。`run_id` 存在时为断链重连（不要求 `query`）。
 

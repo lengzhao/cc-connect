@@ -43,7 +43,7 @@
 - Chat: successful `POST /chat-messages` returns SSE (not JSON envelope)
 - Auth: `Authorization: Bearer <api_token>` (required in production)
 - User: `X-Chat-API-User` on writes; query or header on list/delete
-- Optional `X-Chat-API-Channel` on send for multi-workspace `work_dir` binding (omit → `default_channel`; cancel/respond reuse run channel)
+- Optional `X-Chat-API-Channel` on send for multi-workspace `work_dir` binding (omit → falls back to `user` id; cancel/respond reuse run channel)
 - When `response_header` is configured, all responses include that header (fixed value or from env) for gateway sticky routing
 - `auto_generate_name` applies to newly created conversations; `auto_generate_name_mode` defaults to `heuristic` and may be set to `ai`
 - In `ai` mode, `name_model` selects a separate low-cost model while credentials and endpoint are reused from `name_provider` or the configured project provider; name generation never calls the main Agent and falls back to heuristic naming when no provider is available

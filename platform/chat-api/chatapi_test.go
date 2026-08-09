@@ -316,7 +316,7 @@ func TestSharedChannelGuestCanPostAndRead(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("guest post status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	wantKey := engineSessionKey(defaultWorkspaceChannelID, ownerSession.ID)
+	wantKey := engineSessionKey("user_b", ownerSession.ID)
 	if guestSessionKey != wantKey {
 		t.Fatalf("guest session key = %q, want %q", guestSessionKey, wantKey)
 	}
@@ -601,7 +601,7 @@ func TestChatMessagesImplicitCreate(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("sessions = %d, want 1", len(sessions))
 	}
-	wantKey := engineSessionKey(defaultWorkspaceChannelID, sessions[0].ID)
+	wantKey := engineSessionKey("user_new", sessions[0].ID)
 	if gotKey != wantKey {
 		t.Fatalf("session key = %q, want %q", gotKey, wantKey)
 	}

@@ -54,18 +54,19 @@ func TestEnsureChannelWorkspaceCreatesDirAndBinding(t *testing.T) {
 	}
 }
 
-func TestEnsureChannelWorkspaceCreatesDefaultChannel(t *testing.T) {
+func TestEnsureChannelWorkspaceCreatesExplicitDefaultChannelName(t *testing.T) {
 	dataDir := t.TempDir()
 	baseDir := t.TempDir()
+	const channel = "default_channel"
 	p := &Platform{
 		projectName:           "demo",
 		dataDir:               dataDir,
 		multiWorkspaceBaseDir: baseDir,
 	}
-	if err := p.ensureChannelWorkspace(defaultWorkspaceChannelID); err != nil {
+	if err := p.ensureChannelWorkspace(channel); err != nil {
 		t.Fatalf("ensureChannelWorkspace default: %v", err)
 	}
-	channelDir := filepath.Join(baseDir, defaultWorkspaceChannelID)
+	channelDir := filepath.Join(baseDir, channel)
 	if st, err := os.Stat(channelDir); err != nil || !st.IsDir() {
 		t.Fatalf("default channel dir missing: %v", err)
 	}
@@ -78,8 +79,8 @@ func TestEnsureChannelWorkspaceCreatesDefaultChannel(t *testing.T) {
 	if err := json.Unmarshal(raw, &bindings); err != nil {
 		t.Fatalf("decode bindings: %v", err)
 	}
-	b := bindings["project:demo"]["chat-api:"+defaultWorkspaceChannelID]
-	if b.ChannelName != defaultWorkspaceChannelID || b.Workspace != channelDir {
-		t.Fatalf("binding = %+v, want channel %s workspace %q", b, defaultWorkspaceChannelID, channelDir)
+	b := bindings["project:demo"]["chat-api:"+channel]
+	if b.ChannelName != channel || b.Workspace != channelDir {
+		t.Fatalf("binding = %+v, want channel %s workspace %q", b, channel, channelDir)
 	}
 }
