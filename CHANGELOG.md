@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.23 (2026-08-10)
+
+### Changed
+- **chat-api AI conversation naming**: configure credentials directly with `name_api_key` / `name_base_url` / `name_type` instead of injecting from project agent providers via `name_provider`.
+
 ## v9.1.22 (2026-08-09)
 
 ### Added
