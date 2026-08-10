@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.24 (2026-08-10)
+
+### Changed
+- **chat-api conversation naming**: always apply heuristic name first (query truncation); in `ai` mode, LLM overwrites on success and keeps the heuristic name when the provider fails or credentials are missing.
+
 ## v9.1.23 (2026-08-10)
 
 ### Changed
