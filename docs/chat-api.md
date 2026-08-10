@@ -46,7 +46,7 @@
 - Optional `X-Chat-API-Channel` on send for multi-workspace `work_dir` binding (omit → falls back to `user` id; cancel/respond reuse run channel)
 - When `response_header` is configured, all responses include that header (fixed value or from env) for gateway sticky routing
 - `auto_generate_name` applies to newly created conversations; `auto_generate_name_mode` defaults to `heuristic` and may be set to `ai`
-- In `ai` mode, configure `name_model` with `name_api_key` / `name_base_url` (and optional `name_type`); name generation never calls the main Agent and falls back to heuristic naming when credentials are missing or the request fails
+- In `ai` mode, configure `name_model` with `name_api_key` / `name_base_url` (and optional `name_type`); heuristic name is applied first, then LLM may overwrite it; name generation never calls the main Agent and keeps the heuristic name when credentials are missing or the request fails
 - `message_id`: `{conversation_id}:{turn_index}`
 - Client disconnect does not stop the agent; use cancel endpoint to abort
 - Resume: `POST /chat-messages` with `{"run_id":"..."}` replays the last recoverable event while the turn is still running (on disconnect the cache defaults to `ping`; later detached events overwrite it). If the run still has an unanswered `question_request`, resume also emits a non-blocking `client_flow` with `type: waiting_answer` so the App can restore the confirm UI. If the run is missing, not owned by the user, or already finished, resume returns an empty `message_end` (client may query history). Optional `conversation_id` in the resume body is echoed in that empty `message_end`.

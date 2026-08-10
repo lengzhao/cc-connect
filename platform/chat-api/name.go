@@ -66,45 +66,46 @@ func newNameRunID() string {
 }
 
 func (p *Platform) startAutoNameGeneration(runID string, session *core.Session, sessions *core.SessionManager, query string) {
-	if p.shouldGenerateAIName(query) && p.startProviderNameGeneration(runID, session, sessions, false, query) {
-		return
+	applyHeuristicName(session, sessions, false, query)
+	if p.shouldGenerateAIName(query) {
+		p.startProviderNameGeneration(runID, session, sessions, query, true)
 	}
-	p.startHeuristicNameGeneration(session, sessions, false, query)
 }
 
 func (p *Platform) startManualNameGeneration(runID string, session *core.Session, sessions *core.SessionManager, force bool) {
-	if p.startProviderNameGeneration(runID, session, sessions, force, "") {
-		return
-	}
-	p.startHeuristicNameGeneration(session, sessions, force, "")
+	applyHeuristicName(session, sessions, force, "")
+	p.startProviderNameGeneration(runID, session, sessions, "", true)
 }
 
-func (p *Platform) startProviderNameGeneration(runID string, session *core.Session, sessions *core.SessionManager, force bool, query string) bool {
-	if p.nameModel != "" && p.nameProviderAPIKey != "" {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), defaultNameRequestTimeout)
-			defer cancel()
-			name, err := p.generateNameWithProvider(ctx, buildNamePrompt(session.GetHistory(0), query))
-			if err != nil {
-				slog.Warn("chat-api: name generation failed", "run_id", runID, "error", err)
-				applyGeneratedName(session, sessions, heuristicNameSeed(session, query), force)
-				return
-			}
-			if strings.TrimSpace(name) == "" {
-				applyGeneratedName(session, sessions, heuristicNameSeed(session, query), force)
-				return
-			}
-			applyGeneratedName(session, sessions, name, force)
-		}()
-		return true
-	}
-	return false
+func applyHeuristicName(session *core.Session, sessions *core.SessionManager, force bool, query string) {
+	applyGeneratedName(session, sessions, heuristicNameSeed(session, query), force)
 }
 
-func (p *Platform) startHeuristicNameGeneration(session *core.Session, sessions *core.SessionManager, force bool, query string) {
+func (p *Platform) startProviderNameGeneration(runID string, session *core.Session, sessions *core.SessionManager, query string, heuristicAlreadyApplied bool) bool {
+	if p.nameModel == "" || p.nameProviderAPIKey == "" {
+		return false
+	}
 	go func() {
-		applyGeneratedName(session, sessions, heuristicNameSeed(session, query), force)
+		ctx, cancel := context.WithTimeout(context.Background(), defaultNameRequestTimeout)
+		defer cancel()
+		name, err := p.generateNameWithProvider(ctx, buildNamePrompt(session.GetHistory(0), query))
+		if err != nil {
+			slog.Warn("chat-api: name generation failed", "run_id", runID, "error", err)
+			if !heuristicAlreadyApplied {
+				applyGeneratedName(session, sessions, heuristicNameSeed(session, query), false)
+			}
+			return
+		}
+		if strings.TrimSpace(name) == "" {
+			if !heuristicAlreadyApplied {
+				applyGeneratedName(session, sessions, heuristicNameSeed(session, query), false)
+			}
+			return
+		}
+		session.SetName(name)
+		sessions.Save()
 	}()
+	return true
 }
 
 func heuristicNameSeed(session *core.Session, query string) string {

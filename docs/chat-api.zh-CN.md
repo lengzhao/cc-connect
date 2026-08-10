@@ -225,7 +225,7 @@ message_id = "{conversation_id}:{turn_index}"
 | `query` | 普通发送必填 | 用户文本；与 `run_id` 互斥 |
 | `run_id` | 重连必填 | 断链重连：仅挂载已有 run 的 SSE，不投递新消息、不创建会话 |
 | `inputs` | 否 | 多模态附件（§3.4）；历史不 replay；resume 忽略 |
-| `auto_generate_name` | 否 | 默认 `true`；新会话收到首条 input 后按 `auto_generate_name_mode` 异步生成 name |
+| `auto_generate_name` | 否 | 默认 `true`；新会话收到首条 input 后先同步写入 heuristic name，若 `auto_generate_name_mode=ai` 再异步尝试 LLM 覆盖 |
 | `metadata` | 否 | 传入 hooks，不进 prompt，不在响应中返回；resume 忽略 |
 
 `user` 由 header 提供，不在 body 中。
@@ -887,7 +887,7 @@ task_id = "X-Task-ID"
 | `interaction_timeout` | `10m` | 确认窗口超时；不超过当前 run 剩余 `request_timeout` |
 | `sse_ping_interval` | `15s` | SSE 保活间隔；`0` / `0s` 关闭 |
 | `busy_policy` | `queue` | `queue` 或 `reject` |
-| `auto_generate_name_mode` | `heuristic` | `heuristic` 使用首条 query 截断；`ai` 在收到 input 后异步生成 name，失败则回退 query 截断 |
+| `auto_generate_name_mode` | `heuristic` | `heuristic` 使用首条 query 截断；`ai` 先同步写入 heuristic name，再异步调用 LLM 覆盖，失败则保留 heuristic |
 | `name_type` | `openai` | 独立 name 模型协议类型；支持 `openai` / `openai-compatible` / `claude` |
 | `name_api_key` | 空 | `ai` 模式调用 name 模型的 API key；未配置则回退 heuristic，不调用主 Agent |
 | `name_base_url` | 空 | 可选；按 `name_type` 使用默认端点 |

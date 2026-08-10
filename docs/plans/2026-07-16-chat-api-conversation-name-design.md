@@ -37,7 +37,7 @@
 | `auto_generate_name_mode` | `auto_generate_name=true` 行为 |
 |---------------------------|--------------------------------|
 | `heuristic`（默认） | 首条 query 截断 32 rune（现有行为） |
-| `ai` | 收到新会话首条 input 后立即调用独立 name 模型生成 name |
+| `ai` | 先同步写入 heuristic name，再异步调用独立 name 模型；LLM 成功则覆盖，失败则保留 heuristic name |
 
 手动 `PATCH /conversations/{id}` 优先级最高。`force=false` 的生成不会覆盖已有非 `default` name。
 
@@ -45,12 +45,12 @@
 
 - name 持久化在 `core.Session.Name`。
 - AI name 生成优先使用 `name_model` 直接调用独立 name 模型；通过 `name_api_key` / `name_base_url` 配置凭证与端点，避免占用主 Agent。
-- 显式 `/name/generate` 与自动 name 都不调用 Engine handler / 主 Agent。未配置 `name_api_key` 或请求失败时，异步回退到 query / history 截断 name。
+- 显式 `/name/generate` 与自动 name 都不调用 Engine handler / 主 Agent。两种路径都先同步写入 heuristic name；未配置 `name_api_key` 或 LLM 请求失败时保留已有 heuristic name，不再二次覆盖。
 - name 生成使用独立请求，不占用聊天 SSE run。
 - 默认 `auto_generate_name_mode = "heuristic"`，不改变现有部署体验。
 - `name_type` 默认 `openai`，支持 `openai`、`openai-compatible` 和 `claude`。Claude 使用 `/v1/messages` 协议。
 - `name_model` 选择独立低成本模型；独立 name 请求超时固定为 30 秒。
-- 如果 AI name 失败或凭证未配置，后台任务回退到首条 query / history 截断 name。
+- 如果 AI name 失败或凭证未配置，保留已写入的 heuristic name，不再二次覆盖。
 - 新会话首条 input 少于 8 个字符时固定跳过 AI 请求并直接使用 query name。
 
 ## Docs / migration

@@ -142,7 +142,10 @@ func TestGenerateConversationNameUsesDedicatedModel(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && s.GetName() == "default" {
+	for time.Now().Before(deadline) {
+		if s.GetName() == "轻量代码会话" {
+			break
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	var gotModel string
@@ -242,12 +245,13 @@ func TestGenerateConversationNameUsesClaudeMessagesAPI(t *testing.T) {
 		t.Fatal("claude request was not received")
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && s.GetName() == "default" {
+	for time.Now().Before(deadline) {
+		if s.GetName() == "Claude session" {
+			return
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if s.GetName() != "Claude session" {
-		t.Fatalf("name = %q", s.GetName())
-	}
+	t.Fatalf("name = %q, want Claude session", s.GetName())
 }
 
 func TestGenerateConversationNameSkipsWhenNamedUnlessForce(t *testing.T) {
@@ -295,6 +299,88 @@ func TestShouldGenerateAINameSkipsShortInput(t *testing.T) {
 	if !p.shouldGenerateAIName("请帮我解释这段代码") {
 		t.Fatal("long input should generate AI name")
 	}
+}
+
+func TestAutoNameAIModeAppliesHeuristicFirstThenOverwrites(t *testing.T) {
+	nameReady := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nameReady <- struct{}{}
+		time.Sleep(100 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"AI 生成的标题"}}]}`))
+	}))
+	defer server.Close()
+
+	p := newTestPlatform(t, map[string]any{
+		"token":                   "secret",
+		"auto_generate_name_mode": "ai",
+		"name_api_key":            "provider-key",
+		"name_base_url":           server.URL,
+		"name_model":              "cheap-model",
+	})
+	sm := bindTestSessions(t, p)
+	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
+	if err != nil {
+		t.Fatalf("NewSessionWithID: %v", err)
+	}
+
+	query := "请帮我解释这段代码的结构"
+	p.startAutoNameGeneration(newNameRunID(), s, sm, query)
+
+	if got := s.GetName(); got != autoNameFromQuery(query) {
+		t.Fatalf("immediate name = %q, want heuristic %q", got, autoNameFromQuery(query))
+	}
+
+	select {
+	case <-nameReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider request was not received")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.GetName() == "AI 生成的标题" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("name = %q, want AI title", s.GetName())
+}
+
+func TestAutoNameAIModeKeepsHeuristicWhenProviderFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "provider unavailable", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	p := newTestPlatform(t, map[string]any{
+		"token":                   "secret",
+		"auto_generate_name_mode": "ai",
+		"name_api_key":            "provider-key",
+		"name_base_url":           server.URL,
+		"name_model":              "cheap-model",
+	})
+	sm := bindTestSessions(t, p)
+	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
+	if err != nil {
+		t.Fatalf("NewSessionWithID: %v", err)
+	}
+
+	query := "请帮我解释这段代码的结构"
+	p.startAutoNameGeneration(newNameRunID(), s, sm, query)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		name := s.GetName()
+		if name == autoNameFromQuery(query) {
+			time.Sleep(200 * time.Millisecond)
+			if s.GetName() == autoNameFromQuery(query) {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("name = %q, want heuristic %q", s.GetName(), autoNameFromQuery(query))
 }
 
 func TestSanitizeGeneratedName(t *testing.T) {
