@@ -151,9 +151,9 @@ func New(opts map[string]any) (core.Platform, error) {
 		busyPolicy:                busyPolicy,
 		includeAnswerInMessageEnd: boolOption(opts, "include_answer_in_message_end", false),
 		autoGenerateNameMode:      strings.ToLower(stringOption(opts, "auto_generate_name_mode", autoGenerateNameModeHeuristic)),
-		nameProviderAPIKey:        strings.TrimSpace(stringOption(opts, "name_provider_api_key", "")),
-		nameProviderBaseURL:       strings.TrimSpace(stringOption(opts, "name_provider_base_url", "")),
-		nameProviderType:          strings.ToLower(stringOption(opts, "name_provider_type", defaultNameProviderType)),
+		nameProviderAPIKey:        strings.TrimSpace(stringOption(opts, "name_api_key", "")),
+		nameProviderBaseURL:       strings.TrimSpace(stringOption(opts, "name_base_url", "")),
+		nameProviderType:          strings.ToLower(stringOption(opts, "name_type", defaultNameProviderType)),
 		nameModel:                 strings.TrimSpace(stringOption(opts, "name_model", "")),
 		projectName:               stringOption(opts, "cc_project", ""),
 		pending:                   newPendingStore(maxRuns),
@@ -170,10 +170,10 @@ func New(opts map[string]any) (core.Platform, error) {
 		return nil, errors.New("chat-api: auto_generate_name_mode must be heuristic or ai")
 	}
 	if p.nameProviderType != "openai" && p.nameProviderType != "openai-compatible" && p.nameProviderType != "claude" {
-		return nil, errors.New("chat-api: name_provider_type must be openai, openai-compatible, or claude")
+		return nil, errors.New("chat-api: name_type must be openai, openai-compatible, or claude")
 	}
 	if p.autoGenerateNameMode == autoGenerateNameModeAI && p.nameModel != "" && p.nameProviderAPIKey == "" {
-		slog.Warn("chat-api: name_model configured but provider credentials are unavailable; name generation will fall back to heuristic",
+		slog.Warn("chat-api: name_model configured but name_api_key is unavailable; name generation will fall back to heuristic",
 			"name_model", p.nameModel)
 	}
 	transforms, err := loadToolSSETransforms(stringOption(opts, "tool_sse_transforms_file", ""))

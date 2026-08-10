@@ -848,9 +848,10 @@ interaction_timeout = "10m"
 sse_ping_interval = "15s"
 busy_policy = "queue"
 auto_generate_name_mode = "heuristic"
-# name_provider = ""              # 可选；为空使用项目 Agent provider
-# name_provider_type = ""          # 留空默认 openai；也可使用 openai-compatible / claude
+# name_type = "openai"             # openai | openai-compatible | claude；默认 openai
 # name_model = "gpt-4o-mini"       # 独立低成本 name 模型
+# name_api_key = ""                # AI name 必填；未配置则回退 heuristic
+# name_base_url = ""               # 可选；按 name_type 使用默认端点
 include_answer_in_message_end = false
 max_runs = 1000
 # forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # hooks-only; not agent prompt
@@ -887,9 +888,10 @@ task_id = "X-Task-ID"
 | `sse_ping_interval` | `15s` | SSE 保活间隔；`0` / `0s` 关闭 |
 | `busy_policy` | `queue` | `queue` 或 `reject` |
 | `auto_generate_name_mode` | `heuristic` | `heuristic` 使用首条 query 截断；`ai` 在收到 input 后异步生成 name，失败则回退 query 截断 |
-| `name_provider_type` | `openai` | 独立 name 模型协议类型；支持 `openai` / `openai-compatible` / `claude` |
-| `name_provider` | 当前 Agent provider | `ai` 模式使用的 provider 名称；API key / base_url 复用项目 Agent provider |
-| `name_model` | 空 | `ai` 模式独立低成本模型。未配置独立 provider 时异步回退 query / history 截断，不调用主 Agent |
+| `name_type` | `openai` | 独立 name 模型协议类型；支持 `openai` / `openai-compatible` / `claude` |
+| `name_api_key` | 空 | `ai` 模式调用 name 模型的 API key；未配置则回退 heuristic，不调用主 Agent |
+| `name_base_url` | 空 | 可选；按 `name_type` 使用默认端点 |
+| `name_model` | 空 | `ai` 模式独立低成本模型。未配置 `name_api_key` 时异步回退 query / history 截断 |
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
 | `max_runs` | `1000` | 内存 pending run 上限 |
 | `question_notify_url` | 空 | 断线后产生 `question_request` 时异步 POST 的 BFF URL；空则关闭 |

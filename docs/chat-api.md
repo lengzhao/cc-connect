@@ -46,7 +46,7 @@
 - Optional `X-Chat-API-Channel` on send for multi-workspace `work_dir` binding (omit → falls back to `user` id; cancel/respond reuse run channel)
 - When `response_header` is configured, all responses include that header (fixed value or from env) for gateway sticky routing
 - `auto_generate_name` applies to newly created conversations; `auto_generate_name_mode` defaults to `heuristic` and may be set to `ai`
-- In `ai` mode, `name_model` selects a separate low-cost model while credentials and endpoint are reused from `name_provider` or the configured project provider; name generation never calls the main Agent and falls back to heuristic naming when no provider is available
+- In `ai` mode, configure `name_model` with `name_api_key` / `name_base_url` (and optional `name_type`); name generation never calls the main Agent and falls back to heuristic naming when credentials are missing or the request fails
 - `message_id`: `{conversation_id}:{turn_index}`
 - Client disconnect does not stop the agent; use cancel endpoint to abort
 - Resume: `POST /chat-messages` with `{"run_id":"..."}` replays the last recoverable event while the turn is still running (on disconnect the cache defaults to `ping`; later detached events overwrite it). If the run still has an unanswered `question_request`, resume also emits a non-blocking `client_flow` with `type: waiting_answer` so the App can restore the confirm UI. If the run is missing, not owned by the user, or already finished, resume returns an empty `message_end` (client may query history). Optional `conversation_id` in the resume body is echoed in that empty `message_end`.
@@ -79,9 +79,10 @@ path = "/v1/"
 api_token = "your-service-token"
 busy_policy = "queue"
 auto_generate_name_mode = "heuristic"
-name_provider = "" # optional; empty uses project agent provider
+name_type = "openai" # openai | openai-compatible | claude
 name_model = "gpt-4o-mini"
-name_provider_type = "openai" # openai | openai-compatible | claude
+name_api_key = ""
+name_base_url = ""
 interaction_timeout = "10m"
 sse_ping_interval = "15s"
 # question_notify_url = "https://bff.example.com/cc-connect/question-notify"

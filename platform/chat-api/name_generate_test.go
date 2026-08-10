@@ -120,10 +120,10 @@ func TestGenerateConversationNameUsesDedicatedModel(t *testing.T) {
 	defer server.Close()
 
 	p := newTestPlatform(t, map[string]any{
-		"token":                  "secret",
-		"name_provider_api_key":  "provider-key",
-		"name_provider_base_url": server.URL,
-		"name_model":             "cheap-model",
+		"token":         "secret",
+		"name_api_key":  "provider-key",
+		"name_base_url": server.URL,
+		"name_model":    "cheap-model",
 	})
 	sm := bindTestSessions(t, p)
 	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
@@ -163,10 +163,10 @@ func TestGenerateConversationNameFallsBackToHeuristicWhenProviderFails(t *testin
 	defer server.Close()
 
 	p := newTestPlatform(t, map[string]any{
-		"token":                  "secret",
-		"name_provider_api_key":  "provider-key",
-		"name_provider_base_url": server.URL,
-		"name_model":             "cheap-model",
+		"token":         "secret",
+		"name_api_key":  "provider-key",
+		"name_base_url": server.URL,
+		"name_model":    "cheap-model",
 	})
 	sm := bindTestSessions(t, p)
 	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")
@@ -214,11 +214,11 @@ func TestGenerateConversationNameUsesClaudeMessagesAPI(t *testing.T) {
 	defer server.Close()
 
 	p := newTestPlatform(t, map[string]any{
-		"token":                  "secret",
-		"name_provider_type":     "claude",
-		"name_provider_api_key":  "provider-key",
-		"name_provider_base_url": server.URL,
-		"name_model":             "claude-haiku",
+		"token":         "secret",
+		"name_type":     "claude",
+		"name_api_key":  "provider-key",
+		"name_base_url": server.URL,
+		"name_model":    "claude-haiku",
 	})
 	sm := bindTestSessions(t, p)
 	s, err := sm.NewSessionWithID("chat-api:owner", "conv1", "default")

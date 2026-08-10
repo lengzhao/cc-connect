@@ -54,7 +54,7 @@ func TestE2E_AIAutoNameDoesNotQueueFirstChatMessage(t *testing.T) {
 		"token":                   "e2e-token",
 		"path":                    "/v1/",
 		"auto_generate_name_mode": "ai",
-		// No name_provider_api_key: must not fall back to agent on the chat session.
+		// No name_api_key: must not fall back to agent on the chat session.
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
