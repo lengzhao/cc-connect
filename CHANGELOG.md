@@ -1,5 +1,11 @@
 ﻿# Changelog
 
+## v9.1.25 (2026-08-11)
+
+### Added
+- **chat-api HTTP access logging**: log each v1 API request/response for latency triage; request includes semantic `user` / `channel` / `trace_id` / `task` (from configured headers), body capped at 300 bytes; response logs `status` and `duration_ms` only.
+- **chat-api `discard_sse_replace`**: optional config to drop `text_delta` / `thinking_delta` frames that would use `replace:true` for append-only SSE clients.
+
 ## v9.1.24 (2026-08-10)
 
 ### Changed
