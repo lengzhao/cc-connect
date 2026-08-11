@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.26 (2026-08-11)
+
+### Changed
+- **chat-api HTTP access logging**: include `trace_id` in response logs when present on the request, so latency lines can be correlated by business trace id without pairing request/response by `request_id`.
+
 ## v9.1.25 (2026-08-11)
 
 ### Added
