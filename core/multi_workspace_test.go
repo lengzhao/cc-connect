@@ -637,6 +637,59 @@ func TestMultiWorkspaceAgent_PropagatesAskUserSupport(t *testing.T) {
 	}
 }
 
+// TestMultiWorkspaceAgent_PropagatesAppendSystemPrompt is a regression guard
+// for the bug where multi-workspace lazily created agents lost
+// append_system_prompt because WorkspaceAgentOptionSnapshotter omitted it.
+func TestMultiWorkspaceAgent_PropagatesAppendSystemPrompt(t *testing.T) {
+	baseDir := t.TempDir()
+	workspaceDir := filepath.Join(baseDir, "loader")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	agentName := "append-prompt-propagation-test-agent"
+	var capturedOpts []map[string]any
+	RegisterAgent(agentName, func(opts map[string]any) (Agent, error) {
+		snapshot := make(map[string]any, len(opts))
+		for k, v := range opts {
+			snapshot[k] = v
+		}
+		capturedOpts = append(capturedOpts, snapshot)
+		return &namedTestAgent{name: agentName}, nil
+	})
+
+	parent := &namedStubWorkspaceOptionAgent{
+		namedStubModelModeAgent: namedStubModelModeAgent{
+			name: agentName,
+		},
+		opts: map[string]any{
+			"append_system_prompt": "PROBE_PERSONA_MARKER 你是 Ambre。",
+			"system_prompt":        "custom system",
+			"cc_data_dir":          "/tmp/cc-data",
+		},
+	}
+	e := NewEngine("test", parent, nil, "", LangEnglish)
+	e.SetMultiWorkspace(baseDir, filepath.Join(t.TempDir(), "bindings.json"))
+
+	if _, _, err := e.getOrCreateWorkspaceAgent(workspaceDir); err != nil {
+		t.Fatalf("getOrCreateWorkspaceAgent: %v", err)
+	}
+	if len(capturedOpts) != 1 {
+		t.Fatalf("expected exactly 1 CreateAgent call, got %d", len(capturedOpts))
+	}
+	opts := capturedOpts[0]
+
+	if got, _ := opts["append_system_prompt"].(string); got != "PROBE_PERSONA_MARKER 你是 Ambre。" {
+		t.Errorf("append_system_prompt propagated = %q, want persona marker", got)
+	}
+	if got, _ := opts["system_prompt"].(string); got != "custom system" {
+		t.Errorf("system_prompt propagated = %q, want custom system", got)
+	}
+	if got, _ := opts["cc_data_dir"].(string); got != "/tmp/cc-data" {
+		t.Errorf("cc_data_dir propagated = %q, want /tmp/cc-data", got)
+	}
+}
+
 // TestMultiWorkspaceAgent_NoPropagationWhenParentHasNoRunAs verifies that
 // workspace agents do not get spurious run_as_user or run_as_env entries
 // when the parent agent does not report them. This is the "isolation not

@@ -926,6 +926,15 @@ func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	if len(a.pluginDirs) > 0 {
 		opts["plugin_dir"] = stringsToAny(a.pluginDirs)
 	}
+	if a.systemPrompt != "" {
+		opts["system_prompt"] = a.systemPrompt
+	}
+	if a.appendSystemPrompt != "" {
+		opts["append_system_prompt"] = a.appendSystemPrompt
+	}
+	if a.ccDataDir != "" {
+		opts["cc_data_dir"] = a.ccDataDir
+	}
 	return opts
 }
 

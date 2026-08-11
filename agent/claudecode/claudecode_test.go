@@ -722,31 +722,37 @@ func TestWorkspaceAgentOptions_FullSnapshot(t *testing.T) {
 	// PATH. WorkspaceAgentOptions only reads fields that the production
 	// New() also writes; this just verifies the snapshot shape.
 	a := &Agent{
-		cmd:              "my-cli",
-		cliExtraArgs:     []string{"--add-dir", "/parent"},
-		cmdArgsFlag:      "-a",
-		model:            "claude-opus-4-7",
-		reasoningEffort:  "high",
-		mode:             "acceptEdits",
-		allowedTools:     []string{"Edit", "Read"},
-		disallowedTools:  []string{"Bash"},
-		maxContextTokens: 200000,
-		routerURL:        "http://127.0.0.1:3456",
-		routerAPIKey:     "secret",
+		cmd:                "my-cli",
+		cliExtraArgs:       []string{"--add-dir", "/parent"},
+		cmdArgsFlag:        "-a",
+		model:              "claude-opus-4-7",
+		reasoningEffort:    "high",
+		mode:               "acceptEdits",
+		allowedTools:       []string{"Edit", "Read"},
+		disallowedTools:    []string{"Bash"},
+		maxContextTokens:   200000,
+		routerURL:          "http://127.0.0.1:3456",
+		routerAPIKey:       "secret",
+		systemPrompt:       "custom system",
+		appendSystemPrompt: "PROBE_PERSONA_MARKER",
+		ccDataDir:          "/tmp/cc-data",
 	}
 	got := a.WorkspaceAgentOptions()
 
 	want := map[string]any{
-		"mode":               "acceptEdits",
-		"cmd":                "my-cli --add-dir /parent",
-		"cmd_args_flag":      "-a",
-		"model":              "claude-opus-4-7",
-		"reasoning_effort":   "high",
-		"allowed_tools":      []any{"Edit", "Read"},
-		"disallowed_tools":   []any{"Bash"},
-		"max_context_tokens": 200000,
-		"router_url":         "http://127.0.0.1:3456",
-		"router_api_key":     "secret",
+		"mode":                 "acceptEdits",
+		"cmd":                  "my-cli --add-dir /parent",
+		"cmd_args_flag":        "-a",
+		"model":                "claude-opus-4-7",
+		"reasoning_effort":     "high",
+		"allowed_tools":        []any{"Edit", "Read"},
+		"disallowed_tools":     []any{"Bash"},
+		"max_context_tokens":   200000,
+		"router_url":           "http://127.0.0.1:3456",
+		"router_api_key":       "secret",
+		"system_prompt":        "custom system",
+		"append_system_prompt": "PROBE_PERSONA_MARKER",
+		"cc_data_dir":          "/tmp/cc-data",
 	}
 	if len(got) != len(want) {
 		t.Errorf("snapshot len = %d, want %d (got=%v)", len(got), len(want), got)
@@ -778,7 +784,7 @@ func TestWorkspaceAgentOptions_OmitsZeroValues(t *testing.T) {
 	for _, k := range []string{
 		"cmd", "cmd_args_flag", "model", "reasoning_effort",
 		"allowed_tools", "disallowed_tools", "max_context_tokens",
-		"router_url", "router_api_key",
+		"router_url", "router_api_key", "system_prompt", "append_system_prompt", "cc_data_dir",
 	} {
 		if _, ok := got[k]; ok {
 			t.Errorf("snapshot unexpectedly includes %q = %v", k, got[k])
@@ -800,17 +806,20 @@ func TestWorkspaceAgentOptions_RoundTripsThroughNew(t *testing.T) {
 		t.Skip("run_as_user-based LookPath bypass is Unix-only")
 	}
 	parent := &Agent{
-		cmd:              "my-cli",
-		cliExtraArgs:     []string{"code", "--add-dir", "/parent"},
-		cmdArgsFlag:      "-a",
-		model:            "claude-opus-4-7",
-		reasoningEffort:  "high",
-		mode:             "acceptEdits",
-		allowedTools:     []string{"Edit", "Read"},
-		disallowedTools:  []string{"Bash"},
-		maxContextTokens: 200000,
-		routerURL:        "http://127.0.0.1:3456",
-		routerAPIKey:     "secret",
+		cmd:                "my-cli",
+		cliExtraArgs:       []string{"code", "--add-dir", "/parent"},
+		cmdArgsFlag:        "-a",
+		model:              "claude-opus-4-7",
+		reasoningEffort:    "high",
+		mode:               "acceptEdits",
+		allowedTools:       []string{"Edit", "Read"},
+		disallowedTools:    []string{"Bash"},
+		maxContextTokens:   200000,
+		routerURL:          "http://127.0.0.1:3456",
+		routerAPIKey:       "secret",
+		systemPrompt:       "custom system",
+		appendSystemPrompt: "PROBE_PERSONA_MARKER",
+		ccDataDir:          "/tmp/cc-data",
 	}
 	opts := parent.WorkspaceAgentOptions()
 	opts["work_dir"] = "/tmp/claudecode-test"
@@ -854,6 +863,31 @@ func TestWorkspaceAgentOptions_RoundTripsThroughNew(t *testing.T) {
 	}
 	if child.routerAPIKey != "secret" {
 		t.Errorf("routerAPIKey = %q, want secret", child.routerAPIKey)
+	}
+	if child.systemPrompt != "custom system" {
+		t.Errorf("systemPrompt = %q, want custom system", child.systemPrompt)
+	}
+	if child.appendSystemPrompt != "PROBE_PERSONA_MARKER" {
+		t.Errorf("appendSystemPrompt = %q, want PROBE_PERSONA_MARKER", child.appendSystemPrompt)
+	}
+	if child.ccDataDir != "/tmp/cc-data" {
+		t.Errorf("ccDataDir = %q, want /tmp/cc-data", child.ccDataDir)
+	}
+}
+
+// TestWorkspaceAgentOptions_PropagatesAppendSystemPrompt is a regression
+// guard for the multi-workspace bug where append_system_prompt was silently
+// dropped because WorkspaceAgentOptions omitted it from the per-workspace
+// agent snapshot.
+func TestWorkspaceAgentOptions_PropagatesAppendSystemPrompt(t *testing.T) {
+	parent := &Agent{
+		cmd:                "claude",
+		mode:               "default",
+		appendSystemPrompt: "PROBE_PERSONA_MARKER 你是 Ambre。",
+	}
+	got := parent.WorkspaceAgentOptions()
+	if got["append_system_prompt"] != parent.appendSystemPrompt {
+		t.Fatalf("append_system_prompt = %v, want %q", got["append_system_prompt"], parent.appendSystemPrompt)
 	}
 }
 
