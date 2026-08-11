@@ -60,6 +60,20 @@ func TestLoggingHTTPRequestResponse(t *testing.T) {
 	if !strings.Contains(out, "trace_id=trace-abc") {
 		t.Fatalf("expected trace_id in log, got:\n%s", out)
 	}
+	responseLines := strings.Split(out, "\n")
+	var responseLine string
+	for _, line := range responseLines {
+		if strings.Contains(line, "chat-api: http response") {
+			responseLine = line
+			break
+		}
+	}
+	if responseLine == "" {
+		t.Fatalf("expected response log line, got:\n%s", out)
+	}
+	if !strings.Contains(responseLine, "trace_id=trace-abc") {
+		t.Fatalf("expected trace_id in response log, got:\n%s", responseLine)
+	}
 	if !strings.Contains(out, "task=task-123") {
 		t.Fatalf("expected task in log, got:\n%s", out)
 	}
@@ -77,6 +91,34 @@ func TestLoggingHTTPRequestResponse(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestHTTPLogTraceIDAbsentInResponse(t *testing.T) {
+	prev := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	p := newTestPlatform(t, nil)
+	handler := p.loggingHTTP(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/conversations", nil)
+	handler(httptest.NewRecorder(), req)
+
+	out := buf.String()
+	if strings.Contains(out, "trace_id=") {
+		t.Fatalf("trace_id must be omitted when header absent, got:\n%s", out)
+	}
+}
+
+func TestTraceIDFromLogAttrs(t *testing.T) {
+	if got := traceIDFromLogAttrs([]any{"user", "u1", "trace_id", "t1"}); got != "t1" {
+		t.Fatalf("traceIDFromLogAttrs = %q, want t1", got)
+	}
+	if got := traceIDFromLogAttrs([]any{"user", "u1"}); got != "" {
+		t.Fatalf("traceIDFromLogAttrs = %q, want empty", got)
 	}
 }
 

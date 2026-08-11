@@ -30,6 +30,8 @@ func (p *Platform) loggingHTTP(next http.HandlerFunc) http.HandlerFunc {
 			)
 		}
 
+		contextAttrs := p.httpLogContextAttrs(r)
+
 		slog.Info("chat-api: http request",
 			append([]any{
 				"request_id", requestID,
@@ -39,7 +41,7 @@ func (p *Platform) loggingHTTP(next http.HandlerFunc) http.HandlerFunc {
 				"remote_addr", r.RemoteAddr,
 				"content_length", r.ContentLength,
 				"body", reqBody,
-			}, p.httpLogContextAttrs(r)...)...,
+			}, contextAttrs...)...,
 		)
 
 		lw := &loggingResponseWriter{
@@ -48,13 +50,17 @@ func (p *Platform) loggingHTTP(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(lw, r)
 
-		slog.Info("chat-api: http response",
+		responseAttrs := []any{
 			"request_id", requestID,
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", lw.status,
 			"duration_ms", time.Since(start).Milliseconds(),
-		)
+		}
+		if traceID := traceIDFromLogAttrs(contextAttrs); traceID != "" {
+			responseAttrs = append(responseAttrs, "trace_id", traceID)
+		}
+		slog.Info("chat-api: http response", responseAttrs...)
 	}
 }
 
@@ -106,6 +112,20 @@ func (p *Platform) httpLogContextAttrs(r *http.Request) []any {
 		}
 	}
 	return attrs
+}
+
+func traceIDFromLogAttrs(attrs []any) string {
+	for i := 0; i+1 < len(attrs); i += 2 {
+		key, ok := attrs[i].(string)
+		if !ok || key != "trace_id" {
+			continue
+		}
+		val, ok := attrs[i+1].(string)
+		if ok {
+			return val
+		}
+	}
+	return ""
 }
 
 func headerValue(r *http.Request, headerName string) string {
