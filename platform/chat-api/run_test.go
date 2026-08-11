@@ -314,3 +314,32 @@ func TestAnswerDeltaReplaceOnNonPrefixChange(t *testing.T) {
 		t.Fatalf("progress line leaked into answer: %q", joined)
 	}
 }
+
+func TestAnswerDeltaDiscardReplace(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sse, err := newSSEWriter(rec)
+	if err != nil {
+		t.Fatalf("newSSEWriter: %v", err)
+	}
+	p := &Platform{discardSSEReplace: true}
+	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", "", p, sse, time.Time{})
+
+	run.setStreamContent("", "正在获取 ETH/USDT 实时行情。")
+	if err := run.flushDelta(); err != nil {
+		t.Fatalf("flush1: %v", err)
+	}
+	run.setStreamContent("", "请提供交易对，我来拉取实时行情并生成策略参数。")
+	if err := run.flushDelta(); err != nil {
+		t.Fatalf("flush2: %v", err)
+	}
+
+	body := rec.Body.String()
+	if strings.Contains(body, `"replace":true`) {
+		t.Fatalf("replace frame must be discarded, body = %s", body)
+	}
+	joined := collectTextDeltas(body)
+	want := "正在获取 ETH/USDT 实时行情。"
+	if joined != want {
+		t.Fatalf("joined = %q, want %q\nbody=%s", joined, want, body)
+	}
+}

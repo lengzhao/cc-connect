@@ -3,7 +3,7 @@
 > 版本：**v1.2.11**（2026-08-08）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [断链重连](./plans/2026-07-24-chat-api-disconnect-resume-design.md) · [SSE 生命周期日志](./plans/2026-08-07-chat-api-sse-lifecycle-logging-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [Tool SSE 转换](./plans/2026-07-28-chat-api-tool-sse-transform-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [response header](./plans/2026-08-02-chat-api-pod-affinity-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [断链重连](./plans/2026-07-24-chat-api-disconnect-resume-design.md) · [SSE 生命周期日志](./plans/2026-08-07-chat-api-sse-lifecycle-logging-design.md) · [HTTP 访问日志](./plans/2026-08-11-chat-api-http-access-logging-design.md) · [AskUserQuestion 卡片契约](./plans/2026-07-22-askuserquestion-rich-confirm-design.md) · [Ask User MCP（Claude Code 来源）](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md) · [`client_flow` 独立 MCP](./plans/2026-07-23-chat-api-client-flow-design.md) · [Tool SSE 转换](./plans/2026-07-28-chat-api-tool-sse-transform-design.md) · [AskUserQuestion 写入历史](./plans/2026-07-23-chat-api-askuserquestion-history-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [response header](./plans/2026-08-02-chat-api-pod-affinity-design.md)
 
 ## 1. 概述
 
@@ -371,6 +371,7 @@ data: {"message_id":"s1a2b3c:1","conversation_id":"s1a2b3c"}
 
 - 默认拼接 `text_delta.text`；若帧带 `replace:true`，应 `buf = text`（整体替换），否则进度句被终稿改写时会重复拼接
 - `thinking_delta` 同样支持可选 `replace`
+- 若客户端仅做 append、不支持 replace，可配置 `discard_sse_replace = true`：服务端丢弃本应带 `replace:true` 的帧（保留已下发的增量，终稿改写不再推送）
 - `tool_call` / `tool_result` 单独渲染，勿并入正文
 - 断开 SSE **不**停止 agent，内容仍写入 history；可用 `{"run_id":"..."}` 重连同一端点补收最后事件（turn 仍在跑时）；结束后 run 释放，改查 history
 - `message_queued` 后勿立即重开 SSE；等上轮结束或轮询 history
@@ -853,6 +854,7 @@ auto_generate_name_mode = "heuristic"
 # name_api_key = ""                # AI name 必填；未配置则回退 heuristic
 # name_base_url = ""               # 可选；按 name_type 使用默认端点
 include_answer_in_message_end = false
+# discard_sse_replace = false
 max_runs = 1000
 # forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # hooks-only; not agent prompt
 # response_header = "X-Custom-Header"                 # 自定义响应头名；空则关闭
@@ -893,6 +895,7 @@ task_id = "X-Task-ID"
 | `name_base_url` | 空 | 可选；按 `name_type` 使用默认端点 |
 | `name_model` | 空 | `ai` 模式独立低成本模型。未配置 `name_api_key` 时异步回退 query / history 截断 |
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
+| `discard_sse_replace` | `false` | 为 `true` 时丢弃本应带 `replace:true` 的 `text_delta`/`thinking_delta`（适用于仅 append 的客户端） |
 | `max_runs` | `1000` | 内存 pending run 上限 |
 | `question_notify_url` | 空 | 断线后产生 `question_request` 时异步 POST 的 BFF URL；空则关闭 |
 | `question_notify_headers` | 空 | 可选；webhook 自定义请求头（如 `access_token`、`origin_channel`） |

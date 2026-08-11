@@ -458,6 +458,9 @@ func (r *runState) flushThinkingDelta() error {
 		if hasAnswer {
 			return nil
 		}
+		if r.platform.discardSSEReplace {
+			return nil
+		}
 		payload := replaceDeltaPayload(messageID, curr)
 		if err := sink.Event("thinking_delta", payload); err != nil {
 			return err
@@ -468,7 +471,7 @@ func (r *runState) flushThinkingDelta() error {
 		return nil
 	}
 
-	payload, ok := deltaPayload(messageID, prev, curr)
+	payload, ok := deltaPayload(messageID, prev, curr, r.platform.discardSSEReplace)
 	if !ok {
 		return nil
 	}
@@ -638,6 +641,9 @@ func (r *runState) flushAnswerDelta() error {
 		if curr == "" || curr == prev {
 			return nil
 		}
+		if r.platform.discardSSEReplace {
+			return nil
+		}
 		payload := replaceDeltaPayload(messageID, curr)
 		if err := sink.Event("text_delta", payload); err != nil {
 			return err
@@ -648,7 +654,7 @@ func (r *runState) flushAnswerDelta() error {
 		return nil
 	}
 
-	payload, ok := deltaPayload(messageID, prev, curr)
+	payload, ok := deltaPayload(messageID, prev, curr, r.platform.discardSSEReplace)
 	if !ok {
 		return nil
 	}

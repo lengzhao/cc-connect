@@ -391,13 +391,16 @@ func (p *Platform) emitTerminalSSE(run *runState, result pendingResult) {
 // non-prefix revision — it emits the full text with replace=true so an appending
 // client discards what it had and replaces, instead of concatenating a duplicate.
 // Returns ok=false when there is nothing to send.
-func deltaPayload(messageID, prev, curr string) (map[string]any, bool) {
+func deltaPayload(messageID, prev, curr string, discardReplace bool) (map[string]any, bool) {
 	if strings.HasPrefix(curr, prev) {
 		suffix := curr[len(prev):]
 		if suffix == "" {
 			return nil, false
 		}
 		return map[string]any{"message_id": messageID, "text": suffix}, true
+	}
+	if discardReplace {
+		return nil, false
 	}
 	return replaceDeltaPayload(messageID, curr), true
 }

@@ -41,6 +41,7 @@ type Platform struct {
 	ssePingInterval           time.Duration
 	busyPolicy                string
 	includeAnswerInMessageEnd bool
+	discardSSEReplace         bool
 	autoGenerateNameMode      string
 	nameProviderAPIKey        string
 	nameProviderBaseURL       string
@@ -150,6 +151,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		ssePingInterval:           ssePingInterval,
 		busyPolicy:                busyPolicy,
 		includeAnswerInMessageEnd: boolOption(opts, "include_answer_in_message_end", false),
+		discardSSEReplace:         boolOption(opts, "discard_sse_replace", false),
 		autoGenerateNameMode:      strings.ToLower(stringOption(opts, "auto_generate_name_mode", autoGenerateNameModeHeuristic)),
 		nameProviderAPIKey:        strings.TrimSpace(stringOption(opts, "name_api_key", "")),
 		nameProviderBaseURL:       strings.TrimSpace(stringOption(opts, "name_base_url", "")),
@@ -290,7 +292,7 @@ func (p *Platform) getHandler() core.MessageHandler {
 func (p *Platform) routes() http.Handler {
 	mux := http.NewServeMux()
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
-		return p.corsHTTP(p.responseHeaderHTTP(p.authHTTP(h)))
+		return p.loggingHTTP(p.corsHTTP(p.responseHeaderHTTP(p.authHTTP(h))))
 	}
 	mux.HandleFunc(p.path+"conversations", wrap(p.handleConversations))
 	mux.HandleFunc(p.path+"conversations/", wrap(p.handleConversationSub))

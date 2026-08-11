@@ -5,6 +5,7 @@
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
 > Disconnect resume: [plans/2026-07-24-chat-api-disconnect-resume-design.md](./plans/2026-07-24-chat-api-disconnect-resume-design.md)  
 > SSE lifecycle logging: [plans/2026-08-07-chat-api-sse-lifecycle-logging-design.md](./plans/2026-08-07-chat-api-sse-lifecycle-logging-design.md)
+> HTTP access logging: [plans/2026-08-11-chat-api-http-access-logging-design.md](./plans/2026-08-11-chat-api-http-access-logging-design.md)
 > AskUserQuestion card contract: [plans/2026-07-22-askuserquestion-rich-confirm-design.md](./plans/2026-07-22-askuserquestion-rich-confirm-design.md)
 > Ask User MCP (Claude Code source): [plans/2026-07-23-cc-connect-ask-user-mcp-design.md](./plans/2026-07-23-cc-connect-ask-user-mcp-design.md)
 > Client flow MCP: [plans/2026-07-23-chat-api-client-flow-design.md](./plans/2026-07-23-chat-api-client-flow-design.md)
@@ -57,7 +58,7 @@
 
 `message`, `thinking_delta`, `tool_call`, `tool_result`, `text_delta`, `permission_request`, `question_request`, `client_flow`, `interaction_superseded`, `interaction_ack`, `ping`, `message_end`, `error`, `message_queued`
 
-`text_delta` / `thinking_delta` may include optional `replace: true` (full-text replace instead of append). Clients must handle it or progress lines can duplicate into the answer.
+`text_delta` / `thinking_delta` may include optional `replace: true` (full-text replace instead of append). Clients must handle it or progress lines can duplicate into the answer. Set `discard_sse_replace = true` to drop replace frames for append-only clients (progress line stays; final rewrite is not pushed over SSE).
 
 `tool_call` / `tool_result` / interaction SSE events are ephemeral by default. See [Tool SSE design](./plans/2026-07-15-chat-api-tool-sse-design.md) and [Interaction hardening](./plans/2026-07-14-chat-api-interaction-hardening.md).
 
