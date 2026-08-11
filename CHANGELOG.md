@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## v9.1.27 (2026-08-11)
+
+### Fixed
+- **claudecode multi-workspace `append_system_prompt`**: propagate `append_system_prompt`, `system_prompt`, and `cc_data_dir` through `WorkspaceAgentOptions` so per-workspace agents no longer silently drop persona text and reuse only the shared cc-connect guidance file.
+
 ## v9.1.26 (2026-08-11)
 
 ### Changed
