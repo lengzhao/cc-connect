@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.3.0**（2026-08-09）<br>
+> 版本：**v1.4.0**（2026-08-15）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [特权路径文件](./plans/2026-08-15-chat-api-privileged-files-design.md)
 
 ## 1. 概述
 
@@ -692,8 +692,25 @@ Content-Type: application/json
 
 | 来源 | 磁盘路径 | 说明 |
 |------|----------|------|
-| 客户端上传 | `{workspace}/uploads/` | Agent 可直接读取；`local_file` 引用时不复制到 attachments |
+| 客户端上传（托管） | `{workspace}/uploads/` | Agent 可直接读取；`local_file` 引用时不复制到 attachments |
 | Agent 发送（`FileSender`） | `{workspace}/.cc-connect/chat-api/download/` | SSE `file_ready` 通知；客户端再 `GET /files/{id}` 下载 |
+| 特权路径上传（可选） | 任意解析后的主机路径 | 见下文；**不**分配 `file_id`，**不**进入列表 |
+
+**托管命名**
+
+托管文件在磁盘上以 `file_<id>.<filename>` 存放内容，旁路 meta 为同名 + `.meta.json`：
+
+```
+{workspace}/uploads/
+  file_<id>.report.pdf
+  file_<id>.report.pdf.meta.json
+
+{workspace}/.cc-connect/chat-api/download/
+  file_<id>.out.html
+  file_<id>.out.html.meta.json
+```
+
+API / SSE / `upload_file_id` 仍只使用不透明的 `file_<id>`。兼容读取旧布局 `file_<id>` + `file_<id>.meta.json`；新写入一律用新命名。
 
 **列表**
 
@@ -703,7 +720,7 @@ X-Chat-API-Channel: team-alpha/backend
 Authorization: Bearer <api_token>
 ```
 
-`kind`：`upload`（客户端上传）| `download`（Agent 产出）| `all`（默认）。按 `created_at` 降序；分页参数 `limit` / `cursor` / `has_more` / `next_cursor` 与会话列表一致。
+`kind`：`upload`（客户端上传）| `download`（Agent 产出）| `all`（默认）。按 `created_at` 降序；分页参数 `limit` / `cursor` / `has_more` / `next_cursor` 与会话列表一致。仅列出托管文件；特权路径上传不会出现。
 
 ```json
 {
@@ -734,7 +751,7 @@ Authorization: Bearer <api_token>
 }
 ```
 
-**上传**
+**上传（托管）**
 
 ```http
 POST /files
@@ -758,7 +775,48 @@ file=<binary>
 }
 ```
 
-**下载**
+**上传（特权路径，需 `privileged_files = true`）**
+
+> **安全警告：** 开启 `privileged_files` 后，该项目下任意已认证 chat-api 客户端可按路径读写主机文件系统（相对路径相对 channel workspace；`~/` 与绝对路径可用；允许 `..` 离开 workspace）。仅在受信部署中启用。
+
+multipart 额外字段：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `file` | 是 | 文件内容 |
+| `path` | 特权模式 | 目标路径；省略则走托管上传 |
+| `overwrite` | 否 | 默认 `false`；目标已存在时必须为 `true` 才能覆盖（否则 `409`） |
+
+路径规则：相对路径相对 channel workspace，可省略前导 `./`（如 `dir/file` 与 `./dir/file` 等价）；`~/…` 展开为进程用户 HOME；绝对路径原样使用。仍受 `max_upload_size` 限制。未开启特权时带 `path` → `403`。
+
+```http
+POST /files
+X-Chat-API-User: user_001
+X-Chat-API-Channel: team-alpha/backend
+Content-Type: multipart/form-data
+
+file=<binary>
+path=notes/draft.txt
+overwrite=false
+```
+
+```json
+{
+  "ok": true,
+  "data": {
+    "path": "/data/workspaces/team-alpha/backend/notes/draft.txt",
+    "filename": "draft.txt",
+    "mime_type": "text/plain",
+    "size": 12,
+    "created_at": 1780000000,
+    "overwritten": false
+  }
+}
+```
+
+特权路径上传**不**写入 `uploads/`、**不**分配 `file_id`、**不**出现在 `GET /files`。
+
+**下载（托管）**
 
 ```http
 GET /files/{file_id}
@@ -768,6 +826,16 @@ Authorization: Bearer <api_token>
 
 返回原始文件字节。会在 `uploads/` 与 `.cc-connect/chat-api/download/` 中查找。
 
+**下载（特权路径）**
+
+```http
+GET /files/by-path?path=notes/draft.txt
+X-Chat-API-Channel: team-alpha/backend
+Authorization: Bearer <api_token>
+```
+
+路径解析规则与上传相同。未开启特权 → `403`；路径不存在或非普通文件 → `404`。返回原始字节；`Content-Disposition` 取 basename。
+
 **Agent 产出文件（SSE）**
 
 ```text
@@ -775,9 +843,9 @@ event: file_ready
 data: {"message_id":"conv:1","file_id":"file_xyz","filename":"out.html","mime_type":"text/html","size":4096}
 ```
 
-单文件上限 `max_upload_size`（默认 `50MiB`）。需配置项目 `base_dir`（multi-workspace），否则文件 API 返回 `500`。
+单文件上限 `max_upload_size`（默认 `50MiB`）。需配置项目 `base_dir`（multi-workspace），否则托管文件 API 返回 `500`。
 
-详见 [文件上传设计](./plans/2026-08-09-chat-api-file-upload-design.md)。
+详见 [文件上传设计](./plans/2026-08-09-chat-api-file-upload-design.md) · [特权路径文件设计](./plans/2026-08-15-chat-api-privileged-files-design.md)。
 
 ---
 
@@ -793,9 +861,10 @@ data: {"message_id":"conv:1","file_id":"file_xyz","filename":"out.html","mime_ty
 | `POST` | `/chat-messages` | 发消息（SSE） |
 | `POST` | `/runs/{run_id}/cancel` | 取消轮次 |
 | `POST` | `/runs/{run_id}/interactions/{interaction_id}/respond` | 响应确认窗口 |
-| `GET` | `/files` | 列表（upload / download） |
-| `POST` | `/files` | 上传文件 |
-| `GET` | `/files/{file_id}` | 下载文件 |
+| `GET` | `/files` | 列表（upload / download；仅托管文件） |
+| `POST` | `/files` | 上传文件（可选 `path` / `overwrite` 特权路径） |
+| `GET` | `/files/{file_id}` | 下载托管文件 |
+| `GET` | `/files/by-path` | 按路径下载（需 `privileged_files`） |
 
 **v1 不提供**：`POST /conversations`、`response_mode=blocking`、历史附件 replay、`/health`。
 
@@ -826,6 +895,8 @@ auto_generate_name_mode = "heuristic"
 include_answer_in_message_end = false
 max_runs = 1000
 run_ttl = "2h"
+# max_upload_size = "50MiB"
+# privileged_files = false   # true: path upload + GET /files/by-path；可读写主机 FS，仅受信环境
 # forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # hooks-only; not agent prompt
 
 # Optional embedded debug console (same origin): http://127.0.0.1:8030/debug/
@@ -860,7 +931,8 @@ task_id = "X-Task-ID"
 | `include_answer_in_message_end` | `false` | `message_end` 是否附带 answer |
 | `max_runs` | `1000` | 内存 pending run 上限 |
 | `run_ttl` | `2h` | run 记录 TTL |
-| `max_upload_size` | `50MiB` | 单文件 multipart 上传上限 |
+| `max_upload_size` | `50MiB` | 单文件 multipart 上传上限（托管与特权路径均适用） |
+| `privileged_files` | `false` | 为 `true` 时允许上传带 `path` 与 `GET /files/by-path`；**安全警告**：已认证客户端可读写主机文件系统 |
 
 会话持久化由 Engine `sessions.json` 承担；`pendingStore` 为进程内内存态（确认窗口不支持多副本共享）。
 
@@ -870,6 +942,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.4.0 | 2026-08-15 | 托管文件命名 `file_<id>.<filename>`；可选 `privileged_files`：路径上传（`path`/`overwrite`）与 `GET /files/by-path`（路径上传无 `file_id`、不进列表） |
 | v1.3.0 | 2026-08-09 | 文件 API：上传至 workspace `uploads/`、Agent `FileSender` 写入 `.cc-connect/chat-api/download/`、SSE `file_ready`；需 `X-Chat-API-Channel` |
 | v1.2.2 | 2026-07-21 | SSE `text_delta`/`thinking_delta` 支持可选 `replace`；流式卡片解析不再因答案内 `---` 截断；Engine 双写 `StructuredStreamingCard` 事件后 chat-api 优先走结构化路径 |
 | v1.2.1 | 2026-07-21 | 新增 `forward_headers`：白名单入站 header 仅进 hooks（对齐 a2a） |

@@ -1,9 +1,10 @@
 # chat-api Platform — API v1
 
-> Version: **v1.3.0** (2026-08-09)  
+> Version: **v1.4.0** (2026-08-15)  
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
 > File upload: [plans/2026-08-09-chat-api-file-upload-design.md](./plans/2026-08-09-chat-api-file-upload-design.md)  
+> Privileged files: [plans/2026-08-15-chat-api-privileged-files-design.md](./plans/2026-08-15-chat-api-privileged-files-design.md)  
 > Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)  
 > Stream answer parse: [plans/2026-07-21-chat-api-stream-answer-parse-design.md](./plans/2026-07-21-chat-api-stream-answer-parse-design.md)  
 > Structured streaming (planned): [plans/2026-07-21-structured-streaming-card-design.md](./plans/2026-07-21-structured-streaming-card-design.md)
@@ -27,9 +28,10 @@
 | `POST` | `/chat-messages` | Send (SSE) |
 | `POST` | `/runs/{run_id}/cancel` | Cancel turn |
 | `POST` | `/runs/{run_id}/interactions/{interaction_id}/respond` | Respond to confirm window |
-| `GET` | `/files` | List files (`kind=upload\|download\|all`) |
-| `POST` | `/files` | Upload file (multipart) |
-| `GET` | `/files/{file_id}` | Download file |
+| `GET` | `/files` | List managed files (`kind=upload\|download\|all`) |
+| `POST` | `/files` | Upload (managed, or privileged `path` / `overwrite`) |
+| `GET` | `/files/{file_id}` | Download managed file |
+| `GET` | `/files/by-path` | Download by host path (`?path=`; needs `privileged_files`) |
 
 ## Conventions
 
@@ -42,6 +44,13 @@
 - In `ai` mode, `name_model` selects a separate low-cost model while credentials and endpoint are reused from `name_provider` or the configured project provider; name generation never calls the main Agent and falls back to heuristic naming when no provider is available
 - `message_id`: `{conversation_id}:{turn_index}`
 - Client disconnect does not stop the agent; use cancel endpoint to abort
+
+## Files
+
+- Managed store uses disk names `file_<id>.<filename>` (API id remains `file_<id>`; legacy `file_<id>` still readable)
+- Opt-in `privileged_files` (default `false`): multipart `path` / `overwrite` on `POST /files`, and `GET /files/by-path?path=`
+- **Security:** when enabled, authenticated clients can read/write host paths (relative to channel workspace; `./` optional; `~/` and absolute allowed)
+- Path uploads do **not** get a `file_id` and are **not** listed in `GET /files`; `overwrite` defaults to `false` (need `true` to replace)
 
 ## SSE events
 
@@ -70,6 +79,8 @@ name_model = "gpt-4o-mini"
 name_provider_type = "openai" # openai | openai-compatible | claude
 interaction_timeout = "10m"
 sse_ping_interval = "15s"
+# max_upload_size = "50MiB"
+# privileged_files = false  # WARNING: host FS read/write when true
 # forward_headers = ["X-Tenant-Id", "X-Trace-Id"]  # hooks only (CC_HOOK_HEADERS_JSON); not agent prompt
 ```
 

@@ -1,7 +1,7 @@
 # chat-api Privileged Files + Managed Naming Design
 
 > Version: 2026-08-15  
-> Status: approved  
+> Status: implemented  
 > Public API: [chat-api.zh-CN.md](../chat-api.zh-CN.md)  
 > Extends: [2026-08-09-chat-api-file-upload-design.md](./2026-08-09-chat-api-file-upload-design.md)
 
