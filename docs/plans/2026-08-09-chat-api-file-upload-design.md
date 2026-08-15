@@ -19,12 +19,14 @@ All file endpoints require `X-Chat-API-Channel` (same as chat-messages).
 ```
 {base_dir}/{channel}/          ← workspace (Engine work_dir)
   uploads/
-    file_<id>                  ← client upload content
-    file_<id>.meta.json
+    file_<id>.<filename>                  ← client upload content
+    file_<id>.<filename>.meta.json
   .cc-connect/chat-api/download/
-    file_<id>                  ← agent SendFile content
-    file_<id>.meta.json
+    file_<id>.<filename>                  ← agent SendFile content
+    file_<id>.<filename>.meta.json
 ```
+
+API / chat still use opaque `file_<id>`. Legacy on-disk `file_<id>` (+ `.meta.json`) remains readable. Naming details: [2026-08-15 privileged files design](./2026-08-15-chat-api-privileged-files-design.md).
 
 Requires project `base_dir` / platform `cc_base_dir` (multi-workspace). Without it, file APIs return `500`.
 
