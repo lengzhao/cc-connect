@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -127,7 +128,7 @@ func TestUploadAndDownloadFile(t *testing.T) {
 		t.Fatalf("upload meta = %#v", uploadResp.Data)
 	}
 
-	uploadPath := filepath.Join(baseDir, testChannel, workspaceUploadsDir, uploadResp.Data.ID)
+	uploadPath := filepath.Join(baseDir, testChannel, workspaceUploadsDir, managedContentBaseName(uploadResp.Data.ID, uploadResp.Data.Filename))
 	if _, err := os.Stat(uploadPath); err != nil {
 		t.Fatalf("upload not on disk at %q: %v", uploadPath, err)
 	}
@@ -183,7 +184,7 @@ func TestInputsToCoreLocalFileUsesWorkspacePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.Join(baseDir, testChannel, workspaceUploadsDir, meta.ID)
+	wantPath := filepath.Join(baseDir, testChannel, workspaceUploadsDir, managedContentBaseName(meta.ID, "doc.pdf"))
 
 	images, files, audio, paths, err := p.inputsToCore(testChannel, []chatInput{{
 		Type:           "file",
@@ -287,5 +288,63 @@ func TestSanitizeUploadFilename(t *testing.T) {
 	}
 	if got := sanitizeUploadFilename(""); got != "" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestManagedContentBaseName(t *testing.T) {
+	id := "file_abcdefghijklmnopqrstuv"
+	if got := managedContentBaseName(id, "report.pdf"); got != id+".report.pdf" {
+		t.Fatalf("got %q, want %q", got, id+".report.pdf")
+	}
+	if got := managedContentBaseName(id, ""); got != id+".file" {
+		t.Fatalf("empty name got %q, want %q", got, id+".file")
+	}
+	if got := managedContentBaseName(id, "../../etc/passwd"); got != id+".passwd" {
+		t.Fatalf("path traversal got %q, want %q", got, id+".passwd")
+	}
+	if got := managedContentBaseName(id, "."); got != id+".file" {
+		t.Fatalf("dot name got %q, want %q", got, id+".file")
+	}
+}
+
+func TestFindManagedFilePaths_NewAndLegacy(t *testing.T) {
+	dir := t.TempDir()
+	id := "file_abcdefghijklmnopqrstuv"
+
+	legacyContent := filepath.Join(dir, id)
+	legacyMeta := legacyContent + uploadMetaSuffix
+	if err := os.WriteFile(legacyContent, []byte("legacy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyMeta, []byte(`{"id":"`+id+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	contentPath, metaPath, err := findManagedFilePaths(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contentPath != legacyContent || metaPath != legacyMeta {
+		t.Fatalf("legacy: content=%q meta=%q", contentPath, metaPath)
+	}
+
+	newContent := filepath.Join(dir, id+".notes.txt")
+	newMeta := newContent + uploadMetaSuffix
+	if err := os.WriteFile(newContent, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newMeta, []byte(`{"id":"`+id+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	contentPath, metaPath, err = findManagedFilePaths(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contentPath != newContent || metaPath != newMeta {
+		t.Fatalf("new: content=%q meta=%q, want content=%q meta=%q", contentPath, metaPath, newContent, newMeta)
+	}
+
+	missingDir := t.TempDir()
+	if _, _, err := findManagedFilePaths(missingDir, id); !errors.Is(err, errUploadNotFound) {
+		t.Fatalf("missing: err = %v, want errUploadNotFound", err)
 	}
 }

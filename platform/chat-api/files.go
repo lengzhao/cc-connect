@@ -357,7 +357,7 @@ func (p *Platform) writeFileRecord(dir, channelKey, kind, userID, filename, mime
 		UserID:    userID,
 		CreatedAt: time.Now().Unix(),
 	}
-	contentPath := filepath.Join(dir, id)
+	contentPath := filepath.Join(dir, managedContentBaseName(id, filename))
 	metaPath := contentPath + uploadMetaSuffix
 	if err := os.WriteFile(contentPath, data, 0o644); err != nil {
 		return nil, fmt.Errorf("write content: %w", err)
@@ -372,6 +372,66 @@ func (p *Platform) writeFileRecord(dir, channelKey, kind, userID, filename, mime
 		return nil, fmt.Errorf("write meta: %w", err)
 	}
 	return meta, nil
+}
+
+func managedContentBaseName(id, filename string) string {
+	name := sanitizeUploadFilename(filename)
+	if name == "" {
+		name = "file"
+	}
+	return id + "." + name
+}
+
+// findManagedFilePaths looks up content+meta for fileID under dir.
+// Prefer new layout file_<id>.<name>[.meta.json]; fall back to legacy file_<id>.
+func findManagedFilePaths(dir, fileID string) (contentPath, metaPath string, err error) {
+	if !fileIDPattern.MatchString(fileID) {
+		return "", "", errUploadNotFound
+	}
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		if os.IsNotExist(readErr) {
+			return "", "", errUploadNotFound
+		}
+		return "", "", readErr
+	}
+	prefix := fileID + "."
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, uploadMetaSuffix) {
+			continue
+		}
+		// Skip legacy-shaped names that somehow match (fileID.meta.json has no extra segment).
+		base := strings.TrimSuffix(name, uploadMetaSuffix)
+		if base == fileID {
+			continue
+		}
+		metaPath = filepath.Join(dir, name)
+		contentPath = strings.TrimSuffix(metaPath, uploadMetaSuffix)
+		if _, statErr := os.Stat(contentPath); statErr != nil {
+			continue
+		}
+		return contentPath, metaPath, nil
+	}
+
+	legacyContent := filepath.Join(dir, fileID)
+	legacyMeta := legacyContent + uploadMetaSuffix
+	if _, statErr := os.Stat(legacyMeta); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return "", "", errUploadNotFound
+		}
+		return "", "", statErr
+	}
+	if _, statErr := os.Stat(legacyContent); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return "", "", errUploadNotFound
+		}
+		return "", "", statErr
+	}
+	return legacyContent, legacyMeta, nil
 }
 
 func (p *Platform) loadFile(channelKey, fileID string) (*uploadedFileMeta, []byte, error) {
@@ -399,8 +459,10 @@ func (p *Platform) loadFile(channelKey, fileID string) (*uploadedFileMeta, []byt
 }
 
 func readFileRecord(dir, fileID string) (*uploadedFileMeta, []byte, error) {
-	contentPath := filepath.Join(dir, fileID)
-	metaPath := contentPath + uploadMetaSuffix
+	contentPath, metaPath, err := findManagedFilePaths(dir, fileID)
+	if err != nil {
+		return nil, nil, err
+	}
 	metaRaw, err := os.ReadFile(metaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -519,7 +581,10 @@ func listFileMetasInDir(dir, kind string) ([]uploadedFileMeta, error) {
 			continue
 		}
 		if meta.ID == "" {
-			meta.ID = strings.TrimSuffix(entry.Name(), uploadMetaSuffix)
+			base := strings.TrimSuffix(entry.Name(), uploadMetaSuffix)
+			if id := managedFileIDFromDiskName(base); id != "" {
+				meta.ID = id
+			}
 		}
 		if meta.Kind == "" {
 			meta.Kind = kind
@@ -529,16 +594,47 @@ func listFileMetasInDir(dir, kind string) ([]uploadedFileMeta, error) {
 	return out, nil
 }
 
+// managedFileIDFromDiskName extracts file_<id> from a managed content basename
+// (legacy file_<id> or new file_<id>.<filename>).
+func managedFileIDFromDiskName(base string) string {
+	if fileIDPattern.MatchString(base) {
+		return base
+	}
+	if !strings.HasPrefix(base, fileIDPrefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(base, fileIDPrefix)
+	if len(rest) < 23 || rest[22] != '.' {
+		return ""
+	}
+	candidate := fileIDPrefix + rest[:22]
+	if fileIDPattern.MatchString(candidate) {
+		return candidate
+	}
+	return ""
+}
+
 func (p *Platform) uploadedFilePath(channelKey, fileID string) (string, *uploadedFileMeta, error) {
 	dir, err := p.channelUploadsDir(channelKey)
 	if err != nil {
 		return "", nil, err
 	}
-	meta, _, err := readFileRecord(dir, fileID)
+	contentPath, metaPath, err := findManagedFilePaths(dir, fileID)
 	if err != nil {
 		return "", nil, err
 	}
-	return filepath.Join(dir, fileID), meta, nil
+	metaRaw, err := os.ReadFile(metaPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil, errUploadNotFound
+		}
+		return "", nil, err
+	}
+	var meta uploadedFileMeta
+	if err := json.Unmarshal(metaRaw, &meta); err != nil {
+		return "", nil, err
+	}
+	return contentPath, &meta, nil
 }
 
 func sanitizeUploadFilename(name string) string {
