@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.5.1**（2026-08-15）<br>
+> 版本：**v1.5.2**（2026-08-15）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [特权路径文件](./plans/2026-08-15-chat-api-privileged-files-design.md) · [关闭空闲 Agent 会话](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md) · [Skip Prompt Meta](./plans/2026-08-15-chat-api-skip-prompt-meta-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [特权路径文件](./plans/2026-08-15-chat-api-privileged-files-design.md) · [download TTL](./plans/2026-08-15-chat-api-download-file-ttl-design.md) · [关闭空闲 Agent 会话](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md) · [Skip Prompt Meta](./plans/2026-08-15-chat-api-skip-prompt-meta-design.md)
 
 ## 1. 概述
 
@@ -719,7 +719,7 @@ Content-Type: application/json
 | 来源 | 磁盘路径 | 说明 |
 |------|----------|------|
 | 客户端上传（托管） | `{workspace}/uploads/` | Agent 可直接读取；`local_file` 引用时不复制到 attachments |
-| Agent 发送（`FileSender`） | `{workspace}/.cc-connect/chat-api/download/` | SSE `file_ready` 通知；客户端再 `GET /files/{id}` 下载 |
+| Agent 发送（`FileSender`） | `{workspace}/.cc-connect/chat-api/download/` | SSE `file_ready` 通知；客户端再 `GET /files/{id}` 下载；**仅保留最近 72h**（任意文件 API 触达该 channel 时被动删除过期文件） |
 | 特权路径上传（可选） | 任意解析后的主机路径 | 见下文；**不**分配 `file_id`，**不**进入列表 |
 
 **托管命名**
@@ -871,7 +871,9 @@ data: {"message_id":"conv:1","file_id":"file_xyz","filename":"out.html","mime_ty
 
 单文件上限 `max_upload_size`（默认 `50MiB`）。需配置项目 `base_dir`（multi-workspace），否则托管文件 API 返回 `500`。
 
-详见 [文件上传设计](./plans/2026-08-09-chat-api-file-upload-design.md) · [特权路径文件设计](./plans/2026-08-15-chat-api-privileged-files-design.md)。
+**download 保留策略**：`.cc-connect/chat-api/download/` 中 `created_at` 超过 **72 小时** 的托管文件，会在该 channel 的任意文件 API（`GET/POST /files`、`GET /files/{id}`、`GET /files/by-path`、`SendFile`）被访问时被动删除（内容 + meta）；同 channel 最短扫盘间隔 1 分钟。`uploads/` 与特权路径不受影响。过期后再 `GET /files/{id}` 返回 `404`。
+
+详见 [文件上传设计](./plans/2026-08-09-chat-api-file-upload-design.md) · [特权路径文件设计](./plans/2026-08-15-chat-api-privileged-files-design.md) · [download TTL](./plans/2026-08-15-chat-api-download-file-ttl-design.md)。
 
 ### 4.11 关闭空闲 Agent 会话
 
@@ -1015,6 +1017,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.5.2 | 2026-08-15 | Agent `download/` 文件固定保留 72h；任意文件 API 触达 channel 时被动 GC |
 | v1.5.1 | 2026-08-15 | `X-Chat-API-Skip-Prompt-Meta`：单轮跳过 Agent 侧 `[cc-connect ...]` 注入 |
 | v1.5.0 | 2026-08-15 | `POST /agent-sessions/close-idle`：关闭空闲 live agent 进程（Engine 级；不要求 `X-Chat-API-Channel`） |
 | v1.4.0 | 2026-08-15 | 托管文件命名 `file_<id>.<filename>`；可选 `privileged_files`：路径上传（`path`/`overwrite`）与 `GET /files/by-path`（路径上传无 `file_id`、不进列表） |

@@ -124,7 +124,7 @@ Authorization: Bearer ...
 
 - Privilege gated by `admin_from` (instance-wide config flag only)
 - Registering path uploads into list / `local_file`
-- TTL / GC / cross-replica storage
+- TTL / GC for `uploads/` / cross-replica storage（`download/` lazy 72h GC：见 [download TTL design](./2026-08-15-chat-api-download-file-ttl-design.md)）
 - Changing SSE `file_ready` payload shape (still `file_id` + `filename`)
 
 ## Docs / config touchpoints

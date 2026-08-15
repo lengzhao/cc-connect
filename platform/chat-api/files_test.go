@@ -808,3 +808,173 @@ func TestPrivilegedDownloadByPath_ManagedFileIDStillWorks(t *testing.T) {
 		t.Fatalf("body = %q", got)
 	}
 }
+
+func rewriteFileMetaCreatedAt(t *testing.T, dir, fileID string, createdAt int64) {
+	t.Helper()
+	_, metaPath, err := findManagedFilePaths(dir, fileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta uploadedFileMeta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatal(err)
+	}
+	meta.CreatedAt = createdAt
+	out, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metaPath, out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGCExpiredDownloadFilesInDir(t *testing.T) {
+	dir := t.TempDir()
+	cutoff := time.Now().Add(-downloadFileTTL).Unix()
+
+	fresh := &uploadedFileMeta{
+		ID: "file_abcdefghijklmnopqrstuv", Kind: fileKindDownload, Filename: "fresh.txt",
+		MimeType: "text/plain", Size: 5, CreatedAt: time.Now().Unix(),
+	}
+	stale := &uploadedFileMeta{
+		ID: "file_0123456789abcdefghijkl", Kind: fileKindDownload, Filename: "stale.txt",
+		MimeType: "text/plain", Size: 5, CreatedAt: cutoff - 10,
+	}
+	for _, meta := range []*uploadedFileMeta{fresh, stale} {
+		content := filepath.Join(dir, managedContentBaseName(meta.ID, meta.Filename))
+		if err := os.WriteFile(content, []byte("hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(meta)
+		if err := os.WriteFile(content+uploadMetaSuffix, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	deleted, err := gcExpiredDownloadFilesInDir(dir, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1", deleted)
+	}
+	if _, err := os.Stat(filepath.Join(dir, managedContentBaseName(fresh.ID, fresh.Filename))); err != nil {
+		t.Fatalf("fresh content missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, managedContentBaseName(stale.ID, stale.Filename))); !os.IsNotExist(err) {
+		t.Fatalf("stale content still present: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, managedContentBaseName(stale.ID, stale.Filename)+uploadMetaSuffix)); !os.IsNotExist(err) {
+		t.Fatalf("stale meta still present: %v", err)
+	}
+}
+
+func TestDownloadFileTTL_LazyGCOnList(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+
+	uploadMeta, err := p.saveUploadedFile(testChannel, "user_001", "keep-upload.txt", "text/plain", []byte("upload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshDL, err := p.saveDownloadFile(testChannel, "fresh.txt", "text/plain", []byte("fresh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleDL, err := p.saveDownloadFile(testChannel, "stale.txt", "text/plain", []byte("stale"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := p.channelDownloadDir(testChannel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewriteFileMetaCreatedAt(t, dir, staleDL.ID, time.Now().Add(-downloadFileTTL-time.Hour).Unix())
+
+	// Reset throttle so list triggers GC immediately.
+	p.downloadGCMu.Lock()
+	p.downloadGCLast = nil
+	p.downloadGCMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/files", nil)
+	setChatReadHeaders(req, "secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Files []fileView `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, f := range resp.Data.Files {
+		ids[f.ID] = true
+	}
+	if !ids[uploadMeta.ID] {
+		t.Fatal("upload should remain")
+	}
+	if !ids[freshDL.ID] {
+		t.Fatal("fresh download should remain")
+	}
+	if ids[staleDL.ID] {
+		t.Fatal("stale download should be GC'd")
+	}
+
+	p.downloadGCMu.Lock()
+	p.downloadGCLast = nil
+	p.downloadGCMu.Unlock()
+
+	dlReq := httptest.NewRequest(http.MethodGet, "/v1/files/"+staleDL.ID, nil)
+	setChatReadHeaders(dlReq, "secret")
+	dlRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(dlRec, dlReq)
+	if dlRec.Code != http.StatusNotFound {
+		t.Fatalf("stale GET status = %d, want 404", dlRec.Code)
+	}
+}
+
+func TestDownloadFileTTL_DoesNotTouchUploads(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+	uploadMeta, err := p.saveUploadedFile(testChannel, "user_001", "old-upload.txt", "text/plain", []byte("old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadDir, err := p.channelUploadsDir(testChannel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewriteFileMetaCreatedAt(t, uploadDir, uploadMeta.ID, time.Now().Add(-downloadFileTTL*2).Unix())
+
+	p.downloadGCMu.Lock()
+	p.downloadGCLast = nil
+	p.downloadGCMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/files?kind=upload", nil)
+	setChatReadHeaders(req, "secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var resp struct {
+		Data struct {
+			Files []fileView `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Files) != 1 || resp.Data.Files[0].ID != uploadMeta.ID {
+		t.Fatalf("upload GC'd unexpectedly: %#v", resp.Data.Files)
+	}
+}
+

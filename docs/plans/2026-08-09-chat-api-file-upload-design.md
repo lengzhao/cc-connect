@@ -69,5 +69,7 @@ Client downloads with `GET /files/{file_id}` + same channel header.
 
 ## Non-goals (v1)
 
-- Upload TTL / GC
+- Upload TTL / GC（`uploads/` 仍不自动清理）
 - Cross-replica shared storage
+
+> Download lazy GC（2026-08-15）：Agent 产出目录 `.cc-connect/chat-api/download/` 固定保留 72h，在任意文件 API 触达该 channel 时被动删除过期文件。详见 [2026-08-15-chat-api-download-file-ttl-design.md](./2026-08-15-chat-api-download-file-ttl-design.md)。

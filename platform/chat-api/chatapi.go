@@ -63,6 +63,9 @@ type Platform struct {
 	idleCloser   core.IdleAgentSessionCloser
 	idleCloserMu sync.RWMutex
 
+	downloadGCMu   sync.Mutex
+	downloadGCLast map[string]time.Time // channelKey -> last lazy GC time
+
 	mu        sync.Mutex
 	handlerMu sync.RWMutex
 	running   bool

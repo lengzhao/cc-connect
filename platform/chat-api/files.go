@@ -29,6 +29,11 @@ const (
 	workspaceDownloadRel = ".cc-connect/chat-api/download"
 	fileKindUpload       = "upload"
 	fileKindDownload     = "download"
+	// downloadFileTTL is how long agent-produced download/ files are retained.
+	// Older files are deleted lazily when any file API touches the channel.
+	downloadFileTTL = 72 * time.Hour
+	// downloadGCMinInterval limits how often a channel's download/ dir is scanned.
+	downloadGCMinInterval = time.Minute
 )
 
 var fileIDPattern = regexp.MustCompile(`^file_[A-Za-z0-9_-]{22}$`)
@@ -82,6 +87,7 @@ func (p *Platform) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	p.maybeGCExpiredDownloads(channelKey)
 	kind := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("kind")))
 	switch kind {
 	case "", "all":
@@ -128,6 +134,7 @@ func (p *Platform) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	p.maybeGCExpiredDownloads(channelKey)
 	if err := p.ensureChannelWorkspace(channelKey); err != nil {
 		slog.Error("chat-api: ensure channel workspace", "channel", channelKey, "error", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
@@ -328,6 +335,7 @@ func (p *Platform) handleFileRoutes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	p.maybeGCExpiredDownloads(channelKey)
 	meta, data, err := p.loadFile(channelKey, sub)
 	if err != nil {
 		if errors.Is(err, errUploadNotFound) {
@@ -360,6 +368,7 @@ func (p *Platform) handlePrivilegedDownloadByPath(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
+	p.maybeGCExpiredDownloads(channelKey)
 	pathField := strings.TrimSpace(r.URL.Query().Get("path"))
 	if pathField == "" {
 		writeErr(w, http.StatusBadRequest, "invalid request")
@@ -440,6 +449,7 @@ func (p *Platform) SendFile(_ context.Context, replyCtx any, file core.FileAttac
 	if mimeType == "" {
 		mimeType = http.DetectContentType(file.Data)
 	}
+	p.maybeGCExpiredDownloads(run.channelKey)
 	meta, err := p.saveDownloadFile(run.channelKey, filename, mimeType, file.Data)
 	if err != nil {
 		return fmt.Errorf("chat-api: save download file: %w", err)
@@ -505,6 +515,94 @@ func (p *Platform) channelDownloadDir(channelKey string) (string, error) {
 		return "", fmt.Errorf("mkdir download: %w", err)
 	}
 	return dir, nil
+}
+
+// maybeGCExpiredDownloads lazily deletes download/ files older than downloadFileTTL.
+// Best-effort: errors are logged and never fail the caller. Per-channel throttle
+// avoids scanning on every request.
+func (p *Platform) maybeGCExpiredDownloads(channelKey string) {
+	channelKey = strings.TrimSpace(channelKey)
+	if channelKey == "" {
+		return
+	}
+	now := time.Now()
+	p.downloadGCMu.Lock()
+	if p.downloadGCLast == nil {
+		p.downloadGCLast = make(map[string]time.Time)
+	}
+	if last, ok := p.downloadGCLast[channelKey]; ok && now.Sub(last) < downloadGCMinInterval {
+		p.downloadGCMu.Unlock()
+		return
+	}
+	p.downloadGCLast[channelKey] = now
+	p.downloadGCMu.Unlock()
+
+	deleted, err := p.gcExpiredDownloadFiles(channelKey, now)
+	if err != nil {
+		slog.Warn("chat-api: gc download files", "channel", channelKey, "error", err)
+		return
+	}
+	if deleted > 0 {
+		slog.Info("chat-api: gc download files", "channel", channelKey, "deleted", deleted)
+	}
+}
+
+func (p *Platform) gcExpiredDownloadFiles(channelKey string, now time.Time) (int, error) {
+	dir, err := p.channelDownloadDir(channelKey)
+	if err != nil {
+		if errors.Is(err, errWorkspaceNotConfigured) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return gcExpiredDownloadFilesInDir(dir, now.Add(-downloadFileTTL).Unix())
+}
+
+func gcExpiredDownloadFilesInDir(dir string, cutoffUnix int64) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	deleted := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), uploadMetaSuffix) {
+			continue
+		}
+		metaPath := filepath.Join(dir, entry.Name())
+		raw, err := os.ReadFile(metaPath)
+		if err != nil {
+			continue
+		}
+		var meta uploadedFileMeta
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			continue
+		}
+		createdAt := meta.CreatedAt
+		if createdAt == 0 {
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				continue
+			}
+			createdAt = info.ModTime().Unix()
+		}
+		if createdAt >= cutoffUnix {
+			continue
+		}
+		contentPath := strings.TrimSuffix(metaPath, uploadMetaSuffix)
+		if removeErr := os.Remove(contentPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			slog.Warn("chat-api: gc remove download content", "path", contentPath, "error", removeErr)
+			continue
+		}
+		if removeErr := os.Remove(metaPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			slog.Warn("chat-api: gc remove download meta", "path", metaPath, "error", removeErr)
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 func newFileID() (string, error) {

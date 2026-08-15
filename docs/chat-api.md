@@ -1,10 +1,11 @@
 # chat-api Platform — API v1
 
-> Version: **v1.5.1** (2026-08-15)  
+> Version: **v1.5.2** (2026-08-15)  
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
 > File upload: [plans/2026-08-09-chat-api-file-upload-design.md](./plans/2026-08-09-chat-api-file-upload-design.md)  
 > Privileged files: [plans/2026-08-15-chat-api-privileged-files-design.md](./plans/2026-08-15-chat-api-privileged-files-design.md)  
+> Download file TTL: [plans/2026-08-15-chat-api-download-file-ttl-design.md](./plans/2026-08-15-chat-api-download-file-ttl-design.md)  
 > Close idle agent sessions: [plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md)  
 > Skip prompt meta: [plans/2026-08-15-chat-api-skip-prompt-meta-design.md](./plans/2026-08-15-chat-api-skip-prompt-meta-design.md)  
 > Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)  
@@ -61,6 +62,7 @@ See [close-idle design](./plans/2026-08-15-chat-api-close-idle-agent-sessions-de
 ## Files
 
 - Managed store uses disk names `file_<id>.<filename>` (API id remains `file_<id>`; legacy `file_<id>` still readable)
+- Agent `download/` files are retained for **72 hours**; older ones are deleted lazily when any file API touches that channel (`GET/POST /files`, `GET /files/{id}`, `GET /files/by-path`, `SendFile`); per-channel scan throttle 1 minute. `uploads/` and privileged paths are unaffected
 - Opt-in `privileged_files` (default `false`): multipart `path` / `overwrite` on `POST /files`, and `GET /files/by-path?path=`
 - **Security:** when enabled, authenticated clients can read/write host paths (relative to channel workspace; `./` optional; `~/` and absolute allowed)
 - Path uploads do **not** get a `file_id` and are **not** listed in `GET /files`; `overwrite` defaults to `false` (need `true` to replace)
