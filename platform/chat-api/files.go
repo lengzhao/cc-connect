@@ -227,30 +227,23 @@ func (p *Platform) handlePrivilegedUpload(w http.ResponseWriter, channelKey, pat
 		writeErr(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	overwrite := parseOverwriteFlag(overwriteRaw)
-	if st, statErr := os.Stat(target); statErr == nil {
-		if st.IsDir() {
-			writeErr(w, http.StatusBadRequest, "invalid request")
-			return
-		}
-		if !overwrite {
-			writeErr(w, http.StatusConflict, "file exists")
-			return
-		}
-	} else if !os.IsNotExist(statErr) {
-		slog.Error("chat-api: privileged upload stat", "path", target, "error", statErr)
-		writeErr(w, http.StatusInternalServerError, "internal error")
-		return
-	} else {
-		overwrite = false
-	}
-
+	wantOverwrite := parseOverwriteFlag(overwriteRaw)
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		slog.Error("chat-api: privileged upload mkdir", "path", target, "error", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if err := os.WriteFile(target, data, 0o644); err != nil {
+
+	overwritten, err := writePrivilegedFile(target, data, wantOverwrite)
+	if err != nil {
+		if errors.Is(err, errPrivilegedFileExists) {
+			writeErr(w, http.StatusConflict, "file exists")
+			return
+		}
+		if errors.Is(err, errPrivilegedPathIsDir) {
+			writeErr(w, http.StatusBadRequest, "invalid request")
+			return
+		}
 		slog.Error("chat-api: privileged upload write", "path", target, "error", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
@@ -261,7 +254,7 @@ func (p *Platform) handlePrivilegedUpload(w http.ResponseWriter, channelKey, pat
 		outName = filepath.Base(target)
 	}
 	status := http.StatusCreated
-	if overwrite {
+	if overwritten {
 		status = http.StatusOK
 	}
 	writeOK(w, status, map[string]any{
@@ -270,8 +263,51 @@ func (p *Platform) handlePrivilegedUpload(w http.ResponseWriter, channelKey, pat
 		"mime_type":   mimeType,
 		"size":        int64(len(data)),
 		"created_at":  time.Now().Unix(),
-		"overwritten": overwrite,
+		"overwritten": overwritten,
 	})
+}
+
+var (
+	errPrivilegedFileExists = errors.New("privileged file exists")
+	errPrivilegedPathIsDir  = errors.New("privileged path is directory")
+)
+
+// writePrivilegedFile writes data to target. When overwrite is false, uses
+// O_CREATE|O_EXCL so concurrent creates cannot race past a Stat check.
+func writePrivilegedFile(target string, data []byte, overwrite bool) (overwritten bool, err error) {
+	if overwrite {
+		if st, statErr := os.Stat(target); statErr == nil {
+			if st.IsDir() {
+				return false, errPrivilegedPathIsDir
+			}
+			overwritten = true
+		} else if !os.IsNotExist(statErr) {
+			return false, statErr
+		}
+		if err := os.WriteFile(target, data, 0o644); err != nil {
+			return false, err
+		}
+		return overwritten, nil
+	}
+
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		if os.IsExist(err) || errors.Is(err, os.ErrExist) {
+			return false, errPrivilegedFileExists
+		}
+		return false, err
+	}
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		_ = os.Remove(target)
+		return false, writeErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(target)
+		return false, closeErr
+	}
+	return false, nil
 }
 
 func (p *Platform) handleFileRoutes(w http.ResponseWriter, r *http.Request) {

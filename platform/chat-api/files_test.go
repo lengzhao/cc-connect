@@ -604,7 +604,7 @@ func TestPrivilegedUpload_WritesWorkspacePath(t *testing.T) {
 }
 
 func TestPrivilegedUpload_ConflictWithoutOverwrite(t *testing.T) {
-	p, _ := testWorkspacePlatform(t)
+	p, baseDir := testWorkspacePlatform(t)
 	p.privilegedFiles = true
 
 	body1, ctype1 := privilegedUploadBody(t, "out.txt", "first", "subdir/out.txt", "")
@@ -625,6 +625,14 @@ func TestPrivilegedUpload_ConflictWithoutOverwrite(t *testing.T) {
 	p.routes().ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusConflict {
 		t.Fatalf("second upload status = %d, want 409, body = %s", rec2.Code, rec2.Body.String())
+	}
+	wantPath := filepath.Join(baseDir, testChannel, "subdir", "out.txt")
+	got, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "first" {
+		t.Fatalf("disk content after conflict = %q, want first", got)
 	}
 }
 
@@ -648,8 +656,8 @@ func TestPrivilegedUpload_Overwrite(t *testing.T) {
 	req2.Header.Set("Content-Type", ctype2)
 	rec2 := httptest.NewRecorder()
 	p.routes().ServeHTTP(rec2, req2)
-	if rec2.Code != http.StatusCreated && rec2.Code != http.StatusOK {
-		t.Fatalf("overwrite status = %d, want 200/201, body = %s", rec2.Code, rec2.Body.String())
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("overwrite status = %d, want 200, body = %s", rec2.Code, rec2.Body.String())
 	}
 	var uploadResp struct {
 		OK   bool `json:"ok"`
