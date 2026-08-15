@@ -60,6 +60,9 @@ type Platform struct {
 	sessions *core.SessionManager
 	pending  *pendingStore
 
+	idleCloser   core.IdleAgentSessionCloser
+	idleCloserMu sync.RWMutex
+
 	mu        sync.Mutex
 	handlerMu sync.RWMutex
 	running   bool
@@ -282,6 +285,7 @@ func (p *Platform) routes() http.Handler {
 	mux.HandleFunc(p.path+"files", wrap(p.handleFiles))
 	mux.HandleFunc(p.path+"files/", wrap(p.handleFileRoutes))
 	mux.HandleFunc(p.path+"runs/", wrap(p.handleRunRoutes))
+	mux.HandleFunc(p.path+"agent-sessions/close-idle", wrap(p.handleCloseIdleAgentSessions))
 	p.registerDebugUI(mux)
 	return mux
 }
@@ -298,5 +302,6 @@ var _ core.FileSender = (*Platform)(nil)
 var _ core.HookContextProvider = (*Platform)(nil)
 var _ core.ProcessingEndNotifier = (*Platform)(nil)
 var _ core.SessionManagerBinder = (*Platform)(nil)
+var _ core.IdleAgentSessionCloserBinder = (*Platform)(nil)
 var _ core.WorkspaceSessionStorePolicy = (*Platform)(nil)
 var _ core.ChannelNameResolver = (*Platform)(nil)
