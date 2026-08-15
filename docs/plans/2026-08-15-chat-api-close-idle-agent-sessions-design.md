@@ -1,7 +1,7 @@
 # chat-api Close Idle Agent Sessions Design
 
 > Version: 2026-08-15  
-> Status: approved  
+> Status: implemented  
 > Public API: [chat-api.zh-CN.md](../chat-api.zh-CN.md) / [chat-api.md](../chat-api.md)
 
 ## Goal

@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.4.0**（2026-08-15）<br>
+> 版本：**v1.5.0**（2026-08-15）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [特权路径文件](./plans/2026-08-15-chat-api-privileged-files-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [特权路径文件](./plans/2026-08-15-chat-api-privileged-files-design.md) · [关闭空闲 Agent 会话](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md)
 
 ## 1. 概述
 
@@ -92,7 +92,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 
 `conversation_id` 在 channel 内创建与管理；跨 channel 访问同一 `conversation_id` 返回 `404`。
 
-**`X-Chat-API-Channel` 为所有 REST 接口必填**（含列表、读历史、cancel、interaction respond）。缺省返回 `400 channel required`。
+**`X-Chat-API-Channel` 为所有 REST 接口必填**（含列表、读历史、cancel、interaction respond），**唯一例外**为 `POST /agent-sessions/close-idle`（Engine 级运维接口，不要求 Channel；见 §4.11）。缺省返回 `400 channel required`。
 
 在 `mode = "multi-workspace"` 下，`X-Chat-API-Channel` 作为 channel 名称参与 Engine 约定匹配。chat-api 在消息进入 Engine 前会尝试自动初始化：项目级 `base_dir` 会注入为 `cc_base_dir`（也可在 platform options 写 `base_dir`，或设环境变量 `AGENT_WORK_DIR`）；配合 `cc_data_dir`、`cc_project` 时，会创建 `<base_dir>/<channel>` 并写入 `workspace_bindings.json`，普通消息（如 `hi`）可直接进入 agent，而不会被误判为本地目录路径。未配置任何 base_dir 时，行为与 IM 平台一致：目录不存在则进入 workspace 初始化/绑定引导，SSE 会在提示结束后正常返回 `message_end`。
 
@@ -108,6 +108,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | `PATCH` | 是 | 是 |
 | `POST …/cancel` | 是 | 是 |
 | `POST …/interactions/…/respond` | 是 | 是 |
+| `POST /agent-sessions/close-idle` | 否（可选，仅审计日志） | **否**（文档化例外） |
 
 默认 `user_header = X-Chat-API-User`，`user_name_header = X-Chat-API-User-Name`（可选，仅发消息），`channel_header = X-Chat-API-Channel`（**必填**）。`user` 为 1–128 字符，`[a-zA-Z0-9_\-:.]+`；`channel` 为 1–256 字符，`[a-zA-Z0-9_\-:./]+`；路径段不得为 `.` / `..` / 空，且不得以 `/` 开头或结尾（段内允许 `a.b` 这类点号）。
 
@@ -138,6 +139,7 @@ REST 成功/失败使用 JSON 信封；`POST /chat-messages` 成功时 body 为 
 | 409 | `conversation busy` | `busy_policy=reject` 时会话忙 |
 | 409 | `interaction already responded` | 交互已响应 |
 | 409 | `interaction expired` | 交互已过期 |
+| 503 | `service unavailable` | `close-idle` 等运维接口未绑定（Engine 未启动） |
 | 413 | `payload too large` | 请求体 > 10 MiB |
 | 500 | `internal error` | 服务器错误 |
 
@@ -847,6 +849,52 @@ data: {"message_id":"conv:1","file_id":"file_xyz","filename":"out.html","mime_ty
 
 详见 [文件上传设计](./plans/2026-08-09-chat-api-file-upload-design.md) · [特权路径文件设计](./plans/2026-08-15-chat-api-privileged-files-design.md)。
 
+### 4.11 关闭空闲 Agent 会话
+
+主动关闭当前项目 Engine 内**所有空闲**的 live agent 进程，不打断正在工作的会话。作用范围为整个 Engine（含同一项目上的其他 IM 平台），不是按 channel / user 过滤。
+
+```http
+POST /agent-sessions/close-idle
+Authorization: Bearer <api_token>
+```
+
+| Header | 必填 | 说明 |
+|--------|------|------|
+| `Authorization` | 与其它接口相同（配置了 `api_token` 时） | 服务鉴权 |
+| `X-Chat-API-Channel` | **否**（文档化例外） | Engine 级操作；若携带则仅写入审计日志 |
+| `X-Chat-API-User` | 否 | 仅审计日志 |
+
+请求体可为空或 `{}`。
+
+**行为**
+
+- 仅关闭判定为空闲且进程仍存活的 interactive 状态（对齐 `agent_session_idle_timeout` 可关闭条件，并显式检查 `Session.Busy()`）
+- **跳过** busy / 等待权限 / 队列中有消息 / 需 resync 等状态
+- **保留**会话元数据与 `agent_session_id`，后续消息可按原 ID resume（与 idle timeout / `/stop` 保留 ID 一致）
+- 无空闲会话时仍返回 `200`，`closed=0`
+
+```json
+{
+  "ok": true,
+  "data": {
+    "closed": 3,
+    "skipped": 1,
+    "closed_session_keys": ["chat-api:ch1:conv_a", "feishu:oc_x:ou_y"],
+    "skipped_session_keys": ["telegram:1:2"]
+  }
+}
+```
+
+| 字段 | 含义 |
+|------|------|
+| `closed` | 成功关闭的空闲 live 进程数 |
+| `skipped` | 因 busy / pending / queued / resync 等跳过的数量 |
+| `closed_session_keys` / `skipped_session_keys` | 对应 session key，便于运维核对 |
+
+Closer 未绑定（Engine 未启动）→ `503`；非 POST → `405`。
+
+详见 [关闭空闲 Agent 会话设计](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md)。
+
 ---
 
 ## 5. 接口清单
@@ -865,6 +913,7 @@ data: {"message_id":"conv:1","file_id":"file_xyz","filename":"out.html","mime_ty
 | `POST` | `/files` | 上传文件（可选 `path` / `overwrite` 特权路径） |
 | `GET` | `/files/{file_id}` | 下载托管文件 |
 | `GET` | `/files/by-path` | 按路径下载（需 `privileged_files`） |
+| `POST` | `/agent-sessions/close-idle` | 关闭空闲 live agent 进程（Engine 级；不要求 Channel） |
 
 **v1 不提供**：`POST /conversations`、`response_mode=blocking`、历史附件 replay、`/health`。
 
@@ -942,6 +991,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.5.0 | 2026-08-15 | `POST /agent-sessions/close-idle`：关闭空闲 live agent 进程（Engine 级；不要求 `X-Chat-API-Channel`） |
 | v1.4.0 | 2026-08-15 | 托管文件命名 `file_<id>.<filename>`；可选 `privileged_files`：路径上传（`path`/`overwrite`）与 `GET /files/by-path`（路径上传无 `file_id`、不进列表） |
 | v1.3.0 | 2026-08-09 | 文件 API：上传至 workspace `uploads/`、Agent `FileSender` 写入 `.cc-connect/chat-api/download/`、SSE `file_ready`；需 `X-Chat-API-Channel` |
 | v1.2.2 | 2026-07-21 | SSE `text_delta`/`thinking_delta` 支持可选 `replace`；流式卡片解析不再因答案内 `---` 截断；Engine 双写 `StructuredStreamingCard` 事件后 chat-api 优先走结构化路径 |

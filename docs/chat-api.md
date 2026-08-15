@@ -1,10 +1,11 @@
 # chat-api Platform — API v1
 
-> Version: **v1.4.0** (2026-08-15)  
+> Version: **v1.5.0** (2026-08-15)  
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
 > File upload: [plans/2026-08-09-chat-api-file-upload-design.md](./plans/2026-08-09-chat-api-file-upload-design.md)  
 > Privileged files: [plans/2026-08-15-chat-api-privileged-files-design.md](./plans/2026-08-15-chat-api-privileged-files-design.md)  
+> Close idle agent sessions: [plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md)  
 > Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)  
 > Stream answer parse: [plans/2026-07-21-chat-api-stream-answer-parse-design.md](./plans/2026-07-21-chat-api-stream-answer-parse-design.md)  
 > Structured streaming (planned): [plans/2026-07-21-structured-streaming-card-design.md](./plans/2026-07-21-structured-streaming-card-design.md)
@@ -32,6 +33,7 @@
 | `POST` | `/files` | Upload (managed, or privileged `path` / `overwrite`) |
 | `GET` | `/files/{file_id}` | Download managed file |
 | `GET` | `/files/by-path` | Download by host path (`?path=`; needs `privileged_files`) |
+| `POST` | `/agent-sessions/close-idle` | Close idle live agent processes (Engine-wide; no Channel required) |
 
 ## Conventions
 
@@ -40,10 +42,19 @@
 - Auth: `Authorization: Bearer <api_token>` (required in production)
 - User: `X-Chat-API-User` on writes; query or header on list/delete
 - Optional `X-Chat-API-Channel` on send for multi-workspace `work_dir` binding (omit → `default_channel`; cancel/respond reuse run channel)
+- **Exception:** `POST /agent-sessions/close-idle` does **not** require `X-Chat-API-Channel` (Engine-wide op; Channel/User headers optional for audit logs only)
 - `auto_generate_name` applies to newly created conversations; `auto_generate_name_mode` defaults to `heuristic` and may be set to `ai`
 - In `ai` mode, `name_model` selects a separate low-cost model while credentials and endpoint are reused from `name_provider` or the configured project provider; name generation never calls the main Agent and falls back to heuristic naming when no provider is available
 - `message_id`: `{conversation_id}:{turn_index}`
 - Client disconnect does not stop the agent; use cancel endpoint to abort
+
+## Close idle agent sessions
+
+`POST /agent-sessions/close-idle` closes **idle** live agent processes across the project Engine (including other IM platforms on the same project). Busy / permission-waiting / queued sessions are skipped. Session metadata and `agent_session_id` are preserved so the next message can resume.
+
+Success `200` data fields: `closed`, `skipped`, `closed_session_keys`, `skipped_session_keys`. Empty idle set still returns `200` with `closed=0`. Unbound closer → `503`.
+
+See [close-idle design](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md).
 
 ## Files
 
