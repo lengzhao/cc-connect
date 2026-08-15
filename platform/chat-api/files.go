@@ -23,12 +23,12 @@ import (
 )
 
 const (
-	fileIDPrefix           = "file_"
-	uploadMetaSuffix       = ".meta.json"
-	workspaceUploadsDir    = "uploads"
-	workspaceDownloadRel   = ".cc-connect/chat-api/download"
-	fileKindUpload         = "upload"
-	fileKindDownload       = "download"
+	fileIDPrefix         = "file_"
+	uploadMetaSuffix     = ".meta.json"
+	workspaceUploadsDir  = "uploads"
+	workspaceDownloadRel = ".cc-connect/chat-api/download"
+	fileKindUpload       = "upload"
+	fileKindDownload     = "download"
 )
 
 var fileIDPattern = regexp.MustCompile(`^file_[A-Za-z0-9_-]{22}$`)
@@ -173,6 +173,12 @@ func (p *Platform) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		mimeType = formMime
 	}
 
+	pathField := strings.TrimSpace(r.FormValue("path"))
+	if pathField != "" {
+		p.handlePrivilegedUpload(w, channelKey, pathField, r.FormValue("overwrite"), filename, mimeType, data)
+		return
+	}
+
 	meta, err := p.saveUploadedFile(channelKey, user, filename, mimeType, data)
 	if err != nil {
 		if errors.Is(err, errWorkspaceNotConfigured) {
@@ -189,6 +195,82 @@ func (p *Platform) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		"mime_type":  meta.MimeType,
 		"size":       meta.Size,
 		"created_at": meta.CreatedAt,
+	})
+}
+
+func parseOverwriteFlag(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Platform) handlePrivilegedUpload(w http.ResponseWriter, channelKey, pathField, overwriteRaw, filename, mimeType string, data []byte) {
+	if !p.privilegedFiles {
+		writeErr(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	workspace, err := p.workspaceDirForChannel(channelKey)
+	if err != nil {
+		if errors.Is(err, errWorkspaceNotConfigured) {
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		slog.Error("chat-api: privileged upload workspace", "channel", channelKey, "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	target, err := resolvePrivilegedPath(workspace, pathField)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	overwrite := parseOverwriteFlag(overwriteRaw)
+	if st, statErr := os.Stat(target); statErr == nil {
+		if st.IsDir() {
+			writeErr(w, http.StatusBadRequest, "invalid request")
+			return
+		}
+		if !overwrite {
+			writeErr(w, http.StatusConflict, "file exists")
+			return
+		}
+	} else if !os.IsNotExist(statErr) {
+		slog.Error("chat-api: privileged upload stat", "path", target, "error", statErr)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	} else {
+		overwrite = false
+	}
+
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		slog.Error("chat-api: privileged upload mkdir", "path", target, "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		slog.Error("chat-api: privileged upload write", "path", target, "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	outName := filename
+	if outName == "" {
+		outName = filepath.Base(target)
+	}
+	status := http.StatusCreated
+	if overwrite {
+		status = http.StatusOK
+	}
+	writeOK(w, status, map[string]any{
+		"path":        target,
+		"filename":    outName,
+		"mime_type":   mimeType,
+		"size":        int64(len(data)),
+		"created_at":  time.Now().Unix(),
+		"overwritten": overwrite,
 	})
 }
 

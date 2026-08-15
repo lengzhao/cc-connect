@@ -484,3 +484,209 @@ func TestResolvePrivilegedPath(t *testing.T) {
 		}
 	}
 }
+
+func privilegedUploadBody(t *testing.T, filename, content, path, overwrite string) (*bytes.Buffer, string) {
+	t.Helper()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if path != "" {
+		if err := writer.WriteField("path", path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if overwrite != "" {
+		if err := writer.WriteField("overwrite", overwrite); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body, writer.FormDataContentType()
+}
+
+func TestPrivilegedUpload_ForbiddenWhenDisabled(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+
+	body, ctype := privilegedUploadBody(t, "out.txt", "x", "./out.txt", "")
+	req := httptest.NewRequest(http.MethodPost, "/v1/files", body)
+	setFileHeaders(req, "secret", "user_001")
+	req.Header.Set("Content-Type", ctype)
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPrivilegedUpload_WritesWorkspacePath(t *testing.T) {
+	p, baseDir := testWorkspacePlatform(t)
+	p.privilegedFiles = true
+
+	body, ctype := privilegedUploadBody(t, "out.txt", "hello path", "subdir/out.txt", "")
+	req := httptest.NewRequest(http.MethodPost, "/v1/files", body)
+	setFileHeaders(req, "secret", "user_001")
+	req.Header.Set("Content-Type", ctype)
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200/201, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var uploadResp struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			ID          string `json:"id"`
+			Path        string `json:"path"`
+			Filename    string `json:"filename"`
+			MimeType    string `json:"mime_type"`
+			Size        int64  `json:"size"`
+			CreatedAt   int64  `json:"created_at"`
+			Overwritten bool   `json:"overwritten"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &uploadResp); err != nil {
+		t.Fatal(err)
+	}
+	if !uploadResp.OK {
+		t.Fatalf("upload resp = %#v", uploadResp)
+	}
+	if uploadResp.Data.ID != "" {
+		t.Fatalf("path upload must not return id, got %q", uploadResp.Data.ID)
+	}
+	wantPath, err := filepath.Abs(filepath.Join(baseDir, testChannel, "subdir", "out.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uploadResp.Data.Path != wantPath {
+		t.Fatalf("path = %q, want %q", uploadResp.Data.Path, wantPath)
+	}
+	if uploadResp.Data.Filename != "out.txt" || uploadResp.Data.Size != 10 || uploadResp.Data.Overwritten {
+		t.Fatalf("meta = %#v", uploadResp.Data)
+	}
+	if uploadResp.Data.CreatedAt == 0 {
+		t.Fatal("created_at missing")
+	}
+
+	got, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("file not on disk: %v", err)
+	}
+	if string(got) != "hello path" {
+		t.Fatalf("disk content = %q", got)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/files", nil)
+	setChatReadHeaders(listReq, "secret")
+	listRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d", listRec.Code)
+	}
+	var listResp struct {
+		Data struct {
+			Files []fileView `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(listResp.Data.Files) != 0 {
+		t.Fatalf("privileged upload must not appear in list: %#v", listResp.Data.Files)
+	}
+}
+
+func TestPrivilegedUpload_ConflictWithoutOverwrite(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+	p.privilegedFiles = true
+
+	body1, ctype1 := privilegedUploadBody(t, "out.txt", "first", "subdir/out.txt", "")
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/files", body1)
+	setFileHeaders(req1, "secret", "user_001")
+	req1.Header.Set("Content-Type", ctype1)
+	rec1 := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusCreated && rec1.Code != http.StatusOK {
+		t.Fatalf("first upload status = %d, body = %s", rec1.Code, rec1.Body.String())
+	}
+
+	body2, ctype2 := privilegedUploadBody(t, "out.txt", "second", "subdir/out.txt", "")
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/files", body2)
+	setFileHeaders(req2, "secret", "user_001")
+	req2.Header.Set("Content-Type", ctype2)
+	rec2 := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusConflict {
+		t.Fatalf("second upload status = %d, want 409, body = %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+func TestPrivilegedUpload_Overwrite(t *testing.T) {
+	p, baseDir := testWorkspacePlatform(t)
+	p.privilegedFiles = true
+
+	body1, ctype1 := privilegedUploadBody(t, "out.txt", "first", "subdir/out.txt", "")
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/files", body1)
+	setFileHeaders(req1, "secret", "user_001")
+	req1.Header.Set("Content-Type", ctype1)
+	rec1 := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusCreated && rec1.Code != http.StatusOK {
+		t.Fatalf("first upload status = %d, body = %s", rec1.Code, rec1.Body.String())
+	}
+
+	body2, ctype2 := privilegedUploadBody(t, "out.txt", "replaced", "subdir/out.txt", "true")
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/files", body2)
+	setFileHeaders(req2, "secret", "user_001")
+	req2.Header.Set("Content-Type", ctype2)
+	rec2 := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusCreated && rec2.Code != http.StatusOK {
+		t.Fatalf("overwrite status = %d, want 200/201, body = %s", rec2.Code, rec2.Body.String())
+	}
+	var uploadResp struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Overwritten bool   `json:"overwritten"`
+			Size        int64  `json:"size"`
+			Path        string `json:"path"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &uploadResp); err != nil {
+		t.Fatal(err)
+	}
+	if !uploadResp.OK || !uploadResp.Data.Overwritten || uploadResp.Data.Size != 8 {
+		t.Fatalf("overwrite resp = %#v", uploadResp)
+	}
+	wantPath := filepath.Join(baseDir, testChannel, "subdir", "out.txt")
+	got, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "replaced" {
+		t.Fatalf("disk content = %q", got)
+	}
+}
+
+func TestPrivilegedUpload_EnforcesMaxSize(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+	p.privilegedFiles = true
+	p.maxUploadSize = 8
+
+	body, ctype := privilegedUploadBody(t, "big.bin", "0123456789", "big.bin", "")
+	req := httptest.NewRequest(http.MethodPost, "/v1/files", body)
+	setFileHeaders(req, "secret", "user_001")
+	req.Header.Set("Content-Type", ctype)
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413, body = %s", rec.Code, rec.Body.String())
+	}
+}
