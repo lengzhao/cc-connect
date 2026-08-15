@@ -419,3 +419,68 @@ func TestListFileMetasInDir_EmptyIDDerivation(t *testing.T) {
 		t.Fatalf("derived id = %q, want opaque %q (not full file_<id>.name)", metas[0].ID, id)
 	}
 }
+
+func TestResolvePrivilegedPath(t *testing.T) {
+	ws := t.TempDir()
+
+	wantRel, err := filepath.Abs(filepath.Join(ws, "dir", "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []string{"dir/a.txt", "./dir/a.txt"} {
+		got, err := resolvePrivilegedPath(ws, in)
+		if err != nil {
+			t.Fatalf("resolvePrivilegedPath(%q): %v", in, err)
+		}
+		if got != wantRel {
+			t.Fatalf("resolvePrivilegedPath(%q) = %q, want %q", in, got, wantRel)
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHome, err := filepath.Abs(filepath.Join(home, "x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotHome, err := resolvePrivilegedPath(ws, "~/x")
+	if err != nil {
+		t.Fatalf("~/x: %v", err)
+	}
+	if gotHome != wantHome {
+		t.Fatalf("~/x = %q, want %q", gotHome, wantHome)
+	}
+
+	absIn := filepath.Join(ws, "abs.txt")
+	wantAbs, err := filepath.Abs(filepath.Clean(absIn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotAbs, err := resolvePrivilegedPath(ws, absIn)
+	if err != nil {
+		t.Fatalf("absolute: %v", err)
+	}
+	if gotAbs != wantAbs {
+		t.Fatalf("absolute = %q, want %q", gotAbs, wantAbs)
+	}
+
+	parentWant, err := filepath.Abs(filepath.Join(ws, "..", "outside.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotParent, err := resolvePrivilegedPath(ws, "../outside.txt")
+	if err != nil {
+		t.Fatalf("../outside.txt: %v", err)
+	}
+	if gotParent != parentWant {
+		t.Fatalf("../outside.txt = %q, want %q", gotParent, parentWant)
+	}
+
+	for _, empty := range []string{"", "   ", "\t"} {
+		if _, err := resolvePrivilegedPath(ws, empty); err == nil {
+			t.Fatalf("empty path %q: want error", empty)
+		}
+	}
+}
