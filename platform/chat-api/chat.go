@@ -25,7 +25,15 @@ const (
 	defaultSSEPingInterval    = 5 * time.Second
 	busyPolicyQueue           = "queue"
 	busyPolicyReject          = "reject"
+	headerSkipPromptMeta      = "X-Chat-API-Skip-Prompt-Meta"
 )
+
+// skipPromptMetaHeader reports whether the request opts out of Engine
+// [cc-connect ...] prompt metadata injection for this turn.
+func skipPromptMetaHeader(r *http.Request) bool {
+	v := strings.TrimSpace(r.Header.Get(headerSkipPromptMeta))
+	return strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+}
 
 type chatInput struct {
 	Type           string `json:"type"`
@@ -192,20 +200,21 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msg := core.Message{
-		SessionKey:   engineSessionKey,
-		Platform:     p.Name(),
-		MessageID:    runID,
-		ChannelID:    channelKey,
-		ChannelKey:   channelKey,
-		ChatName:     chatName,
-		UserID:       user,
-		UserName:     userName,
-		Content:      query,
-		Images:       images,
-		Files:        files,
-		Audio:        audio,
-		ReplyCtx:     rc,
-		AgentContext: p.agentContextHeaders.collectAgentContext(r),
+		SessionKey:     engineSessionKey,
+		Platform:       p.Name(),
+		MessageID:      runID,
+		ChannelID:      channelKey,
+		ChannelKey:     channelKey,
+		ChatName:       chatName,
+		UserID:         user,
+		UserName:       userName,
+		Content:        query,
+		Images:         images,
+		Files:          files,
+		Audio:          audio,
+		ReplyCtx:       rc,
+		AgentContext:   p.agentContextHeaders.collectAgentContext(r),
+		SkipPromptMeta: skipPromptMetaHeader(r),
 	}
 
 	if implicitCreate && autoName {

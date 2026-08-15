@@ -52,6 +52,7 @@ func (p *Platform) setCORS(w http.ResponseWriter, r *http.Request) {
 			allowHeaders := []string{
 				"Authorization", "Content-Type", "Accept",
 				p.userHeader, p.userNameHeader, p.channelHeader,
+				headerSkipPromptMeta,
 			}
 			allowHeaders = append(allowHeaders, p.agentContextHeaders.headerNames()...)
 			allowHeaders = append(allowHeaders, p.forwardHeaders...)

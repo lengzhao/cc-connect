@@ -248,6 +248,10 @@ type Message struct {
 	// the agent prompt when project inject_context allowlist permits them.
 	// Never persisted on Session / History.
 	AgentContext AgentContext
+	// SkipPromptMeta, when true, tells Engine not to prepend the
+	// [cc-connect ...] line (sender / timestamp / inject_context) for this
+	// turn. Per-turn only; not persisted. Used by chat-api opt-out header.
+	SkipPromptMeta bool
 	// SkipHistory marks internal prompts whose input and response must not be
 	// persisted in the user-visible session history.
 	SkipHistory bool

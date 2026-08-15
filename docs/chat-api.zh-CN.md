@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.5.0**（2026-08-15）<br>
+> 版本：**v1.5.1**（2026-08-15）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [特权路径文件](./plans/2026-08-15-chat-api-privileged-files-design.md) · [关闭空闲 Agent 会话](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [特权路径文件](./plans/2026-08-15-chat-api-privileged-files-design.md) · [关闭空闲 Agent 会话](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md) · [Skip Prompt Meta](./plans/2026-08-15-chat-api-skip-prompt-meta-design.md)
 
 ## 1. 概述
 
@@ -300,6 +300,30 @@ X-Trace-Id: trace-42
 - 仅 `POST /chat-messages` 采集；cancel / interaction respond 不采集。
 
 详见 [forward_headers 设计](./plans/2026-07-21-chat-api-forward-headers-design.md)。
+
+### 3.3.3 Skip Prompt Meta（跳过 `[cc-connect ...]` 注入）
+
+默认情况下，若项目开启了 `inject_sender` / `inject_timestamp` / `inject_context`，Engine 会在交给 Agent 的文本前加上 `[cc-connect ...]` 前缀。
+
+需要本轮**原样**把 `query`（及文件路径 append）交给 Agent 时，可设置：
+
+```http
+X-Chat-API-Skip-Prompt-Meta: true
+```
+
+| 取值 | 行为 |
+|------|------|
+| 省略 / 其他 | 按项目 `inject_*` 正常注入 |
+| `true` / `1` / `yes`（大小写不敏感） | 本轮不注入整行 `[cc-connect ...]` |
+
+注意：
+
+- 仅作用于 `POST /chat-messages`；cancel / interaction / resume 不读此 header。
+- 不影响 `AppendFileRefs`、body `metadata` → hooks、`forward_headers` → hooks。
+- 历史仍只存原始 `query`（本来就不存注入前缀）。
+- 该 header 会加入 CORS `Access-Control-Allow-Headers`。
+
+详见 [Skip Prompt Meta 设计](./plans/2026-08-15-chat-api-skip-prompt-meta-design.md)。
 
 **SSE 响应**（`Accept: text/event-stream`、`*/*` 或省略）
 
@@ -991,6 +1015,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.5.1 | 2026-08-15 | `X-Chat-API-Skip-Prompt-Meta`：单轮跳过 Agent 侧 `[cc-connect ...]` 注入 |
 | v1.5.0 | 2026-08-15 | `POST /agent-sessions/close-idle`：关闭空闲 live agent 进程（Engine 级；不要求 `X-Chat-API-Channel`） |
 | v1.4.0 | 2026-08-15 | 托管文件命名 `file_<id>.<filename>`；可选 `privileged_files`：路径上传（`path`/`overwrite`）与 `GET /files/by-path`（路径上传无 `file_id`、不进列表） |
 | v1.3.0 | 2026-08-09 | 文件 API：上传至 workspace `uploads/`、Agent `FileSender` 写入 `.cc-connect/chat-api/download/`、SSE `file_ready`；需 `X-Chat-API-Channel` |

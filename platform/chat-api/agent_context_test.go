@@ -153,4 +153,81 @@ func TestCORSIncludesAgentContextHeaders(t *testing.T) {
 	if !strings.Contains(allowed, "X-Language") || !strings.Contains(allowed, "X-Task-Id") {
 		t.Fatalf("Allow-Headers = %q", allowed)
 	}
+	if !strings.Contains(allowed, headerSkipPromptMeta) {
+		t.Fatalf("Allow-Headers missing %s: %q", headerSkipPromptMeta, allowed)
+	}
 }
+
+func TestSkipPromptMetaHeaderParse(t *testing.T) {
+	cases := []struct {
+		val  string
+		want bool
+	}{
+		{"", false},
+		{"false", false},
+		{"no", false},
+		{"true", true},
+		{"TRUE", true},
+		{"1", true},
+		{"yes", true},
+		{"Yes", true},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
+		if tc.val != "" {
+			req.Header.Set(headerSkipPromptMeta, tc.val)
+		}
+		if got := skipPromptMetaHeader(req); got != tc.want {
+			t.Fatalf("val=%q got %v want %v", tc.val, got, tc.want)
+		}
+	}
+}
+
+func TestChatMessagesPassesSkipPromptMeta(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	bindTestSessions(t, p)
+
+	var (
+		mu   sync.Mutex
+		got  bool
+		done = make(chan struct{})
+	)
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		mu.Lock()
+		got = msg.SkipPromptMeta
+		mu.Unlock()
+		close(done)
+		if scp, ok := platform.(core.StreamingCardPlatform); ok {
+			card, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+			_ = card.Finalize(context.Background(), "ok")
+		}
+	})
+
+	body := `{"query":"hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set(headerSkipPromptMeta, "true")
+
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler not called")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !got {
+		t.Fatal("expected SkipPromptMeta=true on Message")
+	}
+}
+

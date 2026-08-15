@@ -503,6 +503,7 @@ type queuedMessage struct {
 	channelKey        string // platform-provided channel identifier (preferred over sessionKey extraction)
 	userMessageTimeMs int64  // Feishu create_time ms (optional); see Message.UserMessageTimeMs
 	agentContext      AgentContext
+	skipPromptMeta    bool // see Message.SkipPromptMeta
 }
 
 // interactiveState tracks a running interactive agent session and its permission state.
@@ -3196,6 +3197,7 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 		channelKey:        msg.ChannelKey,
 		userMessageTimeMs: msg.UserMessageTimeMs,
 		agentContext:      msg.AgentContext.Clone(),
+		skipPromptMeta:    msg.SkipPromptMeta,
 	})
 	queueDepth := len(state.pendingMessages)
 
@@ -3831,7 +3833,10 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		drainEvents(state.agentSession.Events())
 	}
 
-	promptContent := e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, p, msg.AgentContext)
+	promptContent := msg.Content
+	if !msg.SkipPromptMeta {
+		promptContent = e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, p, msg.AgentContext)
+	}
 
 	sendStart := time.Now()
 	state.mu.Lock()
@@ -6088,7 +6093,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					}
 				}
 
-				queuedPrompt := e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext)
+				queuedPrompt := queued.content
+				if !queued.skipPromptMeta {
+					queuedPrompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext)
+				}
 
 				state.mu.Lock()
 				as := state.agentSession // capture under lock to avoid race with cleanup
@@ -6424,7 +6432,10 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		e.emitQueuedMessageProcessingHook(queued)
 
 		e.i18n.DetectAndSet(queued.content)
-		prompt := e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext)
+		prompt := queued.content
+		if !queued.skipPromptMeta {
+			prompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext)
+		}
 
 		state.mu.Lock()
 		as := state.agentSession // capture under lock to avoid race with cleanup (mirrors #1436)

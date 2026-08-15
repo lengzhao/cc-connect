@@ -11561,6 +11561,89 @@ func TestBuildAgentPrompt_InjectContextWithSender(t *testing.T) {
 	}
 }
 
+func TestSkipPromptMeta_BypassesAllInjection(t *testing.T) {
+	agentSession := newResultAgentSession("ok")
+	agent := &resultAgent{session: agentSession}
+	p := &stubPlatformEngine{n: "chat-api"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	defer e.cancel()
+	e.SetInjectSender(true)
+	e.SetInjectTimestamp(true)
+	e.SetInjectContext([]string{"language", "task_id"})
+
+	e.ReceiveMessage(p, &Message{
+		SessionKey: "chat-api:ch:u1",
+		Platform:   "chat-api",
+		UserID:     "u1",
+		UserName:   "Alice",
+		Content:    "raw query only",
+		ChannelKey: "ch",
+		AgentContext: AgentContext{
+			Language: "zh",
+			TaskID:   "job-1",
+		},
+		SkipPromptMeta: true,
+		ReplyCtx:       "rc",
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(agentSession.sentPrompts) > 0 {
+			if agentSession.sentPrompts[0] != "raw query only" {
+				t.Fatalf("agent prompt = %q, want raw content without [cc-connect ...]", agentSession.sentPrompts[0])
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for agent Send")
+}
+
+func TestSkipPromptMeta_QueuedPreservesFlag(t *testing.T) {
+	p := &stubPlatformEngine{n: "chat-api"}
+	sess := newControllableSession("busy")
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	defer e.cancel()
+
+	key := "chat-api:ch:u1"
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx-active",
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	ok := e.queueMessageForBusySession(p, &Message{
+		SessionKey:     key,
+		Platform:       "chat-api",
+		UserID:         "u1",
+		UserName:       "Alice",
+		Content:        "queued raw",
+		ChannelKey:     "ch",
+		SkipPromptMeta: true,
+		ReplyCtx:       "ctx-q",
+		MessageID:      "msg-q",
+	}, key)
+	if !ok {
+		t.Fatal("expected message to be queued")
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if len(state.pendingMessages) != 1 {
+		t.Fatalf("pendingMessages len = %d, want 1", len(state.pendingMessages))
+	}
+	if !state.pendingMessages[0].skipPromptMeta {
+		t.Fatal("queued message lost SkipPromptMeta")
+	}
+}
+
+
+
+
+
 func TestResolveLocalDirPath_RejectsTraversal(t *testing.T) {
 	base := t.TempDir()
 	_, err := resolveLocalDirPath("../../etc", base)
