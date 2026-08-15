@@ -348,3 +348,74 @@ func TestFindManagedFilePaths_NewAndLegacy(t *testing.T) {
 		t.Fatalf("missing: err = %v, want errUploadNotFound", err)
 	}
 }
+
+func TestFindManagedFilePaths_MultiMatchDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	id := "file_abcdefghijklmnopqrstuv"
+
+	// Write two new-layout pairs; lexicographically first meta path should win.
+	laterContent := filepath.Join(dir, id+".zzz.txt")
+	laterMeta := laterContent + uploadMetaSuffix
+	earlierContent := filepath.Join(dir, id+".aaa.txt")
+	earlierMeta := earlierContent + uploadMetaSuffix
+	for _, pair := range [][2]string{
+		{laterContent, laterMeta},
+		{earlierContent, earlierMeta},
+	} {
+		if err := os.WriteFile(pair[0], []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(pair[1], []byte(`{"id":"`+id+`"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	contentPath, metaPath, err := findManagedFilePaths(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contentPath != earlierContent || metaPath != earlierMeta {
+		t.Fatalf("got content=%q meta=%q, want content=%q meta=%q", contentPath, metaPath, earlierContent, earlierMeta)
+	}
+}
+
+func TestManagedFileIDFromDiskName(t *testing.T) {
+	id := "file_abcdefghijklmnopqrstuv"
+	if got := managedFileIDFromDiskName(id); got != id {
+		t.Fatalf("legacy basename: got %q, want %q", got, id)
+	}
+	if got := managedFileIDFromDiskName(id + ".a.b"); got != id {
+		t.Fatalf("dotted filename: got %q, want %q", got, id)
+	}
+	if got := managedFileIDFromDiskName("not-a-file"); got != "" {
+		t.Fatalf("illegal name: got %q, want empty", got)
+	}
+	if got := managedFileIDFromDiskName("file_short.name"); got != "" {
+		t.Fatalf("short id: got %q, want empty", got)
+	}
+}
+
+func TestListFileMetasInDir_EmptyIDDerivation(t *testing.T) {
+	dir := t.TempDir()
+	id := "file_abcdefghijklmnopqrstuv"
+
+	validMeta := filepath.Join(dir, id+".notes.txt"+uploadMetaSuffix)
+	if err := os.WriteFile(validMeta, []byte(`{"filename":"notes.txt","kind":"upload"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Unparseable opaque id from disk name — must be skipped, not listed with full basename.
+	if err := os.WriteFile(filepath.Join(dir, "garbage.meta.json"), []byte(`{"filename":"garbage"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	metas, err := listFileMetasInDir(dir, fileKindUpload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metas) != 1 {
+		t.Fatalf("metas len = %d, want 1 (skip empty id): %#v", len(metas), metas)
+	}
+	if metas[0].ID != id {
+		t.Fatalf("derived id = %q, want opaque %q (not full file_<id>.name)", metas[0].ID, id)
+	}
+}

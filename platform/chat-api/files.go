@@ -384,6 +384,8 @@ func managedContentBaseName(id, filename string) string {
 
 // findManagedFilePaths looks up content+meta for fileID under dir.
 // Prefer new layout file_<id>.<name>[.meta.json]; fall back to legacy file_<id>.
+// If multiple new-layout metas exist for the same id, pick the lexicographically
+// first meta path for deterministic behavior.
 func findManagedFilePaths(dir, fileID string) (contentPath, metaPath string, err error) {
 	if !fileIDPattern.MatchString(fileID) {
 		return "", "", errUploadNotFound
@@ -396,6 +398,7 @@ func findManagedFilePaths(dir, fileID string) (contentPath, metaPath string, err
 		return "", "", readErr
 	}
 	prefix := fileID + "."
+	var candidates []string
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -409,11 +412,17 @@ func findManagedFilePaths(dir, fileID string) (contentPath, metaPath string, err
 		if base == fileID {
 			continue
 		}
-		metaPath = filepath.Join(dir, name)
-		contentPath = strings.TrimSuffix(metaPath, uploadMetaSuffix)
-		if _, statErr := os.Stat(contentPath); statErr != nil {
+		candidateMeta := filepath.Join(dir, name)
+		candidateContent := strings.TrimSuffix(candidateMeta, uploadMetaSuffix)
+		if _, statErr := os.Stat(candidateContent); statErr != nil {
 			continue
 		}
+		candidates = append(candidates, candidateMeta)
+	}
+	if len(candidates) > 0 {
+		sort.Strings(candidates)
+		metaPath = candidates[0]
+		contentPath = strings.TrimSuffix(metaPath, uploadMetaSuffix)
 		return contentPath, metaPath, nil
 	}
 
@@ -582,9 +591,10 @@ func listFileMetasInDir(dir, kind string) ([]uploadedFileMeta, error) {
 		}
 		if meta.ID == "" {
 			base := strings.TrimSuffix(entry.Name(), uploadMetaSuffix)
-			if id := managedFileIDFromDiskName(base); id != "" {
-				meta.ID = id
-			}
+			meta.ID = managedFileIDFromDiskName(base)
+		}
+		if meta.ID == "" {
+			continue
 		}
 		if meta.Kind == "" {
 			meta.Kind = kind
@@ -600,14 +610,11 @@ func managedFileIDFromDiskName(base string) string {
 	if fileIDPattern.MatchString(base) {
 		return base
 	}
-	if !strings.HasPrefix(base, fileIDPrefix) {
+	dot := strings.Index(base, ".")
+	if dot < 0 {
 		return ""
 	}
-	rest := strings.TrimPrefix(base, fileIDPrefix)
-	if len(rest) < 23 || rest[22] != '.' {
-		return ""
-	}
-	candidate := fileIDPrefix + rest[:22]
+	candidate := base[:dot]
 	if fileIDPattern.MatchString(candidate) {
 		return candidate
 	}
