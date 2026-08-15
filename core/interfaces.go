@@ -102,6 +102,25 @@ type SessionManagerBinder interface {
 	BindSessions(sessions *SessionManager)
 }
 
+// CloseIdleAgentSessionsResult is returned by IdleAgentSessionCloser.
+type CloseIdleAgentSessionsResult struct {
+	Closed             int
+	Skipped            int
+	ClosedSessionKeys  []string
+	SkippedSessionKeys []string
+}
+
+// IdleAgentSessionCloser closes live agent processes that are idle
+// (not mid-turn / permission / queued). Implemented by Engine.
+type IdleAgentSessionCloser interface {
+	CloseIdleAgentSessions() CloseIdleAgentSessionsResult
+}
+
+// IdleAgentSessionCloserBinder is optional; Engine.Start binds the closer.
+type IdleAgentSessionCloserBinder interface {
+	BindIdleAgentSessionCloser(c IdleAgentSessionCloser)
+}
+
 // WorkspaceSessionStorePolicy lets platforms opt out of per-workspace session
 // stores while still using per-workspace agents/work_dir. This is useful for
 // APIs whose public conversation IDs are already globally unique.
