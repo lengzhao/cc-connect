@@ -320,6 +320,10 @@ func (p *Platform) handleFileRoutes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 		return
 	}
+	if sub == "by-path" {
+		p.handlePrivilegedDownloadByPath(w, r)
+		return
+	}
 	channelKey, ok := p.resolveChannel(w, r)
 	if !ok {
 		return
@@ -341,6 +345,73 @@ func (p *Platform) handleFileRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if meta.Filename != "" {
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": meta.Filename}))
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func (p *Platform) handlePrivilegedDownloadByPath(w http.ResponseWriter, r *http.Request) {
+	if !p.privilegedFiles {
+		writeErr(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	channelKey, ok := p.resolveChannel(w, r)
+	if !ok {
+		return
+	}
+	pathField := strings.TrimSpace(r.URL.Query().Get("path"))
+	if pathField == "" {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	workspace, err := p.workspaceDirForChannel(channelKey)
+	if err != nil {
+		if errors.Is(err, errWorkspaceNotConfigured) {
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		slog.Error("chat-api: privileged download workspace", "channel", channelKey, "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	target, err := resolvePrivilegedPath(workspace, pathField)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	st, err := os.Stat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		slog.Error("chat-api: privileged download stat", "path", target, "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !st.Mode().IsRegular() {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		slog.Error("chat-api: privileged download read", "path", target, "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	filename := filepath.Base(target)
+	contentType := http.DetectContentType(data)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	if filename != "" && filename != "." && filename != "/" {
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
 	}
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	w.WriteHeader(http.StatusOK)

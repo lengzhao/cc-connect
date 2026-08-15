@@ -698,3 +698,113 @@ func TestPrivilegedUpload_EnforcesMaxSize(t *testing.T) {
 		t.Fatalf("status = %d, want 413, body = %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestPrivilegedDownloadByPath_ForbiddenWhenDisabled(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/files/by-path?path=dir/f.txt", nil)
+	setChatReadHeaders(req, "secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPrivilegedDownloadByPath_ReturnsBytes(t *testing.T) {
+	p, baseDir := testWorkspacePlatform(t)
+	p.privilegedFiles = true
+
+	rel := filepath.Join("dir", "f.txt")
+	abs := filepath.Join(baseDir, testChannel, "dir", "f.txt")
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(abs, []byte("by-path content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/files/by-path?path="+rel, nil)
+	setChatReadHeaders(req, "secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != "by-path content" {
+		t.Fatalf("body = %q, want by-path content", got)
+	}
+	ct := rec.Header().Get("Content-Type")
+	if ct == "" {
+		t.Fatal("Content-Type missing")
+	}
+	cd := rec.Header().Get("Content-Disposition")
+	if !strings.Contains(cd, "f.txt") {
+		t.Fatalf("Content-Disposition = %q, want filename f.txt", cd)
+	}
+}
+
+func TestPrivilegedDownloadByPath_MissingFile(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+	p.privilegedFiles = true
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/files/by-path?path=dir/missing.txt", nil)
+	setChatReadHeaders(req, "secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPrivilegedDownloadByPath_DirectoryNotFound(t *testing.T) {
+	p, baseDir := testWorkspacePlatform(t)
+	p.privilegedFiles = true
+
+	dirPath := filepath.Join(baseDir, testChannel, "adir")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/files/by-path?path=adir", nil)
+	setChatReadHeaders(req, "secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for directory, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPrivilegedDownloadByPath_EmptyPath(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+	p.privilegedFiles = true
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/files/by-path?path=", nil)
+	setChatReadHeaders(req, "secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPrivilegedDownloadByPath_ManagedFileIDStillWorks(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+	p.privilegedFiles = true
+
+	meta, err := p.saveUploadedFile(testChannel, "user_001", "managed.txt", "text/plain", []byte("managed bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/files/"+meta.ID, nil)
+	setChatReadHeaders(req, "secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("managed download status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != "managed bytes" {
+		t.Fatalf("body = %q", got)
+	}
+}
