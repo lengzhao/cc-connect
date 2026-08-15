@@ -4382,17 +4382,120 @@ func (e *Engine) cleanupInteractiveStateForIdleToken(sessionKey string, expected
 
 	slog.Info("agent session idle timeout: closing live agent session",
 		"session_key", sessionKey, "timeout", timeout)
-	e.stopUnsolicitedReader(state)
-	state.markStopped()
+	e.finishCloseLiveIdleAgentSession(sessionKey, expected, agentSession)
+}
 
+// CloseIdleAgentSessions closes live agent processes that are idle (not mid-turn,
+// permission-waiting, or queued). Preserves Session.AgentSessionID for resume.
+// Implements IdleAgentSessionCloser.
+func (e *Engine) CloseIdleAgentSessions() CloseIdleAgentSessionsResult {
+	var result CloseIdleAgentSessionsResult
+
+	e.interactiveMu.Lock()
+	keys := make([]string, 0, len(e.interactiveStates))
+	for k := range e.interactiveStates {
+		keys = append(keys, k)
+	}
+	e.interactiveMu.Unlock()
+
+	for _, key := range keys {
+		closed, skipped := e.tryCloseIdleAgentSession(key)
+		if closed {
+			result.Closed++
+			result.ClosedSessionKeys = append(result.ClosedSessionKeys, key)
+		} else if skipped {
+			result.Skipped++
+			result.SkippedSessionKeys = append(result.SkippedSessionKeys, key)
+		}
+	}
+	return result
+}
+
+// tryCloseIdleAgentSession attempts to close one interactive state's live agent.
+// Returns (true, false) if closed, (false, true) if Alive but not closable,
+// (false, false) if there is no Alive agent to report.
+func (e *Engine) tryCloseIdleAgentSession(sessionKey string) (closed, skipped bool) {
+	e.interactiveMu.Lock()
+	state, ok := e.interactiveStates[sessionKey]
+	if !ok || state == nil {
+		e.interactiveMu.Unlock()
+		return false, false
+	}
+
+	var agentSession AgentSession
+	var idleCancel context.CancelFunc
 	state.mu.Lock()
-	pending := state.pending
-	state.pending = nil
+	as := state.agentSession
+	if as == nil || !as.Alive() {
+		state.mu.Unlock()
+		e.interactiveMu.Unlock()
+		return false, false
+	}
+	if state.stopped ||
+		state.eventsNeedResync ||
+		state.pending != nil ||
+		len(state.pendingMessages) > 0 ||
+		e.sessionBusyForInteractiveKey(sessionKey, state) {
+		state.mu.Unlock()
+		e.interactiveMu.Unlock()
+		return false, true
+	}
+	agentSession = as
+	state.agentSession = nil
+	idleCancel = state.agentSessionIdleCancel
+	state.agentSessionIdleCancel = nil
+	state.agentSessionIdleToken = 0
 	state.mu.Unlock()
+	e.interactiveMu.Unlock()
+
+	if idleCancel != nil {
+		idleCancel()
+	}
+
+	slog.Info("close idle agent sessions: closing", "session_key", sessionKey)
+	e.finishCloseLiveIdleAgentSession(sessionKey, state, agentSession)
+	return true, false
+}
+
+// sessionBusyForInteractiveKey reports whether the matching Session is Busy.
+// state.mu should be held by the caller when state is non-nil.
+func (e *Engine) sessionBusyForInteractiveKey(key string, state *interactiveState) bool {
+	rawKey := key
+	sessions := e.sessions
+	if state != nil && state.workspaceDir != "" {
+		prefix := normalizeWorkspacePath(state.workspaceDir) + ":"
+		rawKey = strings.TrimPrefix(key, prefix)
+		if e.workspacePool != nil {
+			if ws := e.workspacePool.Get(state.workspaceDir); ws != nil && ws.sessions != nil {
+				sessions = ws.sessions
+			}
+		}
+	}
+	if sessions == nil {
+		return false
+	}
+	s := sessions.GetActive(rawKey)
+	return s != nil && s.Busy()
+}
+
+// finishCloseLiveIdleAgentSession completes an idle live-agent close after the
+// caller has claimed agentSession (niled out of state). Does not clear
+// AgentSessionID and does not dispatch /stop.
+func (e *Engine) finishCloseLiveIdleAgentSession(sessionKey string, expected *interactiveState, agentSession AgentSession) {
+	if expected == nil {
+		return
+	}
+	e.stopUnsolicitedReader(expected)
+	expected.markStopped()
+
+	expected.mu.Lock()
+	pending := expected.pending
+	expected.pending = nil
+	expected.mu.Unlock()
 	if pending != nil {
 		pending.resolve()
 	}
-	e.notifyDroppedQueuedMessages(state, fmt.Errorf("session reset"))
+	e.notifyDroppedQueuedMessages(expected, fmt.Errorf("session reset"))
 
 	e.closeAgentSessionWithTimeout(sessionKey, agentSession)
 
