@@ -372,6 +372,17 @@ func (sm *SessionManager) GetOrCreateActive(userKey string) *Session {
 	return s
 }
 
+// GetActive returns the active session for userKey, or nil if none.
+func (sm *SessionManager) GetActive(userKey string) *Session {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sid, ok := sm.activeSession[userKey]
+	if !ok {
+		return nil
+	}
+	return sm.sessions[sid]
+}
+
 func (sm *SessionManager) NewSession(userKey, name string) *Session {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

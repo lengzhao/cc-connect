@@ -25,6 +25,19 @@ func TestSessionManager_GetOrCreateActive(t *testing.T) {
 	}
 }
 
+func TestSessionManager_GetActive_NoCreate(t *testing.T) {
+	dir := t.TempDir()
+	sm := NewSessionManager(filepath.Join(dir, "s.json"))
+	if got := sm.GetActive("missing"); got != nil {
+		t.Fatalf("expected nil, got %#v", got)
+	}
+	s := sm.GetOrCreateActive("u1")
+	got := sm.GetActive("u1")
+	if got != s {
+		t.Fatalf("GetActive = %v, want same session", got)
+	}
+}
+
 func TestSessionManager_NewSession(t *testing.T) {
 	sm := NewSessionManager("")
 	s1 := sm.NewSession("user1", "chat-a")
