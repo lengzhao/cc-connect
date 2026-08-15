@@ -53,6 +53,7 @@ type Platform struct {
 	resolvedAddr              string
 	debugUI                   bool
 	maxUploadSize             int64
+	privilegedFiles           bool
 
 	server   *http.Server
 	handler  core.MessageHandler
@@ -153,6 +154,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		multiWorkspaceBaseDir:     multiWorkspaceBaseDirFromOpts(opts),
 		debugUI:                   boolOption(opts, "debug_ui", false),
 		maxUploadSize:             int64(maxUploadSize),
+		privilegedFiles:           boolOption(opts, "privileged_files", false),
 	}
 	if p.autoGenerateNameMode != autoGenerateNameModeHeuristic && p.autoGenerateNameMode != autoGenerateNameModeAI {
 		return nil, errors.New("chat-api: auto_generate_name_mode must be heuristic or ai")

@@ -71,6 +71,24 @@ func TestNewDefaults(t *testing.T) {
 	}
 }
 
+func TestNew_PrivilegedFilesOption(t *testing.T) {
+	p, err := New(map[string]any{"privileged_files": true, "api_token": "t"})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if !p.(*Platform).privilegedFiles {
+		t.Fatalf("privilegedFiles = false, want true")
+	}
+
+	p2, err := New(map[string]any{"api_token": "t"})
+	if err != nil {
+		t.Fatalf("New() default error = %v", err)
+	}
+	if p2.(*Platform).privilegedFiles {
+		t.Fatalf("privilegedFiles default = true, want false")
+	}
+}
+
 func TestHistoryMessagesAndMessageID(t *testing.T) {
 	entries := []core.HistoryEntry{
 		{Role: "user", Content: "q1", Timestamp: time.Unix(100, 0)},
