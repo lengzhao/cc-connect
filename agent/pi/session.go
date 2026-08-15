@@ -163,7 +163,7 @@ func newPiSession(ctx context.Context, cmd string, extraArgs []string, workDir, 
 func (s *piSession) startRPC(resumeID string) error {
 	args := append(append([]string{}, s.extraArgs...), "--mode", "rpc")
 	if resumeID != "" {
-		args = append(args, "--session-id", resumeID)
+		args = append(args, "--session", resumeID)
 	}
 	if s.model != "" {
 		args = append(args, "--model", s.model)
@@ -352,7 +352,7 @@ func (s *piSession) Send(msg string, images []core.ImageAttachment, files []core
 func (s *piSession) sendJSON(prompt string) error {
 	args := append(append([]string{}, s.extraArgs...), "--mode", "json", "-p", prompt)
 	if sid := s.CurrentSessionID(); sid != "" {
-		args = append(args, "--session-id", sid)
+		args = append(args, "--session", sid)
 	}
 	if s.model != "" {
 		args = append(args, "--model", s.model)
