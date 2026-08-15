@@ -416,9 +416,22 @@
       border-color: #4a3720;
       font-size: 12px;
     }
+    .bubble .meta-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 6px;
+      flex-wrap: wrap;
+    }
+    .bubble .time {
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
     .bubble .tag {
       display: inline-block;
-      margin-bottom: 6px;
       font-size: 10px;
       letter-spacing: 0.08em;
       text-transform: uppercase;
@@ -565,6 +578,12 @@
           <button type="button" id="btnRename">重命名</button>
           <button type="button" id="btnDelete" class="danger">删除</button>
         </div>
+        <div class="btn-row">
+          <button type="button" id="btnCloseIdle" class="danger"
+            title="关闭当前 project 内所有 idle 的 live agent 进程；busy / 待权限 / 排队中的会话会跳过">
+            关闭空闲 Agent
+          </button>
+        </div>
       </div>
     </aside>
 
@@ -701,15 +720,32 @@
         .replaceAll(">", "&gt;");
     }
 
+    function formatClock(d) {
+      const t = d || new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
+    }
+
+    function appendBubbleMeta(el, tag) {
+      const row = document.createElement("div");
+      row.className = "meta-row";
+      const time = document.createElement("span");
+      time.className = "time";
+      time.textContent = formatClock();
+      row.appendChild(time);
+      if (tag) {
+        const t = document.createElement("span");
+        t.className = "tag";
+        t.textContent = tag;
+        row.appendChild(t);
+      }
+      el.appendChild(row);
+    }
+
     function addBubble(role, text, tag) {
       const el = document.createElement("div");
       el.className = "bubble " + role;
-      if (tag) {
-        const t = document.createElement("div");
-        t.className = "tag";
-        t.textContent = tag;
-        el.appendChild(t);
-      }
+      appendBubbleMeta(el, tag);
       const body = document.createElement("div");
       body.className = "body";
       body.textContent = text;
@@ -860,10 +896,7 @@
     function addFileReadyBubble(data) {
       const el = document.createElement("div");
       el.className = "bubble file-out";
-      const tag = document.createElement("div");
-      tag.className = "tag";
-      tag.textContent = "file_ready";
-      el.appendChild(tag);
+      appendBubbleMeta(el, "file_ready");
       const body = document.createElement("div");
       body.className = "body";
       const name = data.filename || data.file_id || "file";
@@ -995,6 +1028,32 @@
       const json = await res.json().catch(() => ({}));
       logSSE("cancel", json, res.ok ? "" : "err");
       if (state.abort) state.abort.abort();
+    }
+
+    async function closeIdleSessions() {
+      if (!confirm("关闭当前 project 内所有空闲 live agent 进程？\n（busy / 待权限 / 排队中的会话不会动）")) {
+        return;
+      }
+      const btn = $("btnCloseIdle");
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${apiBase()}/agent-sessions/close-idle`, {
+          method: "POST",
+          headers: authHeaders(),
+        });
+        const json = await res.json().catch(() => ({}));
+        logSSE("close-idle", json, res.ok ? "" : "err");
+        if (!res.ok || !json.ok) {
+          alert("关闭失败: " + JSON.stringify(json));
+          return;
+        }
+        const d = json.data || {};
+        const closed = d.closed ?? 0;
+        const skipped = d.skipped ?? 0;
+        addBubble("sys", `已关闭空闲 Agent · closed=${closed} skipped=${skipped}`);
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     function parseSSEChunk(buffer, onEvent) {
@@ -1431,6 +1490,7 @@
     $("btnDelete").addEventListener("click", () => deleteConversation().catch(console.error));
     $("btnSend").addEventListener("click", () => sendMessage().catch(console.error));
     $("btnCancel").addEventListener("click", () => cancelRun().catch(console.error));
+    $("btnCloseIdle").addEventListener("click", () => closeIdleSessions().catch(console.error));
     $("btnIxClose").addEventListener("click", () => {
       // hideIxModalForNewMessage is defined inside sendMessage; provide a top-level hide.
       if (!$("ixModal").classList.contains("open")) return;

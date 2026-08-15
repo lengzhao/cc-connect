@@ -61,6 +61,13 @@ func TestDebugUIServesPage(t *testing.T) {
 	if !strings.Contains(html, `id="btnPickFiles"`) || !strings.Contains(html, "file_ready") {
 		t.Fatalf("debug UI must support file upload/download")
 	}
+	if !strings.Contains(html, "function formatClock") || !strings.Contains(html, "appendBubbleMeta") {
+		t.Fatalf("debug UI must stamp bubbles with local HH:MM:SS")
+	}
+	if !strings.Contains(html, `id="btnCloseIdle"`) || !strings.Contains(html, "closeIdleSessions") ||
+		!strings.Contains(html, "/agent-sessions/close-idle") {
+		t.Fatalf("debug UI must expose one-click close-idle agent sessions")
+	}
 	if !strings.Contains(html, "refreshFiles") || !strings.Contains(html, "downloadFile") {
 		t.Fatalf("debug UI must implement file list and download helpers")
 	}
