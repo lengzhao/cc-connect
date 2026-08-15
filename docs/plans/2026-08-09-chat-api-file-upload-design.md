@@ -2,7 +2,8 @@
 
 > Version: 2026-08-09 (rev 2)  
 > Status: implemented in `platform/chat-api`  
-> Public API: [chat-api.zh-CN.md](../chat-api.zh-CN.md)
+> Public API: [chat-api.zh-CN.md](../chat-api.zh-CN.md)  
+> Follow-up: [2026-08-15-chat-api-privileged-files-design.md](./2026-08-15-chat-api-privileged-files-design.md) (`file_<id>.<filename>` naming + optional `privileged_files`)
 
 ## Goal
 
