@@ -2306,6 +2306,9 @@ func (e *Engine) Start() error {
 		if binder, ok := p.(SessionManagerBinder); ok {
 			binder.BindSessions(e.sessions)
 		}
+		if binder, ok := p.(IdleAgentSessionCloserBinder); ok {
+			binder.BindIdleAgentSessionCloser(e)
+		}
 		_, isAsync := p.(AsyncRecoverablePlatform)
 		if async, ok := p.(AsyncRecoverablePlatform); ok {
 			async.SetLifecycleHandler(e)

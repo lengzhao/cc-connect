@@ -1,11 +1,47 @@
 package core
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// stubIdleCloserBinderPlatform is a minimal Platform that records the
+// IdleAgentSessionCloser bound during Engine.Start.
+type stubIdleCloserBinderPlatform struct {
+	n      string
+	closer IdleAgentSessionCloser
+}
+
+func (p *stubIdleCloserBinderPlatform) Name() string               { return p.n }
+func (p *stubIdleCloserBinderPlatform) Start(MessageHandler) error { return nil }
+func (p *stubIdleCloserBinderPlatform) Stop() error                { return nil }
+func (p *stubIdleCloserBinderPlatform) Reply(context.Context, any, string) error {
+	return nil
+}
+func (p *stubIdleCloserBinderPlatform) Send(context.Context, any, string) error {
+	return nil
+}
+func (p *stubIdleCloserBinderPlatform) BindIdleAgentSessionCloser(c IdleAgentSessionCloser) {
+	p.closer = c
+}
+
+func TestEngineStart_BindsIdleAgentSessionCloser(t *testing.T) {
+	p := &stubIdleCloserBinderPlatform{n: "chat-api"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+
+	if err := e.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if p.closer == nil {
+		t.Fatal("BindIdleAgentSessionCloser was not called")
+	}
+	if p.closer != e {
+		t.Fatalf("bound closer = %T, want *Engine", p.closer)
+	}
+}
 
 func TestCloseIdleAgentSessionsResult_Fields(t *testing.T) {
 	r := CloseIdleAgentSessionsResult{
