@@ -4424,6 +4424,7 @@ func (e *Engine) tryCloseIdleAgentSession(sessionKey string) (closed, skipped bo
 
 	var agentSession AgentSession
 	var idleCancel context.CancelFunc
+
 	state.mu.Lock()
 	as := state.agentSession
 	if as == nil || !as.Alive() {
@@ -4434,8 +4435,30 @@ func (e *Engine) tryCloseIdleAgentSession(sessionKey string) (closed, skipped bo
 	if state.stopped ||
 		state.eventsNeedResync ||
 		state.pending != nil ||
-		len(state.pendingMessages) > 0 ||
-		e.sessionBusyForInteractiveKey(sessionKey, state) {
+		len(state.pendingMessages) > 0 {
+		state.mu.Unlock()
+		e.interactiveMu.Unlock()
+		return false, true
+	}
+	workspaceDir := state.workspaceDir
+	state.mu.Unlock() // release before Session locks in Busy lookup
+
+	if e.sessionBusyForInteractiveKey(sessionKey, workspaceDir) {
+		e.interactiveMu.Unlock()
+		return false, true
+	}
+
+	state.mu.Lock()
+	as = state.agentSession
+	if as == nil || !as.Alive() {
+		state.mu.Unlock()
+		e.interactiveMu.Unlock()
+		return false, false
+	}
+	if state.stopped ||
+		state.eventsNeedResync ||
+		state.pending != nil ||
+		len(state.pendingMessages) > 0 {
 		state.mu.Unlock()
 		e.interactiveMu.Unlock()
 		return false, true
@@ -4457,16 +4480,28 @@ func (e *Engine) tryCloseIdleAgentSession(sessionKey string) (closed, skipped bo
 	return true, false
 }
 
-// sessionBusyForInteractiveKey reports whether the matching Session is Busy.
-// state.mu should be held by the caller when state is non-nil.
-func (e *Engine) sessionBusyForInteractiveKey(key string, state *interactiveState) bool {
-	rawKey := key
+// sessionBusyForInteractiveKey reports whether a Session matching the interactive
+// key is Busy. Does not take state.mu — pass workspaceDir copied under that lock.
+// Tries exact workspaceDir prefix first, then normalizeWorkspacePath; checks Busy
+// via GetActive on both the trimmed raw key (when trimmed) and the full key.
+func (e *Engine) sessionBusyForInteractiveKey(key, workspaceDir string) bool {
 	sessions := e.sessions
-	if state != nil && state.workspaceDir != "" {
-		prefix := normalizeWorkspacePath(state.workspaceDir) + ":"
-		rawKey = strings.TrimPrefix(key, prefix)
+	rawKey := key
+	trimmed := false
+	if workspaceDir != "" {
+		exactPrefix := workspaceDir + ":"
+		if strings.HasPrefix(key, exactPrefix) {
+			rawKey = strings.TrimPrefix(key, exactPrefix)
+			trimmed = true
+		} else {
+			normPrefix := normalizeWorkspacePath(workspaceDir) + ":"
+			if strings.HasPrefix(key, normPrefix) {
+				rawKey = strings.TrimPrefix(key, normPrefix)
+				trimmed = true
+			}
+		}
 		if e.workspacePool != nil {
-			if ws := e.workspacePool.Get(state.workspaceDir); ws != nil && ws.sessions != nil {
+			if ws := e.workspacePool.Get(workspaceDir); ws != nil && ws.sessions != nil {
 				sessions = ws.sessions
 			}
 		}
@@ -4474,8 +4509,16 @@ func (e *Engine) sessionBusyForInteractiveKey(key string, state *interactiveStat
 	if sessions == nil {
 		return false
 	}
-	s := sessions.GetActive(rawKey)
-	return s != nil && s.Busy()
+	keysToCheck := []string{key}
+	if trimmed && rawKey != key {
+		keysToCheck = []string{rawKey, key}
+	}
+	for _, k := range keysToCheck {
+		if s := sessions.GetActive(k); s != nil && s.Busy() {
+			return true
+		}
+	}
+	return false
 }
 
 // finishCloseLiveIdleAgentSession completes an idle live-agent close after the

@@ -1,6 +1,8 @@
 package core
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -144,6 +146,150 @@ func TestCloseIdleAgentSessions_Empty(t *testing.T) {
 	}
 	if len(result.ClosedSessionKeys) != 0 || len(result.SkippedSessionKeys) != 0 {
 		t.Fatalf("empty keys = %+v", result)
+	}
+}
+
+// TestCloseIdleAgentSessions_WorkspacePrefixedBusySkipped ensures Busy is detected
+// when the interactive key uses a non-normalized workspaceDir prefix (exact trim)
+// and the Session was registered under the raw session key.
+func TestCloseIdleAgentSessions_WorkspacePrefixedBusySkipped(t *testing.T) {
+	e := newTestEngine()
+
+	base := t.TempDir()
+	proj := filepath.Join(base, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Trailing separator so exact prefix != normalizeWorkspacePath(workspaceDir)+":".
+	wsDir := proj + string(os.PathSeparator)
+	sessionKey := "test:ws-busy"
+	interactiveKey := wsDir + ":" + sessionKey
+
+	if normalizeWorkspacePath(wsDir)+":" == wsDir+":" {
+		t.Fatalf("test setup: expected non-normalized wsDir %q to differ from normalize %q",
+			wsDir, normalizeWorkspacePath(wsDir))
+	}
+
+	agentSess := newControllableSession("ws-busy-agent")
+	state := &interactiveState{
+		agentSession:     agentSess,
+		eventsNeedResync: false,
+		workspaceDir:     wsDir,
+	}
+
+	e.interactiveMu.Lock()
+	e.interactiveStates[interactiveKey] = state
+	e.interactiveMu.Unlock()
+
+	busySession := e.sessions.GetOrCreateActive(sessionKey)
+	if !busySession.TryLock() {
+		t.Fatal("expected TryLock to succeed")
+	}
+	t.Cleanup(func() { busySession.Unlock() })
+
+	result := e.CloseIdleAgentSessions()
+
+	if result.Closed != 0 || result.Skipped != 1 {
+		t.Fatalf("result = closed=%d skipped=%d, want closed=0 skipped=1; %+v",
+			result.Closed, result.Skipped, result)
+	}
+	if !containsString(result.SkippedSessionKeys, interactiveKey) {
+		t.Fatalf("SkippedSessionKeys = %v, want %q", result.SkippedSessionKeys, interactiveKey)
+	}
+
+	select {
+	case <-agentSess.closed:
+		t.Fatal("busy workspace-prefixed session should not be closed")
+	default:
+	}
+
+	e.interactiveMu.Lock()
+	still := e.interactiveStates[interactiveKey]
+	e.interactiveMu.Unlock()
+	if still != state {
+		t.Fatal("interactive state should remain when Busy")
+	}
+	if !agentSess.Alive() {
+		t.Fatal("agent session should still be Alive")
+	}
+}
+
+// TestCloseIdleAgentSessions_BusyUnderFullInteractiveKey covers custom command/skill
+// paths that register the Session under the full workspace-prefixed interactive key.
+func TestCloseIdleAgentSessions_BusyUnderFullInteractiveKey(t *testing.T) {
+	e := newTestEngine()
+
+	base := t.TempDir()
+	proj := filepath.Join(base, "proj")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wsDir := proj
+	sessionKey := "test:full-key-busy"
+	interactiveKey := wsDir + ":" + sessionKey
+
+	agentSess := newControllableSession("full-key-busy-agent")
+	state := &interactiveState{
+		agentSession:     agentSess,
+		eventsNeedResync: false,
+		workspaceDir:     wsDir,
+	}
+
+	e.interactiveMu.Lock()
+	e.interactiveStates[interactiveKey] = state
+	e.interactiveMu.Unlock()
+
+	busySession := e.sessions.GetOrCreateActive(interactiveKey)
+	if !busySession.TryLock() {
+		t.Fatal("expected TryLock to succeed")
+	}
+	t.Cleanup(func() { busySession.Unlock() })
+
+	result := e.CloseIdleAgentSessions()
+
+	if result.Closed != 0 || result.Skipped != 1 {
+		t.Fatalf("result = closed=%d skipped=%d, want closed=0 skipped=1; %+v",
+			result.Closed, result.Skipped, result)
+	}
+	if !containsString(result.SkippedSessionKeys, interactiveKey) {
+		t.Fatalf("SkippedSessionKeys = %v, want %q", result.SkippedSessionKeys, interactiveKey)
+	}
+
+	select {
+	case <-agentSess.closed:
+		t.Fatal("busy session under full interactive key should not be closed")
+	default:
+	}
+}
+
+func TestCloseIdleAgentSessions_PreservesAgentSessionID(t *testing.T) {
+	e := newTestEngine()
+	key := "test:preserve-asid"
+
+	agentSess := newControllableSession("preserve-asid-agent")
+	state := &interactiveState{agentSession: agentSess, eventsNeedResync: false}
+
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	sess := e.sessions.GetOrCreateActive(key)
+	sess.SetAgentSessionID("as_keep", "stub")
+
+	result := e.CloseIdleAgentSessions()
+	if result.Closed != 1 || result.Skipped != 0 {
+		t.Fatalf("result = closed=%d skipped=%d, want closed=1 skipped=0; %+v",
+			result.Closed, result.Skipped, result)
+	}
+
+	select {
+	case <-agentSess.closed:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("idle agent session Close was not called")
+	}
+
+	if got := sess.GetAgentSessionID(); got != "as_keep" {
+		t.Fatalf("AgentSessionID = %q, want %q", got, "as_keep")
 	}
 }
 

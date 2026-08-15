@@ -210,10 +210,11 @@ func (e *Engine) CloseIdleAgentSessions() CloseIdleAgentSessionsResult {
 4. Else: same cleanup as `cleanupInteractiveStateForIdleToken` (cancel idle timer, nil agentSession, unlock, stop unsolicited, Close, delete from map)
 5. Log: `slog.Info("close idle agent sessions: closing", "session_key", key)`
 
-`sessionBusyForInteractiveKey(key, state)`:
-- Derive raw session key: if `state.workspaceDir != ""`, trim `normalizeWorkspacePath(workspaceDir)+":"` prefix from interactive key; else use key
+`sessionBusyForInteractiveKey(key, workspaceDir string)`:
+- Prefer exact prefix `workspaceDir + ":"` when trimming the interactive key; fallback to `normalizeWorkspacePath(workspaceDir) + ":"`
 - Resolve SessionManager: workspace pool sessions for `workspaceDir`, else `e.sessions`
-- `GetActive(rawKey)`; if non-nil && `Busy()` → true
+- `GetActive` on trimmed raw key (when trim succeeded) **and** full interactive `key`; return true if **any** found session is `Busy()`
+- Caller copies `workspaceDir` under `state.mu`, then releases `state.mu` before this call (avoid holding `state.mu` across Session locks); keep `interactiveMu` as needed for map safety
 
 Extract shared close body with idle-timeout path if easy (DRY); otherwise duplicate carefully to avoid behavior drift — prefer calling a shared `closeLiveIdleAgentSession(sessionKey, expected *interactiveState)` used by both idle timer and this API.
 

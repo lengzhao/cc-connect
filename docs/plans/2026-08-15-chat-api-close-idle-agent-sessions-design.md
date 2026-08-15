@@ -101,7 +101,7 @@ A state is closable iff all of:
 - `!eventsNeedResync`
 - `pending == nil`
 - `len(pendingMessages) == 0`
-- Matching `Session` is missing or `!Busy()`
+- Matching `Session` is missing or `!Busy()` (Busy lookup: prefer exact `workspaceDir+":"` trim, fallback to normalized prefix; `GetActive` on trimmed raw key and full interactive key)
 
 Otherwise, if there is a live/interactive state worth reporting, count as `skipped`.
 
