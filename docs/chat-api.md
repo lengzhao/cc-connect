@@ -1,6 +1,6 @@
 # chat-api Platform — API v1
 
-> Version: **v1.5.2** (2026-08-15)  
+> Version: **v1.5.3** (2026-08-16)  
 > Full spec: [chat-api.zh-CN.md](./chat-api.zh-CN.md)  
 > Design: [plans/2026-06-29-chat-api-platform-design.md](./plans/2026-06-29-chat-api-platform-design.md)  
 > File upload: [plans/2026-08-09-chat-api-file-upload-design.md](./plans/2026-08-09-chat-api-file-upload-design.md)  
@@ -8,6 +8,7 @@
 > Download file TTL: [plans/2026-08-15-chat-api-download-file-ttl-design.md](./plans/2026-08-15-chat-api-download-file-ttl-design.md)  
 > Close idle agent sessions: [plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md)  
 > Skip prompt meta: [plans/2026-08-15-chat-api-skip-prompt-meta-design.md](./plans/2026-08-15-chat-api-skip-prompt-meta-design.md)  
+> Debug UI skip prompt meta: [plans/2026-08-16-chat-api-debug-skip-prompt-meta-design.md](./plans/2026-08-16-chat-api-debug-skip-prompt-meta-design.md)  
 > Forward headers: [plans/2026-07-21-chat-api-forward-headers-design.md](./plans/2026-07-21-chat-api-forward-headers-design.md)  
 > Stream answer parse: [plans/2026-07-21-chat-api-stream-answer-parse-design.md](./plans/2026-07-21-chat-api-stream-answer-parse-design.md)  
 > Structured streaming (planned): [plans/2026-07-21-structured-streaming-card-design.md](./plans/2026-07-21-structured-streaming-card-design.md)

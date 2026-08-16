@@ -71,6 +71,10 @@ func TestDebugUIServesPage(t *testing.T) {
 	if !strings.Contains(html, "refreshFiles") || !strings.Contains(html, "downloadFile") {
 		t.Fatalf("debug UI must implement file list and download helpers")
 	}
+	if !strings.Contains(html, `id="skipPromptMeta"`) ||
+		!strings.Contains(html, "X-Chat-API-Skip-Prompt-Meta") {
+		t.Fatalf("debug UI must expose skip-prompt-meta toggle and send the header")
+	}
 	// Debug page itself must not require auth (otherwise hard to open).
 	if rec.Header().Get("Content-Type") == "" || !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("content-type = %q", rec.Header().Get("Content-Type"))

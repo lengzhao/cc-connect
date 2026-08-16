@@ -159,6 +159,29 @@
     button.danger { color: var(--danger); border-color: #5a2c2c; }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
 
+    .check-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 12px;
+      color: var(--text);
+      font-size: 12px;
+      text-transform: none;
+      letter-spacing: 0;
+      cursor: pointer;
+    }
+    .check-row input {
+      width: auto;
+      margin-top: 2px;
+      accent-color: var(--accent);
+    }
+    .check-row .hint {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
     .conv-list { display: flex; flex-direction: column; gap: 6px; }
     .conv-item {
       text-align: left;
@@ -518,7 +541,15 @@
         <label>Channel</label>
         <input id="channel" placeholder="team-alpha/backend" required />
 
-        <details class="advanced" open>
+        <label class="check-row" for="skipPromptMeta">
+          <input type="checkbox" id="skipPromptMeta" />
+          <span>
+            忽略 Prompt Meta
+            <span class="hint">勾选后发送 X-Chat-API-Skip-Prompt-Meta，不注入 [cc-connect …]</span>
+          </span>
+        </label>
+
+        <details class="advanced">
           <summary>Files</summary>
           <div class="row" style="margin-top:8px">
             <div>
@@ -540,7 +571,7 @@
           <div id="fileList" class="file-list"></div>
         </details>
 
-        <details class="advanced" open>
+        <details class="advanced">
           <summary>AgentContext headers</summary>
           <div class="row">
             <div>
@@ -549,7 +580,7 @@
             </div>
             <div>
               <label>X-Task-ID</label>
-              <input id="taskId" value="ui-job-1" />
+              <input id="taskId" value="" />
             </div>
           </div>
           <div class="row">
@@ -559,7 +590,7 @@
             </div>
             <div>
               <label>X-Tenant-ID</label>
-              <input id="tenantId" value="acme" />
+              <input id="tenantId" value="" />
             </div>
           </div>
         </details>
@@ -651,6 +682,9 @@
         for (const k of fields) {
           if (cfg[k] != null) $(k).value = cfg[k];
         }
+        if (cfg.skipPromptMeta != null) {
+          $("skipPromptMeta").checked = !!cfg.skipPromptMeta;
+        }
         if (cfg.conversationId) {
           state.conversationId = cfg.conversationId;
           setConvLabel();
@@ -661,6 +695,7 @@
     function saveConfig() {
       const cfg = {};
       for (const k of fields) cfg[k] = $(k).value.trim();
+      cfg.skipPromptMeta = $("skipPromptMeta").checked;
       cfg.conversationId = state.conversationId;
       localStorage.setItem(LS_KEY, JSON.stringify(cfg));
     }
@@ -1337,13 +1372,17 @@
       state.abort = controller;
 
       try {
+        const chatHeaders = {
+          ...authHeaders(),
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        };
+        if ($("skipPromptMeta").checked) {
+          chatHeaders["X-Chat-API-Skip-Prompt-Meta"] = "true";
+        }
         const res = await fetch(`${apiBase()}/chat-messages`, {
           method: "POST",
-          headers: {
-            ...authHeaders(),
-            "Content-Type": "application/json",
-            Accept: "text/event-stream",
-          },
+          headers: chatHeaders,
           body: JSON.stringify(body),
           signal: controller.signal,
         });

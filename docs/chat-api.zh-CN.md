@@ -1,9 +1,9 @@
 # chat-api Platform — API v1
 
-> 版本：**v1.5.2**（2026-08-15）<br>
+> 版本：**v1.5.3**（2026-08-16）<br>
 > 状态：已实现 — 与 `platform/chat-api` 对齐  
 > 平台类型：`chat-api`（`[[projects.platforms]] type = "chat-api"`）  
-> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [特权路径文件](./plans/2026-08-15-chat-api-privileged-files-design.md) · [download TTL](./plans/2026-08-15-chat-api-download-file-ttl-design.md) · [关闭空闲 Agent 会话](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md) · [Skip Prompt Meta](./plans/2026-08-15-chat-api-skip-prompt-meta-design.md)
+> 设计说明：[chat-api 平台设计](./plans/2026-06-29-chat-api-platform-design.md) · [channel 会话存储](./plans/2026-08-09-chat-api-channel-session-store-design.md) · [forward_headers](./plans/2026-07-21-chat-api-forward-headers-design.md) · [特权路径文件](./plans/2026-08-15-chat-api-privileged-files-design.md) · [download TTL](./plans/2026-08-15-chat-api-download-file-ttl-design.md) · [关闭空闲 Agent 会话](./plans/2026-08-15-chat-api-close-idle-agent-sessions-design.md) · [Skip Prompt Meta](./plans/2026-08-15-chat-api-skip-prompt-meta-design.md) · [Debug 页 Skip Prompt Meta](./plans/2026-08-16-chat-api-debug-skip-prompt-meta-design.md)
 
 ## 1. 概述
 
@@ -324,6 +324,8 @@ X-Chat-API-Skip-Prompt-Meta: true
 - 该 header 会加入 CORS `Access-Control-Allow-Headers`。
 
 详见 [Skip Prompt Meta 设计](./plans/2026-08-15-chat-api-skip-prompt-meta-design.md)。
+
+开启 `debug_ui` 时，同源调试页 Config 面板提供「忽略 Prompt Meta」开关（默认关闭，可持久化），勾选后发消息会带上上述 header。详见 [Debug 页设计](./plans/2026-08-16-chat-api-debug-skip-prompt-meta-design.md)。
 
 **SSE 响应**（`Accept: text/event-stream`、`*/*` 或省略）
 
@@ -993,7 +995,7 @@ task_id = "X-Task-ID"
 | `channel_header` | `X-Chat-API-Channel` | 可选工作区 channel header |
 | `agent_context_headers` | 空 | 字段 → HTTP header 映射，写入 `Message.AgentContext` |
 | `forward_headers` | 空 | 白名单 HTTP header → hooks（`headers` / `CC_HOOK_HEADERS_JSON`），不进 Agent；敏感头始终拦截 |
-| `debug_ui` | `false` | 为 `true` 时提供同源调试页 `/debug/`（不鉴权打开页面；调 API 仍需 token） |
+| `debug_ui` | `false` | 为 `true` 时提供同源调试页 `/debug/`（不鉴权打开页面；调 API 仍需 token；Config 可开关 Skip Prompt Meta） |
 | `cors_origins` | 空 | CORS 允许来源 |
 | `request_timeout` / `timeout` | `30m` | SSE 等待上限 |
 | `interaction_timeout` | `10m` | 确认窗口超时；不超过当前 run 剩余 `request_timeout` |
@@ -1017,6 +1019,7 @@ task_id = "X-Task-ID"
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| v1.5.3 | 2026-08-16 | debug UI：Config「忽略 Prompt Meta」开关（`X-Chat-API-Skip-Prompt-Meta`） |
 | v1.5.2 | 2026-08-15 | Agent `download/` 文件固定保留 72h；任意文件 API 触达 channel 时被动 GC |
 | v1.5.1 | 2026-08-15 | `X-Chat-API-Skip-Prompt-Meta`：单轮跳过 Agent 侧 `[cc-connect ...]` 注入 |
 | v1.5.0 | 2026-08-15 | `POST /agent-sessions/close-idle`：关闭空闲 live agent 进程（Engine 级；不要求 `X-Chat-API-Channel`） |
