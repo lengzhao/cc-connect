@@ -418,3 +418,50 @@ func TestAsyncExecCommandReplyFinishesSSE(t *testing.T) {
 		t.Fatalf("missing message_end after async exec reply: %s", out)
 	}
 }
+
+func TestLongRunningExecProgressThenFinalFinishesSSE(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	bindTestSessions(t, p)
+
+	done := make(chan struct{})
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		go func() {
+			_ = platform.Reply(context.Background(), msg.ReplyCtx, "⏳ `skills-sync`")
+			time.Sleep(20 * time.Millisecond)
+			_ = platform.Reply(context.Background(), msg.ReplyCtx, "✅ `skills-sync`\n```\nok\n```")
+			close(done)
+		}()
+	})
+
+	body := `{"query":"/skills-sync"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	<-done
+
+	out := rec.Body.String()
+	if strings.Count(out, "event: message_end") != 1 {
+		t.Fatalf("expected exactly one message_end, got %d in %s", strings.Count(out, "event: message_end"), out)
+	}
+	endIdx := strings.Index(out, "event: message_end")
+	okIdx := strings.Index(out, "ok")
+	if okIdx < 0 || endIdx < okIdx {
+		t.Fatalf("expected final output before message_end: %s", out)
+	}
+}
+
+func TestClassifyShellProgressAsTransient(t *testing.T) {
+	kind, _, _ := classifySystemReply("⏳ `skills-sync`")
+	if kind != replyKindTransient {
+		t.Fatalf("progress kind = %v, want transient", kind)
+	}
+	kind, _, _ = classifySystemReply("✅ `skills-sync`\n```\nok\n```")
+	if kind != replyKindContent {
+		t.Fatalf("final kind = %v, want content", kind)
+	}
+}

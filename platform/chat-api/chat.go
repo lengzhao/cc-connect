@@ -720,5 +720,17 @@ func classifySystemReply(content string) (replyKind, int, string) {
 	if isForwardingToAgentReply(content) {
 		return replyKindTransient, 0, ""
 	}
+	if isTransientProgressReply(content) {
+		return replyKindTransient, 0, ""
+	}
 	return replyKindContent, 0, ""
+}
+
+// isTransientProgressReply reports in-flight status lines (shell progress, etc.)
+// that should stream over SSE but not end the chat-api turn.
+func isTransientProgressReply(content string) bool {
+	if strings.HasPrefix(content, "✅ ") || strings.HasPrefix(content, "❌ ") || strings.HasPrefix(content, "⚠️ ") {
+		return false
+	}
+	return strings.HasPrefix(content, "⏳ ") || strings.HasPrefix(content, "⏰ ⏳")
 }

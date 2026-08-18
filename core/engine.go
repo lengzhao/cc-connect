@@ -14895,6 +14895,7 @@ func (e *Engine) executeShellCommand(p Platform, msg *Message, cmd *CustomComman
 	// Expand placeholders in exec command
 	execCmd := ExpandPrompt(cmd.Exec, args)
 
+	defer e.notifyProcessingEnd(p, msg.ReplyCtx, ProcessingEndEvent{Kind: ProcessingEndCommand})
 	_ = e.runShellWithProgressEnv(p, msg.ReplyCtx, execCmd, workDir, 60*time.Second, 4000, extraEnv)
 }
 
