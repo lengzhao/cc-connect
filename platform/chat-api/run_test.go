@@ -3,6 +3,7 @@ package chatapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -314,5 +315,71 @@ func TestAnswerDeltaReplaceOnNonPrefixChange(t *testing.T) {
 	}
 	if strings.Contains(joined, "正在获取") {
 		t.Fatalf("progress line leaked into answer: %q", joined)
+	}
+}
+
+// TestUnknownSlashForwardKeepsRunOpenForAgentStream is a regression test for the
+// bug where chat-api finished the SSE run on the "forwarding to agent" hint before
+// the async agent turn could stream its response.
+func TestUnknownSlashForwardKeepsRunOpenForAgentStream(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+
+	forwarding := fmt.Sprintf(core.NewI18n(core.LangEnglish).T(core.MsgUnknownCommand), "/skill-guide")
+	agentAnswer := "skill guide response from agent"
+
+	done := make(chan struct{})
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		if err := platform.Send(context.Background(), msg.ReplyCtx, forwarding); err != nil {
+			t.Errorf("Send forwarding: %v", err)
+		}
+		sess := sm.GetOrCreateActive(msg.SessionKey)
+		if !sess.TryLock() {
+			t.Error("TryLock failed")
+			close(done)
+			return
+		}
+		defer sess.Unlock()
+
+		scp, ok := platform.(core.StreamingCardPlatform)
+		if !ok {
+			t.Error("not StreamingCardPlatform")
+			close(done)
+			return
+		}
+		card, err := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+		if err != nil {
+			t.Errorf("CreateStreamingCard: %v", err)
+			close(done)
+			return
+		}
+		if err := card.Finalize(context.Background(), agentAnswer); err != nil {
+			t.Errorf("Finalize: %v", err)
+		}
+		close(done)
+	})
+
+	body := `{"query":"/skill-guide hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	<-done
+
+	out := rec.Body.String()
+	if !strings.Contains(out, agentAnswer) {
+		t.Fatalf("missing agent response: %s", out)
+	}
+	if !strings.Contains(out, "event: message_end") {
+		t.Fatalf("missing message_end: %s", out)
+	}
+	agentIdx := strings.Index(out, agentAnswer)
+	endIdx := strings.Index(out, "event: message_end")
+	if agentIdx < 0 || endIdx < 0 || agentIdx > endIdx {
+		t.Fatalf("expected agent answer before message_end, got agent=%d end=%d\n%s", agentIdx, endIdx, out)
 	}
 }

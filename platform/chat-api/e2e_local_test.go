@@ -267,6 +267,66 @@ func TestE2ELocalChatAPIEventErrorEndsSSEWithMessageEnd(t *testing.T) {
 	}
 }
 
+// TestE2EUnknownSlashCommandStreamsAgentAfterForwarding verifies unknown slash
+// commands notify the user then keep the SSE run open for the agent response.
+func TestE2EUnknownSlashCommandStreamsAgentAfterForwarding(t *testing.T) {
+	sessionPath := filepath.Join(t.TempDir(), "sessions.json")
+	plat, err := New(map[string]any{
+		"listen_addr": "127.0.0.1:0",
+		"token":       "e2e-token",
+		"path":        "/v1/",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p := plat.(*Platform)
+
+	agentSess := newE2EAgentSession("这是 skill-guide 的回复。")
+	engine := core.NewEngine("e2e", &e2eAgent{session: agentSess}, []core.Platform{p}, sessionPath, core.LangChinese)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("engine.Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = engine.Stop()
+		_ = p.Stop()
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for p.ResolvedBaseURL() == "" || !strings.Contains(p.ResolvedBaseURL(), "127.0.0.1:") {
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not start, base url = %q", p.ResolvedBaseURL())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	base := p.ResolvedBaseURL()
+
+	resp, raw := e2eRequest(t, http.MethodPost, base+"/chat-messages", "e2e-token", "e2e_user",
+		strings.NewReader(`{"query":"/skill-guide hi","auto_generate_name":true}`), "text/event-stream")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, raw)
+	}
+	if !strings.Contains(raw, "转发给 Agent") {
+		t.Fatalf("missing forwarding hint: %s", raw)
+	}
+	if !strings.Contains(raw, "这是 skill-guide 的回复") {
+		t.Fatalf("missing agent response: %s", raw)
+	}
+	forwardIdx := strings.Index(raw, "转发给 Agent")
+	agentIdx := strings.Index(raw, "这是 skill-guide 的回复")
+	endIdx := strings.Index(raw, "event: message_end")
+	if forwardIdx < 0 || agentIdx < 0 || endIdx < 0 {
+		t.Fatalf("missing events: %s", raw)
+	}
+	if !(forwardIdx < agentIdx && agentIdx < endIdx) {
+		t.Fatalf("expected forwarding → agent answer → message_end order, got forward=%d agent=%d end=%d\n%s",
+			forwardIdx, agentIdx, endIdx, raw)
+	}
+	prompts := agentSess.getPrompts()
+	if len(prompts) != 1 || !strings.Contains(prompts[0], "/skill-guide hi") {
+		t.Fatalf("agent prompts = %#v, want one containing /skill-guide hi", prompts)
+	}
+}
+
 // TestE2ELocalChatAPIFlow starts a real HTTP server and walks through create → list →
 // history → continue → rename → delete.
 func TestE2ELocalChatAPIFlow(t *testing.T) {

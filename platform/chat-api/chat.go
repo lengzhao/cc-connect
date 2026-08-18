@@ -230,6 +230,11 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		handler(p, &msg)
+		// Agent async paths lock the session before the handler returns; keep the
+		// SSE run open until streamingCard.Finalize (or OnProcessingEnd).
+		if sess := sessions.GetActive(engineSessionKey); sess != nil && sess.Busy() {
+			return
+		}
 		p.finishPlainReplyIfNeeded(runID)
 	}()
 
@@ -474,7 +479,6 @@ func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
 	if !p.pending.setStreamContent(rc.runID, content) {
 		return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
 	}
-	p.finishPlainReplyIfNeeded(rc.runID)
 	return nil
 }
 
