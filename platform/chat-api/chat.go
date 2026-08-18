@@ -468,6 +468,10 @@ func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
 			if !p.pending.signalQueueFull(rc.runID, msg) {
 				return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
 			}
+		case replyKindTransient:
+			if !p.pending.setStreamContent(rc.runID, content) {
+				return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
+			}
 		}
 		return nil
 	}
@@ -479,6 +483,7 @@ func (p *Platform) Reply(_ context.Context, replyTo any, content string) error {
 	if !p.pending.setStreamContent(rc.runID, content) {
 		return fmt.Errorf("chat-api: run %q is not pending", rc.runID)
 	}
+	p.finishPlainReplyIfNeeded(rc.runID)
 	return nil
 }
 
@@ -646,16 +651,19 @@ const (
 	replyKindContent replyKind = iota
 	replyKindQueued
 	replyKindQueueFull
+	replyKindTransient // stream only; async turn continues (e.g. unknown slash forwarding)
 )
 
 var (
-	queuedReplyTexts  map[string]struct{}
-	queueFullPrefixes []string
+	queuedReplyTexts     map[string]struct{}
+	queueFullPrefixes    []string
+	forwardingToAgentFmt []struct{ prefix, suffix string }
 )
 
 func initReplyClassifiers() {
 	queuedReplyTexts = make(map[string]struct{})
 	queueFullPrefixes = nil
+	forwardingToAgentFmt = nil
 	langs := []core.Language{
 		core.LangEnglish,
 		core.LangChinese,
@@ -670,7 +678,26 @@ func initReplyClassifiers() {
 		if idx := strings.Index(tmpl, "%"); idx >= 0 {
 			queueFullPrefixes = append(queueFullPrefixes, tmpl[:idx])
 		}
+		fwd := i18n.T(core.MsgUnknownCommand)
+		if parts := strings.SplitN(fwd, "%s", 2); len(parts) == 2 {
+			forwardingToAgentFmt = append(forwardingToAgentFmt, struct{ prefix, suffix string }{
+				prefix: parts[0],
+				suffix: parts[1],
+			})
+		}
 	}
+}
+
+func isForwardingToAgentReply(content string) bool {
+	if forwardingToAgentFmt == nil {
+		initReplyClassifiers()
+	}
+	for _, pat := range forwardingToAgentFmt {
+		if strings.HasPrefix(content, pat.prefix) && strings.HasSuffix(content, pat.suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func classifySystemReply(content string) (replyKind, int, string) {
@@ -689,6 +716,9 @@ func classifySystemReply(content string) (replyKind, int, string) {
 			}
 			return replyKindQueueFull, 1, content
 		}
+	}
+	if isForwardingToAgentReply(content) {
+		return replyKindTransient, 0, ""
 	}
 	return replyKindContent, 0, ""
 }

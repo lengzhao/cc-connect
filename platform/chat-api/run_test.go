@@ -383,3 +383,38 @@ func TestUnknownSlashForwardKeepsRunOpenForAgentStream(t *testing.T) {
 		t.Fatalf("expected agent answer before message_end, got agent=%d end=%d\n%s", agentIdx, endIdx, out)
 	}
 }
+
+// TestAsyncExecCommandReplyFinishesSSE is a regression test for exec custom commands
+// (e.g. /skills-sync) that reply asynchronously after the handler returns.
+func TestAsyncExecCommandReplyFinishesSSE(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	bindTestSessions(t, p)
+
+	done := make(chan struct{})
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			_ = platform.Reply(context.Background(), msg.ReplyCtx, "✅ `echo ok`\n```\nok\n```")
+			close(done)
+		}()
+	})
+
+	body := `{"query":"/skills-sync"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	<-done
+
+	out := rec.Body.String()
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("missing exec output: %s", out)
+	}
+	if !strings.Contains(out, "event: message_end") {
+		t.Fatalf("missing message_end after async exec reply: %s", out)
+	}
+}
