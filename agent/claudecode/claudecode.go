@@ -53,7 +53,8 @@ type Agent struct {
 	systemPrompt     string // Custom system prompt to pass to Claude CLI
 	pluginDirs       []string // Plugin directories to load via --plugin-dir (repeatable)
 
-	appendSystemPrompt string // Custom text appended to the system prompt (keeps Claude's default)
+	appendSystemPrompt      string // Custom text appended to the system prompt (keeps Claude's default)
+	appendSystemPromptFiles []string // Authoritative runtime instructions read before each Claude spawn
 
 	providerProxy  *core.ProviderProxy // local proxy for third-party providers
 	proxyLocalURL  string              // local URL of the proxy
@@ -146,6 +147,10 @@ func New(opts map[string]any) (core.Agent, error) {
 	mode = normalizePermissionMode(mode)
 	systemPrompt, _ := opts["system_prompt"].(string)
 	appendSystemPrompt, _ := opts["append_system_prompt"].(string)
+	appendSystemPromptFiles, err := promptFileListOption(opts["append_system_prompt_files"])
+	if err != nil {
+		return nil, err
+	}
 	ccDataDir, _ := opts["cc_data_dir"].(string)
 
 	var pluginDirs []string
@@ -265,8 +270,39 @@ func New(opts map[string]any) (core.Agent, error) {
 		spawnOpts:        spawnOpts,
 		ccDataDir:        ccDataDir,
 
-		appendSystemPrompt: appendSystemPrompt,
+		appendSystemPrompt:      appendSystemPrompt,
+		appendSystemPromptFiles: appendSystemPromptFiles,
 	}, nil
+}
+
+func promptFileListOption(value any) ([]string, error) {
+	var raw []string
+	switch v := value.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		raw = []string{v}
+	case []string:
+		raw = v
+	case []any:
+		for _, item := range v {
+			text, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("claudecode: append_system_prompt_files entries must be strings")
+			}
+			raw = append(raw, text)
+		}
+	default:
+		return nil, fmt.Errorf("claudecode: append_system_prompt_files must be a string or string list")
+	}
+
+	paths := make([]string, 0, len(raw))
+	for _, path := range raw {
+		if path = strings.TrimSpace(path); path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths, nil
 }
 
 // normalizeEffort maps user-friendly aliases to Claude CLI --effort values.
@@ -521,12 +557,13 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	platformPrompt := a.platformPrompt
 	systemPrompt := a.systemPrompt
 	appendSystemPrompt := a.appendSystemPrompt
+	appendSystemPromptFiles := append([]string(nil), a.appendSystemPromptFiles...)
 	// When router_url is set, --verbose conflicts with --output-format stream-json
 	// (verbose emits non-JSON text to stdout that corrupts the JSON stream).
 	disableVerbose := a.routerURL != ""
 	a.mu.Unlock()
 
-	return newClaudeSession(ctx, workDir, a.cmd, a.cliExtraArgs, a.cmdArgsFlag, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt, tools, disTools, pluginDirs, extraEnv, platformPrompt, disableVerbose, a.spawnOpts, maxTok, a.ccDataDir)
+	return newClaudeSession(ctx, workDir, a.cmd, a.cliExtraArgs, a.cmdArgsFlag, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt, appendSystemPromptFiles, tools, disTools, pluginDirs, extraEnv, platformPrompt, disableVerbose, a.spawnOpts, maxTok, a.ccDataDir)
 }
 
 func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, error) {
@@ -870,6 +907,9 @@ func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	}
 	if len(a.pluginDirs) > 0 {
 		opts["plugin_dir"] = stringsToAny(a.pluginDirs)
+	}
+	if len(a.appendSystemPromptFiles) > 0 {
+		opts["append_system_prompt_files"] = stringsToAny(a.appendSystemPromptFiles)
 	}
 	return opts
 }

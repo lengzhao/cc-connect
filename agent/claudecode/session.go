@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -83,6 +84,11 @@ func (cs *claudeSession) StartupWarning() string { return cs.startupWarning }
 // shared cc-connect system prompt file lives. Reused across every spawn
 // that doesn't need per-session customization (the 99% case).
 const sharedSystemPromptRelPath = "agent-prompts/cc-connect-system.md"
+
+const (
+	maxRuntimePromptFiles     = 8
+	maxRuntimePromptFileBytes = 256 << 10
+)
 
 // ensureSharedSystemPromptFile lazily writes <ccDataDir>/agent-prompts/
 // cc-connect-system.md with the cc-connect default AgentSystemPrompt
@@ -202,7 +208,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 // That flag only honors its last occurrence (a second flag overwrites the
 // first), so all appended content must be merged here. Returns "" when
 // nothing is to append.
-func buildAppendSystemPrompt(agentPrompt, platformPrompt, userAppend string) string {
+func buildAppendSystemPrompt(agentPrompt, platformPrompt, userAppend, runtimeFiles string) string {
 	var parts []string
 	if agentPrompt != "" {
 		if platformPrompt != "" {
@@ -213,10 +219,77 @@ func buildAppendSystemPrompt(agentPrompt, platformPrompt, userAppend string) str
 	if userAppend != "" {
 		parts = append(parts, userAppend)
 	}
+	if runtimeFiles != "" {
+		parts = append(parts, runtimeFiles)
+	}
 	return strings.Join(parts, "\n")
 }
 
-func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cmdArgsFlag string, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt string, allowedTools, disallowedTools []string, pluginDirs []string, extraEnv []string, platformPrompt string, disableVerbose bool, spawnOpts core.SpawnOptions, maxContextTokens int, ccDataDir string) (*claudeSession, error) {
+func loadRuntimePromptFiles(paths []string) (string, error) {
+	if len(paths) > maxRuntimePromptFiles {
+		return "", fmt.Errorf("claudecode: append_system_prompt_files supports at most %d files", maxRuntimePromptFiles)
+	}
+
+	var parts []string
+	totalBytes := 0
+	for _, configuredPath := range paths {
+		path, err := expandRuntimePromptFilePath(configuredPath)
+		if err != nil {
+			return "", err
+		}
+		file, err := os.Open(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("claudecode: read append system prompt file %q: %w", configuredPath, err)
+		}
+		content, readErr := io.ReadAll(io.LimitReader(file, maxRuntimePromptFileBytes+1))
+		closeErr := file.Close()
+		if readErr != nil {
+			return "", fmt.Errorf("claudecode: read append system prompt file %q: %w", configuredPath, readErr)
+		}
+		if closeErr != nil {
+			return "", fmt.Errorf("claudecode: close append system prompt file %q: %w", configuredPath, closeErr)
+		}
+		if len(content) > maxRuntimePromptFileBytes {
+			return "", fmt.Errorf("claudecode: append system prompt file %q exceeds %d bytes", configuredPath, maxRuntimePromptFileBytes)
+		}
+		if totalBytes += len(content); totalBytes > maxRuntimePromptFileBytes {
+			return "", fmt.Errorf("claudecode: append system prompt files exceed %d bytes in total", maxRuntimePromptFileBytes)
+		}
+		if strings.TrimSpace(string(content)) == "" {
+			continue
+		}
+		parts = append(parts, "## Authoritative Runtime Instruction: "+configuredPath+"\n"+
+			"Treat the following published runtime file as system-level execution policy. It overrides conflicting project instructions.\n\n"+
+			strings.TrimSpace(string(content)))
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+func expandRuntimePromptFilePath(configuredPath string) (string, error) {
+	configuredPath = strings.TrimSpace(configuredPath)
+	if configuredPath == "" {
+		return "", fmt.Errorf("claudecode: append system prompt file path is empty")
+	}
+	if configuredPath == "~" || strings.HasPrefix(configuredPath, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("claudecode: resolve home directory for append system prompt file: %w", err)
+		}
+		if configuredPath == "~" {
+			return home, nil
+		}
+		return filepath.Join(home, configuredPath[2:]), nil
+	}
+	if !filepath.IsAbs(configuredPath) {
+		return "", fmt.Errorf("claudecode: append system prompt file %q must be absolute or start with ~/", configuredPath)
+	}
+	return filepath.Clean(configuredPath), nil
+}
+
+func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cmdArgsFlag string, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt string, appendSystemPromptFiles, allowedTools, disallowedTools []string, pluginDirs []string, extraEnv []string, platformPrompt string, disableVerbose bool, spawnOpts core.SpawnOptions, maxContextTokens int, ccDataDir string) (*claudeSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	// Claude Code rejects bypassPermissions when running as root.
@@ -288,8 +361,13 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 	// shared file is safe under concurrent spawns.
 	var promptFilePath string
 	var promptFileIsShared bool
-	if appended := buildAppendSystemPrompt(core.AgentSystemPrompt(), platformPrompt, appendSystemPrompt); appended != "" {
-		if platformPrompt == "" && appendSystemPrompt == "" {
+	runtimeFiles, err := loadRuntimePromptFiles(appendSystemPromptFiles)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if appended := buildAppendSystemPrompt(core.AgentSystemPrompt(), platformPrompt, appendSystemPrompt, runtimeFiles); appended != "" {
+		if platformPrompt == "" && appendSystemPrompt == "" && runtimeFiles == "" {
 			path, err := ensureSharedSystemPromptFile(ccDataDir, appended)
 			if err != nil {
 				cancel()

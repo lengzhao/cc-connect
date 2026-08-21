@@ -437,25 +437,51 @@ func TestBuildAppendSystemPrompt(t *testing.T) {
 		agentPrompt    string
 		platformPrompt string
 		userAppend     string
+		runtimeFiles   string
 		want           string
 	}{
-		{"all_empty", "", "", "", ""},
-		{"agent_only", "AGENT", "", "", "AGENT"},
-		{"agent_and_platform", "AGENT", "PLAT", "", "AGENT\n## Formatting\nPLAT\n"},
-		{"user_only", "", "", "USER", "USER"},
-		{"user_only_platform_ignored", "", "PLAT", "USER", "USER"},
-		{"agent_and_user", "AGENT", "", "USER", "AGENT\nUSER"},
-		{"all_three", "AGENT", "PLAT", "USER", "AGENT\n## Formatting\nPLAT\n\nUSER"},
+		{"all_empty", "", "", "", "", ""},
+		{"agent_only", "AGENT", "", "", "", "AGENT"},
+		{"agent_and_platform", "AGENT", "PLAT", "", "", "AGENT\n## Formatting\nPLAT\n"},
+		{"user_only", "", "", "USER", "", "USER"},
+		{"user_only_platform_ignored", "", "PLAT", "USER", "", "USER"},
+		{"agent_and_user", "AGENT", "", "USER", "", "AGENT\nUSER"},
+		{"runtime_file", "AGENT", "", "", "FILE", "AGENT\nFILE"},
+		{"all_three", "AGENT", "PLAT", "USER", "FILE", "AGENT\n## Formatting\nPLAT\n\nUSER\nFILE"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildAppendSystemPrompt(tt.agentPrompt, tt.platformPrompt, tt.userAppend)
+			got := buildAppendSystemPrompt(tt.agentPrompt, tt.platformPrompt, tt.userAppend, tt.runtimeFiles)
 			if got != tt.want {
-				t.Errorf("buildAppendSystemPrompt(%q, %q, %q)\n  got  = %q\n  want = %q",
-					tt.agentPrompt, tt.platformPrompt, tt.userAppend, got, tt.want)
+				t.Errorf("buildAppendSystemPrompt(%q, %q, %q, %q)\n  got  = %q\n  want = %q",
+					tt.agentPrompt, tt.platformPrompt, tt.userAppend, tt.runtimeFiles, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadRuntimePromptFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "AUTOMON.md")
+	if err := os.WriteFile(path, []byte("# Charter\nFollow this."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadRuntimePromptFiles([]string{filepath.Join(dir, "missing.md"), path})
+	if err != nil {
+		t.Fatalf("loadRuntimePromptFiles() error = %v", err)
+	}
+	for _, want := range []string{"## Authoritative Runtime Instruction: " + path, "system-level execution policy", "# Charter"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("loaded prompt missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestLoadRuntimePromptFilesRejectsRelativePath(t *testing.T) {
+	if _, err := loadRuntimePromptFiles([]string{"AUTOMON.md"}); err == nil {
+		t.Fatal("expected relative path error")
 	}
 }
 
