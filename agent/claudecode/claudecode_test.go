@@ -32,6 +32,22 @@ func TestNew_ParsesRunAsUserAndRunAsEnv(t *testing.T) {
 	}
 }
 
+func TestNew_ParsesAppendSystemPromptFiles(t *testing.T) {
+	agent, err := New(map[string]any{
+		"work_dir":                   "/tmp/claudecode-test",
+		"run_as_user":                "skip-lookpath",
+		"append_system_prompt_files": []any{"~/.claude/AUTOMON.md", "/etc/agent/policy.md"},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	got := agent.(*Agent).appendSystemPromptFiles
+	want := []string{"~/.claude/AUTOMON.md", "/etc/agent/policy.md"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("appendSystemPromptFiles = %v, want %v", got, want)
+	}
+}
+
 func TestNew_RunAsUserSkipsClaudeLookPath(t *testing.T) {
 	// With run_as_user set, the supervisor's PATH lookup for "claude" is
 	// skipped because the target user's PATH is what matters. Verify that
@@ -543,31 +559,33 @@ func TestWorkspaceAgentOptions_FullSnapshot(t *testing.T) {
 	// PATH. WorkspaceAgentOptions only reads fields that the production
 	// New() also writes; this just verifies the snapshot shape.
 	a := &Agent{
-		cmd:           "my-cli",
-		cliExtraArgs:     []string{"--add-dir", "/parent"},
-		cmdArgsFlag:      "-a",
-		model:            "claude-opus-4-7",
-		reasoningEffort:  "high",
-		mode:             "acceptEdits",
-		allowedTools:     []string{"Edit", "Read"},
-		disallowedTools:  []string{"Bash"},
-		maxContextTokens: 200000,
-		routerURL:        "http://127.0.0.1:3456",
-		routerAPIKey:     "secret",
+		cmd:                     "my-cli",
+		cliExtraArgs:            []string{"--add-dir", "/parent"},
+		cmdArgsFlag:             "-a",
+		model:                   "claude-opus-4-7",
+		reasoningEffort:         "high",
+		mode:                    "acceptEdits",
+		allowedTools:            []string{"Edit", "Read"},
+		disallowedTools:         []string{"Bash"},
+		maxContextTokens:        200000,
+		routerURL:               "http://127.0.0.1:3456",
+		routerAPIKey:            "secret",
+		appendSystemPromptFiles: []string{"~/.claude/AUTOMON.md"},
 	}
 	got := a.WorkspaceAgentOptions()
 
 	want := map[string]any{
-		"mode":               "acceptEdits",
-		"cmd":           "my-cli --add-dir /parent",
-		"cmd_args_flag":      "-a",
-		"model":              "claude-opus-4-7",
-		"reasoning_effort":   "high",
-		"allowed_tools":      []any{"Edit", "Read"},
-		"disallowed_tools":   []any{"Bash"},
-		"max_context_tokens": 200000,
-		"router_url":         "http://127.0.0.1:3456",
-		"router_api_key":     "secret",
+		"mode":                       "acceptEdits",
+		"cmd":                        "my-cli --add-dir /parent",
+		"cmd_args_flag":              "-a",
+		"model":                      "claude-opus-4-7",
+		"reasoning_effort":           "high",
+		"allowed_tools":              []any{"Edit", "Read"},
+		"disallowed_tools":           []any{"Bash"},
+		"max_context_tokens":         200000,
+		"router_url":                 "http://127.0.0.1:3456",
+		"router_api_key":             "secret",
+		"append_system_prompt_files": []any{"~/.claude/AUTOMON.md"},
 	}
 	if len(got) != len(want) {
 		t.Errorf("snapshot len = %d, want %d (got=%v)", len(got), len(want), got)
@@ -599,7 +617,7 @@ func TestWorkspaceAgentOptions_OmitsZeroValues(t *testing.T) {
 	for _, k := range []string{
 		"cmd", "cmd_args_flag", "model", "reasoning_effort",
 		"allowed_tools", "disallowed_tools", "max_context_tokens",
-		"router_url", "router_api_key",
+		"router_url", "router_api_key", "append_system_prompt_files",
 	} {
 		if _, ok := got[k]; ok {
 			t.Errorf("snapshot unexpectedly includes %q = %v", k, got[k])
@@ -621,7 +639,7 @@ func TestWorkspaceAgentOptions_RoundTripsThroughNew(t *testing.T) {
 		t.Skip("run_as_user-based LookPath bypass is Unix-only")
 	}
 	parent := &Agent{
-		cmd:           "my-cli",
+		cmd:              "my-cli",
 		cliExtraArgs:     []string{"code", "--add-dir", "/parent"},
 		cmdArgsFlag:      "-a",
 		model:            "claude-opus-4-7",
@@ -632,6 +650,7 @@ func TestWorkspaceAgentOptions_RoundTripsThroughNew(t *testing.T) {
 		maxContextTokens: 200000,
 		routerURL:        "http://127.0.0.1:3456",
 		routerAPIKey:     "secret",
+		appendSystemPromptFiles: []string{"~/.claude/AUTOMON.md"},
 	}
 	opts := parent.WorkspaceAgentOptions()
 	opts["work_dir"] = "/tmp/claudecode-test"
@@ -675,6 +694,9 @@ func TestWorkspaceAgentOptions_RoundTripsThroughNew(t *testing.T) {
 	}
 	if child.routerAPIKey != "secret" {
 		t.Errorf("routerAPIKey = %q, want secret", child.routerAPIKey)
+	}
+	if !reflect.DeepEqual(child.appendSystemPromptFiles, []string{"~/.claude/AUTOMON.md"}) {
+		t.Errorf("appendSystemPromptFiles = %v, want [~/.claude/AUTOMON.md]", child.appendSystemPromptFiles)
 	}
 }
 

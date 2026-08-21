@@ -892,6 +892,13 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "auto" | "bypassP
 # 想在不丢弃默认提示的前提下补充指令时用它；可与 system_prompt 同时使用。
 # append_system_prompt = "Always respond in Chinese and prefer concise answers."
 
+# Optional: append authoritative runtime instruction files to every new or
+# resumed Claude session. Files are read immediately before spawn, so a
+# published replacement is used after the current idle process is closed.
+# Missing files are skipped; unreadable files fail the session start.
+# Paths must be absolute or start with ~/.
+# append_system_prompt_files = ["~/.claude/AUTOMON.md"]
+
 # Optional: specify a model / 可选：指定模型
 # model = "claude-sonnet-4-20250514"
 
@@ -2393,4 +2400,3 @@ app_secret = "your-feishu-app-secret"
 # wps_sid = "your-wps-sid"             # WPS登录凭证 (Cookie中的wps_sid)
 # device_name = "cc-connect"           # 设备名称（可选）
 # device_uuid = ""                     # 设备UUID（可选，留空自动生成）
-
