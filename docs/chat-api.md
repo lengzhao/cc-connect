@@ -35,6 +35,7 @@
 | `GET` | `/files` | List managed files (`kind=upload\|download\|all`) |
 | `POST` | `/files` | Upload (managed, or privileged `path` / `overwrite`) |
 | `GET` | `/files/{file_id}` | Download managed file |
+| `GET` | `/files/shared?path=` | List or download within the channel workspace `files/` tree |
 | `GET` | `/files/by-path` | Download by host path (`?path=`; needs `privileged_files`) |
 | `POST` | `/agent-sessions/close-idle` | Close idle live agent processes (Engine-wide; no Channel required) |
 
@@ -62,7 +63,11 @@ See [close-idle design](./plans/2026-08-15-chat-api-close-idle-agent-sessions-de
 
 ## Files
 
+- The channel workspace exposes a shared `files/` root to both the agent and authenticated API clients.
+- Chat uploads live in `files/chat/uploads/`; agent-produced downloads live in `files/chat/downloads/`.
+- Agent-managed memory and knowledge documents live in `files/memory/` and `files/knowledge/`; these directories are initialized with every channel workspace.
 - Managed store uses disk names `file_<id>.<filename>` (API id remains `file_<id>`; legacy `file_<id>` still readable)
+- `GET /files/shared?path=<relative-path>` lists a directory or streams a regular file. The path is always confined to `files/`; symlinks that leave the shared root are rejected.
 - Agent `download/` files are retained for **72 hours**; older ones are deleted lazily when any file API touches that channel (`GET/POST /files`, `GET /files/{id}`, `GET /files/by-path`, `SendFile`); per-channel scan throttle 1 minute. `uploads/` and privileged paths are unaffected
 - Opt-in `privileged_files` (default `false`): multipart `path` / `overwrite` on `POST /files`, and `GET /files/by-path?path=`
 - **Security:** when enabled, authenticated clients can read/write host paths (relative to channel workspace; `./` optional; `~/` and absolute allowed)

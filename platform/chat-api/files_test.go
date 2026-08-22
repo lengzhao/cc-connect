@@ -202,6 +202,73 @@ func TestInputsToCoreLocalFileUsesWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestSharedFilesListsAndDownloadsOnlySharedRoot(t *testing.T) {
+	p, baseDir := testWorkspacePlatform(t)
+	sharedDir := filepath.Join(baseDir, testChannel, workspaceFilesDir, "reports")
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedDir, "brief.txt"), []byte("brief"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=reports", nil)
+	setChatReadHeaders(listReq, "secret")
+	listRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), `"path":"reports/brief.txt"`) {
+		t.Fatalf("list status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+
+	downloadReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=reports/brief.txt", nil)
+	setChatReadHeaders(downloadReq, "secret")
+	downloadRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(downloadRec, downloadReq)
+	if downloadRec.Code != http.StatusOK || downloadRec.Body.String() != "brief" {
+		t.Fatalf("download status=%d body=%q", downloadRec.Code, downloadRec.Body.String())
+	}
+
+	escapeReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=../secret", nil)
+	setChatReadHeaders(escapeReq, "secret")
+	escapeRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(escapeRec, escapeReq)
+	if escapeRec.Code != http.StatusBadRequest {
+		t.Fatalf("escape status=%d body=%s", escapeRec.Code, escapeRec.Body.String())
+	}
+
+	outside := filepath.Join(baseDir, "outside.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(baseDir, testChannel, workspaceFilesDir, "outside-link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	symlinkReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=outside-link", nil)
+	setChatReadHeaders(symlinkReq, "secret")
+	symlinkRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(symlinkRec, symlinkReq)
+	if symlinkRec.Code != http.StatusBadRequest {
+		t.Fatalf("symlink escape status=%d body=%s", symlinkRec.Code, symlinkRec.Body.String())
+	}
+}
+
+func TestSharedFilesInitializesManagedDirectories(t *testing.T) {
+	p, baseDir := testWorkspacePlatform(t)
+	req := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=knowledge", nil)
+	setChatReadHeaders(req, "secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, rel := range []string{"files/chat/uploads", "files/chat/downloads", "files/memory", "files/knowledge"} {
+		if st, err := os.Stat(filepath.Join(baseDir, testChannel, filepath.FromSlash(rel))); err != nil || !st.IsDir() {
+			t.Fatalf("shared directory %s missing: %v", rel, err)
+		}
+	}
+}
+
 func TestUploadWithoutWorkspace(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"api_token": "secret"})
 
@@ -977,4 +1044,3 @@ func TestDownloadFileTTL_DoesNotTouchUploads(t *testing.T) {
 		t.Fatalf("upload GC'd unexpectedly: %#v", resp.Data.Files)
 	}
 }
-

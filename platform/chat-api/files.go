@@ -23,10 +23,13 @@ import (
 )
 
 const (
-	fileIDPrefix         = "file_"
-	uploadMetaSuffix     = ".meta.json"
-	workspaceUploadsDir  = "uploads"
-	workspaceDownloadRel = ".cc-connect/chat-api/download"
+	fileIDPrefix     = "file_"
+	uploadMetaSuffix = ".meta.json"
+	// All user-visible chat files live under the channel workspace's shared
+	// files/ tree so both the agent and trusted API clients see the same data.
+	workspaceFilesDir    = "files"
+	workspaceUploadsDir  = "files/chat/uploads"
+	workspaceDownloadRel = "files/chat/downloads"
 	fileKindUpload       = "upload"
 	fileKindDownload     = "download"
 	// downloadFileTTL is how long agent-produced download/ files are retained.
@@ -57,6 +60,14 @@ type fileView struct {
 	Size      int64  `json:"size"`
 	CreatedAt int64  `json:"created_at"`
 	UserID    string `json:"user_id,omitempty"`
+}
+
+type sharedFileView struct {
+	Path     string `json:"path"`
+	Name     string `json:"name"`
+	IsDir    bool   `json:"is_dir"`
+	Size     int64  `json:"size,omitempty"`
+	Modified int64  `json:"modified_at"`
 }
 
 func toFileView(meta uploadedFileMeta) fileView {
@@ -319,7 +330,7 @@ func writePrivilegedFile(target string, data []byte, overwrite bool) (overwritte
 
 func (p *Platform) handleFileRoutes(w http.ResponseWriter, r *http.Request) {
 	sub := strings.TrimPrefix(r.URL.Path, p.path+"files/")
-	if sub == "" || strings.Contains(sub, "/") {
+	if sub == "" {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -329,6 +340,14 @@ func (p *Platform) handleFileRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if sub == "by-path" {
 		p.handlePrivilegedDownloadByPath(w, r)
+		return
+	}
+	if sub == "shared" {
+		p.handleSharedFiles(w, r)
+		return
+	}
+	if strings.Contains(sub, "/") {
+		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 	channelKey, ok := p.resolveChannel(w, r)
@@ -357,6 +376,115 @@ func (p *Platform) handleFileRoutes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// handleSharedFiles lists or downloads from the public files/ tree for a
+// channel workspace. Unlike privileged by-path access, callers cannot escape
+// the shared root, including through symlinks.
+func (p *Platform) handleSharedFiles(w http.ResponseWriter, r *http.Request) {
+	channelKey, ok := p.resolveChannel(w, r)
+	if !ok {
+		return
+	}
+	if err := p.ensureChannelWorkspace(channelKey); err != nil {
+		slog.Error("chat-api: ensure shared workspace", "channel", channelKey, "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	workspace, err := p.workspaceDirForChannel(channelKey)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	root := filepath.Join(workspace, workspaceFilesDir)
+	rel, target, err := resolveSharedPath(root, r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	stat, err := os.Stat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if stat.Mode().IsRegular() {
+		file, openErr := os.Open(target)
+		if openErr != nil {
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filepath.Base(target)}))
+		http.ServeContent(w, r, filepath.Base(target), stat.ModTime(), file)
+		return
+	}
+	if !stat.IsDir() {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	items := make([]sharedFileView, 0, len(entries))
+	for _, entry := range entries {
+		// Symlinks are deliberately not part of the public tree. This keeps a
+		// link created by an agent from becoming an API path outside files/.
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		entryRel, _ := filepath.Rel(root, filepath.Join(target, entry.Name()))
+		items = append(items, sharedFileView{
+			Path: filepath.ToSlash(entryRel), Name: entry.Name(), IsDir: entry.IsDir(),
+			Size: info.Size(), Modified: info.ModTime().Unix(),
+		})
+	}
+	writeOK(w, http.StatusOK, map[string]any{"path": filepath.ToSlash(rel), "files": items})
+}
+
+func resolveSharedPath(root, raw string) (string, string, error) {
+	root = filepath.Clean(root)
+	rel := filepath.Clean(filepath.FromSlash(strings.TrimSpace(raw)))
+	if rel == "." || rel == "" {
+		rel = ""
+	}
+	if filepath.IsAbs(rel) || filepath.VolumeName(rel) != "" || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("shared path escapes root")
+	}
+	target := filepath.Clean(filepath.Join(root, rel))
+	if target != root && !strings.HasPrefix(target, root+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("shared path escapes root")
+	}
+	// Resolve the existing target before serving it. A lexical prefix check by
+	// itself is insufficient when an agent has created a symlink under files/.
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", "", err
+	}
+	realTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return filepath.ToSlash(rel), target, nil
+		}
+		return "", "", err
+	}
+	if realTarget != realRoot && !strings.HasPrefix(realTarget, realRoot+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("shared symlink escapes root")
+	}
+	return filepath.ToSlash(rel), target, nil
 }
 
 func (p *Platform) handlePrivilegedDownloadByPath(w http.ResponseWriter, r *http.Request) {
@@ -427,7 +555,7 @@ func (p *Platform) handlePrivilegedDownloadByPath(w http.ResponseWriter, r *http
 	_, _ = w.Write(data)
 }
 
-// SendFile saves an agent-produced file under workspace/.cc-connect/chat-api/download
+// SendFile saves an agent-produced file under workspace/files/chat/downloads
 // and emits a file_ready SSE event on the active run.
 func (p *Platform) SendFile(_ context.Context, replyCtx any, file core.FileAttachment) error {
 	if len(file.Data) == 0 {

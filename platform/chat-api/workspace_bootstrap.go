@@ -42,6 +42,16 @@ func (p *Platform) ensureChannelWorkspace(channelKey string) error {
 	if err := os.MkdirAll(channelDir, 0o755); err != nil {
 		return fmt.Errorf("chat-api: create channel workspace %q: %w", channelDir, err)
 	}
+	for _, rel := range []string{
+		"files/chat/uploads",
+		"files/chat/downloads",
+		"files/memory",
+		"files/knowledge",
+	} {
+		if err := os.MkdirAll(filepath.Join(channelDir, filepath.FromSlash(rel)), 0o755); err != nil {
+			return fmt.Errorf("chat-api: create shared workspace directory %q: %w", rel, err)
+		}
+	}
 	if p.projectName == "" || p.dataDir == "" {
 		return nil
 	}

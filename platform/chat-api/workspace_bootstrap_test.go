@@ -38,6 +38,11 @@ func TestEnsureChannelWorkspaceCreatesDirAndBinding(t *testing.T) {
 	if st, err := os.Stat(channelDir); err != nil || !st.IsDir() {
 		t.Fatalf("channel dir missing: %v", err)
 	}
+	for _, rel := range []string{"files/chat/uploads", "files/chat/downloads", "files/memory", "files/knowledge"} {
+		if st, err := os.Stat(filepath.Join(channelDir, filepath.FromSlash(rel))); err != nil || !st.IsDir() {
+			t.Fatalf("shared directory %s missing: %v", rel, err)
+		}
+	}
 
 	storePath := filepath.Join(dataDir, "workspace_bindings.json")
 	raw, err := os.ReadFile(storePath)
