@@ -2,6 +2,8 @@ package core
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,12 +17,14 @@ import (
 	"time"
 )
 
+const providerUserMaxLength = 64
+
 // ProviderProxy is a lightweight local reverse proxy that rewrites
 // incompatible Anthropic API fields for third-party providers.
 //
 // Some providers (e.g. SiliconFlow) don't support thinking.type "adaptive"
-// sent by Claude Code 2.x. The proxy rewrites the thinking field to
-// the configured override value before forwarding.
+// sent by Claude Code 2.x. The proxy optionally rewrites the thinking field
+// and normalizes provider fields before forwarding.
 type ProviderProxy struct {
 	targetURL        string
 	thinkingOverride string
@@ -56,7 +60,7 @@ func NewProviderProxy(targetURL, thinkingOverride string) (*ProviderProxy, strin
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/messages") {
-			rewriteThinkingInRequest(r, override)
+			rewriteProviderRequest(r, override)
 		}
 		proxy.ServeHTTP(w, r)
 	})
@@ -90,10 +94,17 @@ func (pp *ProviderProxy) Close() {
 	})
 }
 
-// rewriteThinkingInRequest reads the request body and rewrites
-// thinking.type "adaptive" to the given override value.
-func rewriteThinkingInRequest(r *http.Request, override string) {
-	if r.Body == nil || override == "" {
+// Matches reports whether this proxy forwards to the requested provider
+// endpoint with the same optional thinking behavior.
+func (pp *ProviderProxy) Matches(targetURL, thinkingOverride string) bool {
+	return pp != nil && pp.targetURL == targetURL && pp.thinkingOverride == thinkingOverride
+}
+
+// rewriteProviderRequest keeps third-party Anthropic-compatible requests
+// within provider limits. It preserves the original body when nothing needs
+// changing.
+func rewriteProviderRequest(r *http.Request, override string) {
+	if r.Body == nil {
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -110,15 +121,17 @@ func rewriteThinkingInRequest(r *http.Request, override string) {
 		return
 	}
 
-	modified := false
-	if thinking, ok := data["thinking"].(map[string]any); ok {
-		if t, ok := thinking["type"].(string); ok && t == "adaptive" {
-			thinking["type"] = override
-			if override == "disabled" {
-				delete(thinking, "budget_tokens")
+	modified := normalizeProviderUser(data)
+	if override != "" {
+		if thinking, ok := data["thinking"].(map[string]any); ok {
+			if t, ok := thinking["type"].(string); ok && t == "adaptive" {
+				thinking["type"] = override
+				if override == "disabled" {
+					delete(thinking, "budget_tokens")
+				}
+				modified = true
+				slog.Debug("providerproxy: rewrote thinking adaptive →", "override", override)
 			}
-			modified = true
-			slog.Debug("providerproxy: rewrote thinking adaptive →", "override", override)
 		}
 	}
 
@@ -136,4 +149,14 @@ func rewriteThinkingInRequest(r *http.Request, override string) {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(newBody))
 	r.ContentLength = int64(len(newBody))
+}
+
+func normalizeProviderUser(data map[string]any) bool {
+	value, ok := data["user"].(string)
+	if !ok || len(value) <= providerUserMaxLength {
+		return false
+	}
+	sum := sha256.Sum256([]byte(value))
+	data["user"] = "ccu_" + hex.EncodeToString(sum[:])[:providerUserMaxLength-len("ccu_")]
+	return true
 }

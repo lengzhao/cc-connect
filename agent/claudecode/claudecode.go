@@ -48,12 +48,12 @@ type Agent struct {
 	providers        []core.ProviderConfig
 	activeIdx        int // -1 = no provider set
 	sessionEnv       []string
-	routerURL        string // Claude Code Router URL (e.g., "http://127.0.0.1:3456")
-	routerAPIKey     string // Claude Code Router API key (optional)
-	systemPrompt     string // Custom system prompt to pass to Claude CLI
+	routerURL        string   // Claude Code Router URL (e.g., "http://127.0.0.1:3456")
+	routerAPIKey     string   // Claude Code Router API key (optional)
+	systemPrompt     string   // Custom system prompt to pass to Claude CLI
 	pluginDirs       []string // Plugin directories to load via --plugin-dir (repeatable)
 
-	appendSystemPrompt      string // Custom text appended to the system prompt (keeps Claude's default)
+	appendSystemPrompt      string   // Custom text appended to the system prompt (keeps Claude's default)
 	appendSystemPromptFiles []string // Authoritative runtime instructions read before each Claude spawn
 
 	providerProxy  *core.ProviderProxy // local proxy for third-party providers
@@ -77,41 +77,41 @@ type Agent struct {
 }
 
 var claudeProviderManagedEnvVars = map[string]struct{}{
-	"CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":                  {},
-	"CLAUDE_CODE_USE_BEDROCK":                               {},
-	"CLAUDE_CODE_USE_VERTEX":                                {},
-	"CLAUDE_CODE_USE_FOUNDRY":                               {},
-	"ANTHROPIC_BASE_URL":                                    {},
-	"ANTHROPIC_BEDROCK_BASE_URL":                            {},
-	"ANTHROPIC_VERTEX_BASE_URL":                             {},
-	"ANTHROPIC_FOUNDRY_BASE_URL":                            {},
-	"ANTHROPIC_FOUNDRY_RESOURCE":                            {},
-	"ANTHROPIC_VERTEX_PROJECT_ID":                           {},
-	"CLOUD_ML_REGION":                                       {},
-	"ANTHROPIC_API_KEY":                                     {},
-	"ANTHROPIC_AUTH_TOKEN":                                  {},
-	"CLAUDE_CODE_OAUTH_TOKEN":                               {},
-	"AWS_BEARER_TOKEN_BEDROCK":                              {},
-	"ANTHROPIC_FOUNDRY_API_KEY":                             {},
-	"CLAUDE_CODE_SKIP_BEDROCK_AUTH":                         {},
-	"CLAUDE_CODE_SKIP_VERTEX_AUTH":                          {},
-	"CLAUDE_CODE_SKIP_FOUNDRY_AUTH":                         {},
-	"ANTHROPIC_MODEL":                                       {},
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL":                         {},
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION":             {},
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME":                    {},
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES":  {},
-	"ANTHROPIC_DEFAULT_OPUS_MODEL":                          {},
-	"ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION":              {},
-	"ANTHROPIC_DEFAULT_OPUS_MODEL_NAME":                     {},
-	"ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES":   {},
+	"CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST":                 {},
+	"CLAUDE_CODE_USE_BEDROCK":                              {},
+	"CLAUDE_CODE_USE_VERTEX":                               {},
+	"CLAUDE_CODE_USE_FOUNDRY":                              {},
+	"ANTHROPIC_BASE_URL":                                   {},
+	"ANTHROPIC_BEDROCK_BASE_URL":                           {},
+	"ANTHROPIC_VERTEX_BASE_URL":                            {},
+	"ANTHROPIC_FOUNDRY_BASE_URL":                           {},
+	"ANTHROPIC_FOUNDRY_RESOURCE":                           {},
+	"ANTHROPIC_VERTEX_PROJECT_ID":                          {},
+	"CLOUD_ML_REGION":                                      {},
+	"ANTHROPIC_API_KEY":                                    {},
+	"ANTHROPIC_AUTH_TOKEN":                                 {},
+	"CLAUDE_CODE_OAUTH_TOKEN":                              {},
+	"AWS_BEARER_TOKEN_BEDROCK":                             {},
+	"ANTHROPIC_FOUNDRY_API_KEY":                            {},
+	"CLAUDE_CODE_SKIP_BEDROCK_AUTH":                        {},
+	"CLAUDE_CODE_SKIP_VERTEX_AUTH":                         {},
+	"CLAUDE_CODE_SKIP_FOUNDRY_AUTH":                        {},
+	"ANTHROPIC_MODEL":                                      {},
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL":                        {},
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION":            {},
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME":                   {},
+	"ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES": {},
+	"ANTHROPIC_DEFAULT_OPUS_MODEL":                         {},
+	"ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION":             {},
+	"ANTHROPIC_DEFAULT_OPUS_MODEL_NAME":                    {},
+	"ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES":  {},
 
 	// Provider-specific base URL env vars for thinking rewrite proxy routing.
 	// These are set by cc-connect when thinking override is needed for
 	// Bedrock/Vertex/Foundry providers that don't use base_url config.
-	"ANTHROPIC_BEDROCK_PROXY_BASE_URL": {},
-	"ANTHROPIC_VERTEX_PROXY_BASE_URL":  {},
-	"ANTHROPIC_FOUNDRY_PROXY_BASE_URL": {},
+	"ANTHROPIC_BEDROCK_PROXY_BASE_URL":                      {},
+	"ANTHROPIC_VERTEX_PROXY_BASE_URL":                       {},
+	"ANTHROPIC_FOUNDRY_PROXY_BASE_URL":                      {},
 	"ANTHROPIC_DEFAULT_SONNET_MODEL":                        {},
 	"ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION":            {},
 	"ANTHROPIC_DEFAULT_SONNET_MODEL_NAME":                   {},
@@ -1181,9 +1181,9 @@ func (a *Agent) ListProviders() []core.ProviderConfig {
 //  1. We use ANTHROPIC_AUTH_TOKEN (Bearer) instead of ANTHROPIC_API_KEY
 //     (x-api-key). Claude Code validates API keys against api.anthropic.com
 //     which hangs for third-party endpoints; Bearer auth skips that check.
-//  2. If the provider sets thinking (e.g. "disabled"), a local reverse proxy
-//     rewrites the thinking parameter for compatibility with providers that
-//     don't support adaptive thinking.
+//  2. A local reverse proxy normalizes requests for third-party endpoint
+//     compatibility, including an optional thinking override and a bounded
+//     provider user identifier.
 //
 // For env-only providers (Bedrock, Vertex, Foundry) that don't set base_url
 // but use CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY env vars, the thinking
@@ -1197,17 +1197,12 @@ func (a *Agent) providerEnvLocked() []string {
 	var env []string
 
 	if p.BaseURL != "" {
-		if p.Thinking != "" {
-			if err := a.ensureProviderProxyLocked(p.BaseURL, p.Thinking); err != nil {
-				slog.Error("providerproxy: failed to start", "error", err)
-				env = append(env, "ANTHROPIC_BASE_URL="+p.BaseURL)
-			} else {
-				env = append(env, "ANTHROPIC_BASE_URL="+a.proxyLocalURL)
-				env = append(env, "NO_PROXY=127.0.0.1")
-			}
-		} else {
-			a.stopProviderProxyLocked()
+		if err := a.ensureProviderProxyLocked(p.BaseURL, p.Thinking); err != nil {
+			slog.Error("providerproxy: failed to start", "error", err)
 			env = append(env, "ANTHROPIC_BASE_URL="+p.BaseURL)
+		} else {
+			env = append(env, "ANTHROPIC_BASE_URL="+a.proxyLocalURL)
+			env = append(env, "NO_PROXY=127.0.0.1")
 		}
 		if p.APIKey != "" {
 			env = append(env, "ANTHROPIC_AUTH_TOKEN="+p.APIKey)
@@ -1302,7 +1297,7 @@ func claudeEnvManagesProviderRouting(env []string) bool {
 }
 
 func (a *Agent) ensureProviderProxyLocked(targetURL, thinkingOverride string) error {
-	if a.providerProxy != nil && a.proxyLocalURL != "" {
+	if a.providerProxy != nil && a.proxyLocalURL != "" && a.providerProxy.Matches(targetURL, thinkingOverride) {
 		return nil
 	}
 	a.stopProviderProxyLocked()

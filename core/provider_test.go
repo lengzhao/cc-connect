@@ -1,6 +1,12 @@
 package core
 
-import "testing"
+import (
+	"bytes"
+	"encoding/json"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestGetProviderModels(t *testing.T) {
 	providers := []ProviderConfig{
@@ -92,5 +98,37 @@ func TestSetProviderModel(t *testing.T) {
 	}
 	if updated[0].Model != providers[0].Model {
 		t.Fatalf("missing provider should leave copy unchanged, got %q want %q", updated[0].Model, providers[0].Model)
+	}
+}
+
+func TestRewriteProviderRequestBoundsUserAndKeepsThinkingRewrite(t *testing.T) {
+	body := []byte(`{"user":"` + strings.Repeat("session-identity-", 10) + `","thinking":{"type":"adaptive","budget_tokens":1024}}`)
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewReader(body))
+	rewriteProviderRequest(req, "disabled")
+
+	var got map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	user, _ := got["user"].(string)
+	if len(user) != providerUserMaxLength || !strings.HasPrefix(user, "ccu_") {
+		t.Fatalf("user = %q", user)
+	}
+	thinking := got["thinking"].(map[string]any)
+	if thinking["type"] != "disabled" || thinking["budget_tokens"] != nil {
+		t.Fatalf("thinking = %#v", thinking)
+	}
+}
+
+func TestRewriteProviderRequestLeavesShortUserUnchanged(t *testing.T) {
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"user":"xiang.gu"}`))
+	rewriteProviderRequest(req, "")
+
+	var got map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["user"] != "xiang.gu" {
+		t.Fatalf("user = %#v", got["user"])
 	}
 }

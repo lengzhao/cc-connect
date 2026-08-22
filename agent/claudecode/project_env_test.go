@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/chenhg5/cc-connect/core"
@@ -126,8 +127,8 @@ func TestNew_ProjectEnvOverridesProviderEnv(t *testing.T) {
 	env := agent.runtimeEnvLocked()
 	envMap := envSliceToMap(env)
 
-	if got := envMap["ANTHROPIC_BASE_URL"]; got != "https://api.deepseek.com/v1" {
-		t.Errorf("ANTHROPIC_BASE_URL = %q, want %q", got, "https://api.deepseek.com/v1")
+	if got := envMap["ANTHROPIC_BASE_URL"]; !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Errorf("ANTHROPIC_BASE_URL = %q, want local provider proxy", got)
 	}
 	if got := envMap["ANTHROPIC_MODEL"]; got != "deepseek-chat" {
 		t.Errorf("ANTHROPIC_MODEL = %q, want %q", got, "deepseek-chat")

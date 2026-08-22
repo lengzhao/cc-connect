@@ -21,8 +21,8 @@ func TestAgentUsageProbeEnv_AddsHostManagedFlagForCustomProvider(t *testing.T) {
 
 	env := envSliceToMap(a.usageProbeEnv())
 
-	if got := env["ANTHROPIC_BASE_URL"]; got != "https://example.com/v1" {
-		t.Fatalf("ANTHROPIC_BASE_URL = %q, want custom base URL", got)
+	if got := env["ANTHROPIC_BASE_URL"]; !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Fatalf("ANTHROPIC_BASE_URL = %q, want local provider proxy", got)
 	}
 	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "secret" {
 		t.Fatalf("ANTHROPIC_AUTH_TOKEN = %q, want injected bearer token", got)
@@ -128,8 +128,8 @@ func TestProviderEnv_SetsAnthropicModel(t *testing.T) {
 	if got := env["ANTHROPIC_MODEL"]; got != "model-a" {
 		t.Fatalf("ANTHROPIC_MODEL = %q, want %q", got, "model-a")
 	}
-	if got := env["ANTHROPIC_BASE_URL"]; got != "https://a.example.com/v1" {
-		t.Fatalf("ANTHROPIC_BASE_URL = %q, want provider-a URL", got)
+	if got := env["ANTHROPIC_BASE_URL"]; !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Fatalf("ANTHROPIC_BASE_URL = %q, want local provider proxy", got)
 	}
 
 	a.SetActiveProvider("provider-b")
@@ -137,8 +137,8 @@ func TestProviderEnv_SetsAnthropicModel(t *testing.T) {
 	if got := env["ANTHROPIC_MODEL"]; got != "model-b" {
 		t.Fatalf("after switch: ANTHROPIC_MODEL = %q, want %q", got, "model-b")
 	}
-	if got := env["ANTHROPIC_BASE_URL"]; got != "https://b.example.com/v1" {
-		t.Fatalf("after switch: ANTHROPIC_BASE_URL = %q, want provider-b URL", got)
+	if got := env["ANTHROPIC_BASE_URL"]; !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Fatalf("after switch: ANTHROPIC_BASE_URL = %q, want local provider proxy", got)
 	}
 }
 
@@ -347,8 +347,8 @@ func TestClaudecode_SessionResume_PreservesActiveProvider(t *testing.T) {
 	if got := want["ANTHROPIC_MODEL"]; got != "MiniMax-M3" {
 		t.Fatalf("baseline ANTHROPIC_MODEL = %q, want MiniMax-M3", got)
 	}
-	if got := want["ANTHROPIC_BASE_URL"]; got != "https://api.minimaxi.com/anthropic" {
-		t.Fatalf("baseline ANTHROPIC_BASE_URL = %q, want minimax", got)
+	if got := want["ANTHROPIC_BASE_URL"]; !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Fatalf("baseline ANTHROPIC_BASE_URL = %q, want local provider proxy", got)
 	}
 
 	// Step 2: simulate a cc-connect process restart. agent_session_id is
@@ -369,8 +369,8 @@ func TestClaudecode_SessionResume_PreservesActiveProvider(t *testing.T) {
 	if got["ANTHROPIC_MODEL"] != want["ANTHROPIC_MODEL"] {
 		t.Fatalf("post-restart ANTHROPIC_MODEL = %q, want %q", got["ANTHROPIC_MODEL"], want["ANTHROPIC_MODEL"])
 	}
-	if got["ANTHROPIC_BASE_URL"] != want["ANTHROPIC_BASE_URL"] {
-		t.Fatalf("post-restart ANTHROPIC_BASE_URL = %q, want %q", got["ANTHROPIC_BASE_URL"], want["ANTHROPIC_BASE_URL"])
+	if !strings.HasPrefix(got["ANTHROPIC_BASE_URL"], "http://127.0.0.1:") {
+		t.Fatalf("post-restart ANTHROPIC_BASE_URL = %q, want local provider proxy", got["ANTHROPIC_BASE_URL"])
 	}
 	// The model name set in providerEnv must come from the second provider
 	// (MiniMax-M3), not the first one (default-model). This is the exact
