@@ -86,6 +86,9 @@ type persistedWorkspaceBinding struct {
 }
 
 func (p *Platform) bindChannelWorkspace(channelKey, channelName, workspace string) error {
+	p.workspaceBindingMu.Lock()
+	defer p.workspaceBindingMu.Unlock()
+
 	storePath := filepath.Join(p.dataDir, "workspace_bindings.json")
 	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
 		return fmt.Errorf("chat-api: create binding dir: %w", err)
@@ -94,7 +97,19 @@ func (p *Platform) bindChannelWorkspace(channelKey, channelName, workspace strin
 	bindings := map[string]map[string]persistedWorkspaceBinding{}
 	if data, err := os.ReadFile(storePath); err == nil && len(data) > 0 {
 		if err := json.Unmarshal(data, &bindings); err != nil {
-			return fmt.Errorf("chat-api: parse workspace bindings: %w", err)
+			// Bindings are derived from channel/workspace configuration. A prior
+			// interrupted or concurrent write must not permanently break every
+			// chat and file request; preserve the bad file for diagnosis and
+			// rebuild it from the current request.
+			corruptPath := fmt.Sprintf("%s.corrupt-%d", storePath, time.Now().UnixNano())
+			if renameErr := os.Rename(storePath, corruptPath); renameErr != nil && !os.IsNotExist(renameErr) {
+				return fmt.Errorf("chat-api: quarantine invalid workspace bindings: %w", renameErr)
+			}
+			slog.Error("chat-api: rebuilt invalid workspace bindings",
+				"path", storePath,
+				"corrupt_path", corruptPath,
+				"error", err,
+			)
 		}
 	} else if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("chat-api: read workspace bindings: %w", err)
@@ -115,13 +130,36 @@ func (p *Platform) bindChannelWorkspace(channelKey, channelName, workspace strin
 	if err != nil {
 		return fmt.Errorf("chat-api: marshal workspace bindings: %w", err)
 	}
-	tmp := storePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(storePath), ".workspace-bindings-*.tmp")
+	if err != nil {
+		return fmt.Errorf("chat-api: create workspace bindings temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chat-api: chmod workspace bindings temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("chat-api: write workspace bindings: %w", err)
 	}
-	if err := os.Rename(tmp, storePath); err != nil {
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chat-api: sync workspace bindings: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("chat-api: close workspace bindings: %w", err)
+	}
+	if err := os.Rename(tmpPath, storePath); err != nil {
 		return fmt.Errorf("chat-api: replace workspace bindings: %w", err)
 	}
+	removeTemp = false
 	return nil
 }
 

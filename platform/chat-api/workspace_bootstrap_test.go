@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -86,5 +87,63 @@ func TestEnsureChannelWorkspaceCreatesDefaultChannel(t *testing.T) {
 	b := bindings["project:demo"]["chat-api:"+defaultWorkspaceChannelID]
 	if b.ChannelName != defaultWorkspaceChannelID || b.Workspace != channelDir {
 		t.Fatalf("binding = %+v, want channel %s workspace %q", b, defaultWorkspaceChannelID, channelDir)
+	}
+}
+
+func TestEnsureChannelWorkspaceConcurrentBindings(t *testing.T) {
+	dataDir := t.TempDir()
+	baseDir := t.TempDir()
+	p := &Platform{projectName: "demo", dataDir: dataDir, multiWorkspaceBaseDir: baseDir}
+
+	const count = 32
+	var wg sync.WaitGroup
+	errs := make(chan error, count)
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- p.ensureChannelWorkspace("chat-123")
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent ensureChannelWorkspace: %v", err)
+		}
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dataDir, "workspace_bindings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bindings map[string]map[string]persistedWorkspaceBinding
+	if err := json.Unmarshal(raw, &bindings); err != nil {
+		t.Fatalf("bindings corrupted: %v: %q", err, raw)
+	}
+}
+
+func TestEnsureChannelWorkspaceRepairsInvalidBindings(t *testing.T) {
+	dataDir := t.TempDir()
+	baseDir := t.TempDir()
+	storePath := filepath.Join(dataDir, "workspace_bindings.json")
+	if err := os.WriteFile(storePath, []byte(`{"project:demo":`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &Platform{projectName: "demo", dataDir: dataDir, multiWorkspaceBaseDir: baseDir}
+	if err := p.ensureChannelWorkspace("chat-123"); err != nil {
+		t.Fatalf("repair invalid bindings: %v", err)
+	}
+	raw, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bindings map[string]map[string]persistedWorkspaceBinding
+	if err := json.Unmarshal(raw, &bindings); err != nil {
+		t.Fatalf("repaired bindings invalid: %v: %q", err, raw)
+	}
+	corrupt, err := filepath.Glob(storePath + ".corrupt-*")
+	if err != nil || len(corrupt) != 1 {
+		t.Fatalf("corrupt backup = %v, err=%v", corrupt, err)
 	}
 }
