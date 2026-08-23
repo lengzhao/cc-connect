@@ -48,7 +48,7 @@ func (p *Platform) setCORS(w http.ResponseWriter, r *http.Request) {
 		if allowed == "*" || origin == allowed {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			allowHeaders := []string{
 				"Authorization", "Content-Type", "Accept",
 				p.userHeader, p.userNameHeader, p.channelHeader,

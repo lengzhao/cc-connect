@@ -269,6 +269,191 @@ func TestSharedFilesInitializesManagedDirectories(t *testing.T) {
 	}
 }
 
+func TestSharedMarkdownPutCreatesOverwritesAndDeletes(t *testing.T) {
+	p, baseDir := testWorkspacePlatform(t)
+	path := "knowledge/team/guide.md"
+
+	createReq := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path="+path, strings.NewReader("# Version 1\n"))
+	setChatReadHeaders(createReq, "secret")
+	createRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated || !strings.Contains(createRec.Body.String(), `"overwritten":false`) {
+		t.Fatalf("create status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	target := filepath.Join(baseDir, testChannel, workspaceFilesDir, filepath.FromSlash(path))
+	if got, err := os.ReadFile(target); err != nil || string(got) != "# Version 1\n" {
+		t.Fatalf("created file=%q err=%v", got, err)
+	}
+	if info, err := os.Stat(target); err != nil {
+		t.Fatalf("stat created file: %v", err)
+	} else if info.Mode().Perm() != 0o644 {
+		t.Fatalf("created mode=%v", info.Mode().Perm())
+	}
+
+	updateReq := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path="+path, strings.NewReader("# Version 2\n"))
+	setChatReadHeaders(updateReq, "secret")
+	updateRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK || !strings.Contains(updateRec.Body.String(), `"overwritten":true`) {
+		t.Fatalf("update status=%d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "# Version 2\n" {
+		t.Fatalf("updated file=%q err=%v", got, err)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/files/shared?path="+path, nil)
+	setChatReadHeaders(deleteReq, "secret")
+	deleteRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK || !strings.Contains(deleteRec.Body.String(), `"deleted":true`) {
+		t.Fatalf("delete status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("deleted file still exists: %v", err)
+	}
+
+	missingReq := httptest.NewRequest(http.MethodDelete, "/v1/files/shared?path="+path, nil)
+	setChatReadHeaders(missingReq, "secret")
+	missingRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("missing delete status=%d body=%s", missingRec.Code, missingRec.Body.String())
+	}
+	missingParentReq := httptest.NewRequest(http.MethodDelete, "/v1/files/shared?path=memory/not/created/note.md", nil)
+	setChatReadHeaders(missingParentReq, "secret")
+	missingParentRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(missingParentRec, missingParentReq)
+	if missingParentRec.Code != http.StatusNotFound {
+		t.Fatalf("missing-parent delete status=%d body=%s", missingParentRec.Code, missingParentRec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, testChannel, workspaceFilesDir, "memory", "not")); !os.IsNotExist(err) {
+		t.Fatalf("delete created a missing parent directory: %v", err)
+	}
+}
+
+func TestSharedMarkdownPutAcceptsMarkdownExtension(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+	req := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=knowledge/guide.markdown", strings.NewReader("# Guide\n"))
+	setChatReadHeaders(req, "secret")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSharedMarkdownMutationRejectsUnsafePaths(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+	paths := []string{
+		"", "knowledge", "memory", "chat/downloads/report.md", "reports/report.md",
+		"knowledge/report.txt", "../knowledge/report.md", "/knowledge/report.md",
+		"knowledge/../memory/report.md", "knowledge//report.md", `knowledge\report.md`,
+	}
+	for _, path := range paths {
+		t.Run(strings.ReplaceAll(path, "/", "_"), func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path="+path, strings.NewReader("unsafe"))
+			setChatReadHeaders(req, "secret")
+			rec := httptest.NewRecorder()
+			p.routes().ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("path=%q status=%d body=%s", path, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestSharedMarkdownMutationRejectsSymlinksAndDirectories(t *testing.T) {
+	p, baseDir := testWorkspacePlatform(t)
+	root := filepath.Join(baseDir, testChannel, workspaceFilesDir)
+	initReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=knowledge", nil)
+	setChatReadHeaders(initReq, "secret")
+	p.routes().ServeHTTP(httptest.NewRecorder(), initReq)
+
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "knowledge", "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+	outsideDir := t.TempDir()
+	if err := os.Symlink(outsideDir, filepath.Join(root, "memory", "linked-dir")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "memory", "directory.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"knowledge/linked.md", "memory/linked-dir/note.md", "memory/directory.md"} {
+		for _, method := range []string{http.MethodPut, http.MethodDelete} {
+			req := httptest.NewRequest(method, "/v1/files/shared?path="+path, strings.NewReader("changed"))
+			setChatReadHeaders(req, "secret")
+			rec := httptest.NewRecorder()
+			p.routes().ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("method=%s path=%s status=%d body=%s", method, path, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	if got, err := os.ReadFile(outside); err != nil || string(got) != "outside" {
+		t.Fatalf("outside file changed: %q err=%v", got, err)
+	}
+}
+
+func TestSharedMarkdownPutEnforcesSizeAuthChannelAndMethod(t *testing.T) {
+	p, _ := testWorkspacePlatform(t)
+
+	largeReq := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=memory/large.md", bytes.NewReader(make([]byte, sharedMarkdownMaxSize+1)))
+	setChatReadHeaders(largeReq, "secret")
+	largeRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(largeRec, largeReq)
+	if largeRec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("large status=%d body=%s", largeRec.Code, largeRec.Body.String())
+	}
+
+	unauthorizedReq := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=memory/a.md", strings.NewReader("a"))
+	unauthorizedReq.Header.Set("X-Chat-API-Channel", testChannel)
+	unauthorizedRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(unauthorizedRec, unauthorizedReq)
+	if unauthorizedRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d body=%s", unauthorizedRec.Code, unauthorizedRec.Body.String())
+	}
+
+	noChannelReq := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=memory/a.md", strings.NewReader("a"))
+	noChannelReq.Header.Set("Authorization", "Bearer secret")
+	noChannelRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(noChannelRec, noChannelReq)
+	if noChannelRec.Code != http.StatusBadRequest {
+		t.Fatalf("no-channel status=%d body=%s", noChannelRec.Code, noChannelRec.Body.String())
+	}
+
+	postReq := httptest.NewRequest(http.MethodPost, "/v1/files/shared?path=memory/a.md", strings.NewReader("a"))
+	setChatReadHeaders(postReq, "secret")
+	postRec := httptest.NewRecorder()
+	p.routes().ServeHTTP(postRec, postReq)
+	if postRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("post status=%d body=%s", postRec.Code, postRec.Body.String())
+	}
+}
+
+func TestSharedMarkdownMutationIsChannelScoped(t *testing.T) {
+	p, baseDir := testWorkspacePlatform(t)
+	req := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=memory/note.md", strings.NewReader("other channel"))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-Channel", "other-channel")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, "other-channel", "files", "memory", "note.md")); err != nil {
+		t.Fatalf("other channel file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, testChannel, "files", "memory", "note.md")); !os.IsNotExist(err) {
+		t.Fatalf("file leaked into default test channel: %v", err)
+	}
+}
+
 func TestUploadWithoutWorkspace(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"api_token": "secret"})
 

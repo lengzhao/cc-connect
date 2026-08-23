@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -37,6 +38,8 @@ const (
 	downloadFileTTL = 72 * time.Hour
 	// downloadGCMinInterval limits how often a channel's download/ dir is scanned.
 	downloadGCMinInterval = time.Minute
+	// sharedMarkdownMaxSize bounds user-managed knowledge and memory documents.
+	sharedMarkdownMaxSize = 4 << 20
 )
 
 var fileIDPattern = regexp.MustCompile(`^file_[A-Za-z0-9_-]{22}$`)
@@ -334,16 +337,16 @@ func (p *Platform) handleFileRoutes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
+	if sub == "shared" {
+		p.handleSharedFiles(w, r)
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 		return
 	}
 	if sub == "by-path" {
 		p.handlePrivilegedDownloadByPath(w, r)
-		return
-	}
-	if sub == "shared" {
-		p.handleSharedFiles(w, r)
 		return
 	}
 	if strings.Contains(sub, "/") {
@@ -382,6 +385,19 @@ func (p *Platform) handleFileRoutes(w http.ResponseWriter, r *http.Request) {
 // channel workspace. Unlike privileged by-path access, callers cannot escape
 // the shared root, including through symlinks.
 func (p *Platform) handleSharedFiles(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		p.handleReadSharedFiles(w, r)
+	case http.MethodPut:
+		p.handlePutSharedMarkdown(w, r)
+	case http.MethodDelete:
+		p.handleDeleteSharedMarkdown(w, r)
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
+	}
+}
+
+func (p *Platform) handleReadSharedFiles(w http.ResponseWriter, r *http.Request) {
 	channelKey, ok := p.resolveChannel(w, r)
 	if !ok {
 		return
@@ -453,6 +469,242 @@ func (p *Platform) handleSharedFiles(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeOK(w, http.StatusOK, map[string]any{"path": filepath.ToSlash(rel), "files": items})
+}
+
+func (p *Platform) handlePutSharedMarkdown(w http.ResponseWriter, r *http.Request) {
+	root, ok := p.sharedFilesRoot(w, r)
+	if !ok {
+		return
+	}
+	rel, target, err := resolveManagedMarkdownPath(root, r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, sharedMarkdownMaxSize+1))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if len(data) > sharedMarkdownMaxSize {
+		writeErr(w, http.StatusRequestEntityTooLarge, "payload too large")
+		return
+	}
+	if err := ensureManagedParentDirectories(root, filepath.Dir(target)); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	existed, err := atomicWriteManagedMarkdown(root, target, data)
+	if err != nil {
+		if errors.Is(err, errInvalidManagedPath) {
+			writeErr(w, http.StatusBadRequest, "invalid request")
+			return
+		}
+		slog.Error("chat-api: write shared markdown", "path", rel, "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	status := http.StatusCreated
+	if existed {
+		status = http.StatusOK
+	}
+	writeOK(w, status, map[string]any{"path": rel, "size": len(data), "overwritten": existed})
+}
+
+func (p *Platform) handleDeleteSharedMarkdown(w http.ResponseWriter, r *http.Request) {
+	root, ok := p.sharedFilesRoot(w, r)
+	if !ok {
+		return
+	}
+	rel, target, err := resolveManagedMarkdownPath(root, r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if err := validateManagedExistingPath(root, target); err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "not found")
+		} else {
+			writeErr(w, http.StatusBadRequest, "invalid request")
+		}
+		return
+	}
+	if err := os.Remove(target); err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		slog.Error("chat-api: delete shared markdown", "path", rel, "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeOK(w, http.StatusOK, map[string]any{"path": rel, "deleted": true})
+}
+
+func (p *Platform) sharedFilesRoot(w http.ResponseWriter, r *http.Request) (string, bool) {
+	channelKey, ok := p.resolveChannel(w, r)
+	if !ok {
+		return "", false
+	}
+	if err := p.ensureChannelWorkspace(channelKey); err != nil {
+		slog.Error("chat-api: ensure shared workspace", "channel", channelKey, "error", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return "", false
+	}
+	workspace, err := p.workspaceDirForChannel(channelKey)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return "", false
+	}
+	return filepath.Join(workspace, workspaceFilesDir), true
+}
+
+var errInvalidManagedPath = errors.New("invalid managed markdown path")
+
+func resolveManagedMarkdownPath(root, raw string) (string, string, error) {
+	if raw == "" || raw != strings.TrimSpace(raw) || strings.ContainsRune(raw, '\x00') || strings.Contains(raw, `\`) {
+		return "", "", errInvalidManagedPath
+	}
+	clean := pathpkg.Clean(raw)
+	if clean != raw || pathpkg.IsAbs(clean) {
+		return "", "", errInvalidManagedPath
+	}
+	ext := pathpkg.Ext(clean)
+	if !(strings.HasPrefix(clean, "knowledge/") || strings.HasPrefix(clean, "memory/")) ||
+		(!strings.EqualFold(ext, ".md") && !strings.EqualFold(ext, ".markdown")) {
+		return "", "", errInvalidManagedPath
+	}
+	target := filepath.Join(filepath.Clean(root), filepath.FromSlash(clean))
+	return clean, target, nil
+}
+
+// ensureManagedParentDirectories creates missing directories without ever
+// following an existing symlink in the managed path.
+func ensureManagedParentDirectories(root, parent string) error {
+	root = filepath.Clean(root)
+	if err := rejectSymlinkOrNonDirectory(root); err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, parent)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errInvalidManagedPath
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if os.IsNotExist(statErr) {
+			if mkdirErr := os.Mkdir(current, 0o755); mkdirErr != nil && !os.IsExist(mkdirErr) {
+				return mkdirErr
+			}
+			info, statErr = os.Lstat(current)
+		}
+		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return errInvalidManagedPath
+		}
+	}
+	return nil
+}
+
+func rejectSymlinkOrNonDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errInvalidManagedPath
+	}
+	return nil
+}
+
+func validateManagedExistingPath(root, target string) error {
+	if err := validateManagedParentDirectories(root, filepath.Dir(target)); err != nil {
+		return err
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errInvalidManagedPath
+	}
+	return nil
+}
+
+func validateManagedParentDirectories(root, parent string) error {
+	root = filepath.Clean(root)
+	if err := rejectSymlinkOrNonDirectory(root); err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, parent)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errInvalidManagedPath
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return errInvalidManagedPath
+		}
+	}
+	return nil
+}
+
+func atomicWriteManagedMarkdown(root, target string, data []byte) (bool, error) {
+	existed := false
+	info, err := os.Lstat(target)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return false, errInvalidManagedPath
+		}
+		existed = true
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	if err := ensureManagedParentDirectories(root, filepath.Dir(target)); err != nil {
+		return false, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".shared-markdown-*")
+	if err != nil {
+		return false, err
+	}
+	tmpName := tmp.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Close(); err != nil {
+		return false, err
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		return false, err
+	}
+	removeTemp = false
+	return existed, nil
 }
 
 func resolveSharedPath(root, raw string) (string, string, error) {
