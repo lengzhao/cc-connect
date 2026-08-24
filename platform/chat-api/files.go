@@ -412,8 +412,8 @@ func (p *Platform) handleReadSharedFiles(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	rawPath := r.URL.Query().Get("path")
 	root := filepath.Join(workspace, workspaceFilesDir)
+	rawPath := r.URL.Query().Get("path")
 	if isProjectSharedPath(rawPath) {
 		root, err = p.projectSharedFilesRoot()
 		if err != nil {

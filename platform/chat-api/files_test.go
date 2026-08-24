@@ -262,9 +262,14 @@ func TestSharedFilesInitializesManagedDirectories(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	for _, rel := range []string{"files/chat/uploads", "files/chat/downloads", "files/memory", "files/knowledge"} {
+	for _, rel := range []string{"files/chat/uploads", "files/chat/downloads"} {
 		if st, err := os.Stat(filepath.Join(baseDir, testChannel, filepath.FromSlash(rel))); err != nil || !st.IsDir() {
 			t.Fatalf("shared directory %s missing: %v", rel, err)
+		}
+	}
+	for _, rel := range []string{"files/memory", "files/knowledge"} {
+		if st, err := os.Stat(filepath.Join(baseDir, filepath.FromSlash(rel))); err != nil || !st.IsDir() {
+			t.Fatalf("project shared directory %s missing: %v", rel, err)
 		}
 	}
 }
@@ -298,7 +303,7 @@ func TestSharedMarkdownPutCreatesOverwritesAndDeletes(t *testing.T) {
 	if createRec.Code != http.StatusCreated || !strings.Contains(createRec.Body.String(), `"overwritten":false`) {
 		t.Fatalf("create status=%d body=%s", createRec.Code, createRec.Body.String())
 	}
-	target := filepath.Join(baseDir, testChannel, workspaceFilesDir, filepath.FromSlash(path))
+	target := filepath.Join(baseDir, workspaceFilesDir, filepath.FromSlash(path))
 	if got, err := os.ReadFile(target); err != nil || string(got) != "# Version 1\n" {
 		t.Fatalf("created file=%q err=%v", got, err)
 	}
@@ -344,7 +349,7 @@ func TestSharedMarkdownPutCreatesOverwritesAndDeletes(t *testing.T) {
 	if missingParentRec.Code != http.StatusNotFound {
 		t.Fatalf("missing-parent delete status=%d body=%s", missingParentRec.Code, missingParentRec.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(baseDir, testChannel, workspaceFilesDir, "memory", "not")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(baseDir, workspaceFilesDir, "memory", "not")); !os.IsNotExist(err) {
 		t.Fatalf("delete created a missing parent directory: %v", err)
 	}
 }
@@ -382,7 +387,7 @@ func TestSharedMarkdownMutationRejectsUnsafePaths(t *testing.T) {
 
 func TestSharedMarkdownMutationRejectsSymlinksAndDirectories(t *testing.T) {
 	p, baseDir := testWorkspacePlatform(t)
-	root := filepath.Join(baseDir, testChannel, workspaceFilesDir)
+	root := filepath.Join(baseDir, workspaceFilesDir)
 	initReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=knowledge", nil)
 	setChatReadHeaders(initReq, "secret")
 	p.routes().ServeHTTP(httptest.NewRecorder(), initReq)
@@ -454,7 +459,7 @@ func TestSharedMarkdownPutEnforcesSizeAuthChannelAndMethod(t *testing.T) {
 	}
 }
 
-func TestSharedMarkdownMutationIsChannelScoped(t *testing.T) {
+func TestSharedMarkdownMutationIsProjectScoped(t *testing.T) {
 	p, baseDir := testWorkspacePlatform(t)
 	req := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=memory/note.md", strings.NewReader("other channel"))
 	req.Header.Set("Authorization", "Bearer secret")
@@ -464,11 +469,11 @@ func TestSharedMarkdownMutationIsChannelScoped(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if _, err := os.Stat(filepath.Join(baseDir, "other-channel", "files", "memory", "note.md")); err != nil {
-		t.Fatalf("other channel file missing: %v", err)
+	if got, err := os.ReadFile(filepath.Join(baseDir, "files", "memory", "note.md")); err != nil || string(got) != "other channel" {
+		t.Fatalf("project shared file=%q err=%v", got, err)
 	}
-	if _, err := os.Stat(filepath.Join(baseDir, testChannel, "files", "memory", "note.md")); !os.IsNotExist(err) {
-		t.Fatalf("file leaked into default test channel: %v", err)
+	if _, err := os.Stat(filepath.Join(baseDir, "other-channel", "files", "memory", "note.md")); !os.IsNotExist(err) {
+		t.Fatalf("file incorrectly stored in channel workspace: %v", err)
 	}
 }
 

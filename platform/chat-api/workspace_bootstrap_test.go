@@ -39,22 +39,14 @@ func TestEnsureChannelWorkspaceCreatesDirAndBinding(t *testing.T) {
 	if st, err := os.Stat(channelDir); err != nil || !st.IsDir() {
 		t.Fatalf("channel dir missing: %v", err)
 	}
-	for _, rel := range []string{"files/chat/uploads", "files/chat/downloads", "files/memory", "files/knowledge"} {
+	for _, rel := range []string{"files/chat/uploads", "files/chat/downloads"} {
 		if st, err := os.Stat(filepath.Join(channelDir, filepath.FromSlash(rel))); err != nil || !st.IsDir() {
-			t.Fatalf("shared directory %s missing: %v", rel, err)
+			t.Fatalf("channel directory %s missing: %v", rel, err)
 		}
 	}
-	for _, name := range []string{"knowledge", "memory"} {
-		link := filepath.Join(channelDir, "files", name)
-		if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
-			t.Fatalf("%s is not a shared symlink: info=%v err=%v", link, info, err)
-		}
-		expected, err := filepath.EvalSymlinks(filepath.Join(baseDir, "files", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resolved, err := filepath.EvalSymlinks(link); err != nil || resolved != expected {
-			t.Fatalf("%s resolves to %q, err=%v", link, resolved, err)
+	for _, rel := range []string{"files/memory", "files/knowledge"} {
+		if st, err := os.Stat(filepath.Join(baseDir, filepath.FromSlash(rel))); err != nil || !st.IsDir() {
+			t.Fatalf("project shared directory %s missing: %v", rel, err)
 		}
 	}
 
@@ -70,64 +62,6 @@ func TestEnsureChannelWorkspaceCreatesDirAndBinding(t *testing.T) {
 	b := bindings["project:demo"]["chat-api:chat-123"]
 	if b.ChannelName != "chat-123" || b.Workspace != channelDir {
 		t.Fatalf("binding = %+v, want channel chat-123 workspace %q", b, channelDir)
-	}
-}
-
-func TestEnsureChannelWorkspaceSharesKnowledgeAcrossChannels(t *testing.T) {
-	dataDir := t.TempDir()
-	baseDir := t.TempDir()
-	p := &Platform{projectName: "demo", dataDir: dataDir, multiWorkspaceBaseDir: baseDir}
-	for _, channel := range []string{"nex-training", "lts-tool:task-1"} {
-		if err := p.ensureChannelWorkspace(channel); err != nil {
-			t.Fatalf("ensure %s: %v", channel, err)
-		}
-	}
-	first := filepath.Join(baseDir, "nex-training", "files", "knowledge", "guide.md")
-	if err := os.WriteFile(first, []byte("shared"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	second := filepath.Join(baseDir, "lts-tool:task-1", "files", "knowledge", "guide.md")
-	if got, err := os.ReadFile(second); err != nil || string(got) != "shared" {
-		t.Fatalf("second channel read = %q, err=%v", got, err)
-	}
-}
-
-func TestEnsureChannelWorkspaceReplacesEmptyLegacyDirectories(t *testing.T) {
-	dataDir := t.TempDir()
-	baseDir := t.TempDir()
-	channelFiles := filepath.Join(baseDir, "nex-training", "files")
-	for _, name := range []string{"knowledge", "memory"} {
-		if err := os.MkdirAll(filepath.Join(channelFiles, name), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	p := &Platform{projectName: "demo", dataDir: dataDir, multiWorkspaceBaseDir: baseDir}
-	if err := p.ensureChannelWorkspace("nex-training"); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"knowledge", "memory"} {
-		if info, err := os.Lstat(filepath.Join(channelFiles, name)); err != nil || info.Mode()&os.ModeSymlink == 0 {
-			t.Fatalf("%s was not replaced with shared link: info=%v err=%v", name, info, err)
-		}
-	}
-}
-
-func TestEnsureChannelWorkspacePreservesNonEmptyLegacyDirectory(t *testing.T) {
-	dataDir := t.TempDir()
-	baseDir := t.TempDir()
-	legacy := filepath.Join(baseDir, "nex-training", "files", "knowledge")
-	if err := os.MkdirAll(legacy, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(legacy, "keep.md"), []byte("keep"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	p := &Platform{projectName: "demo", dataDir: dataDir, multiWorkspaceBaseDir: baseDir}
-	if err := p.ensureChannelWorkspace("nex-training"); err == nil {
-		t.Fatal("expected non-empty legacy directory error")
-	}
-	if got, err := os.ReadFile(filepath.Join(legacy, "keep.md")); err != nil || string(got) != "keep" {
-		t.Fatalf("legacy content changed: %q err=%v", got, err)
 	}
 }
 

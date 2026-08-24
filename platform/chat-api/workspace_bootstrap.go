@@ -47,8 +47,10 @@ func (p *Platform) ensureChannelWorkspace(channelKey string) error {
 			return fmt.Errorf("chat-api: create channel file directory %q: %w", rel, err)
 		}
 	}
-	if err := p.ensureSharedKnowledgeWorkspace(cleanBase, channelDir); err != nil {
-		return err
+	for _, rel := range []string{"files/knowledge", "files/memory"} {
+		if err := os.MkdirAll(filepath.Join(cleanBase, filepath.FromSlash(rel)), 0o755); err != nil {
+			return fmt.Errorf("chat-api: create project shared directory %q: %w", rel, err)
+		}
 	}
 	if p.projectName == "" || p.dataDir == "" {
 		return nil
@@ -60,63 +62,6 @@ func (p *Platform) ensureChannelWorkspace(channelKey string) error {
 		"channel", channelName,
 		"path", channelDir,
 	)
-	return nil
-}
-
-// ensureSharedKnowledgeWorkspace keeps knowledge and memory at project scope
-// while exposing them at the same relative paths inside every channel workspace.
-// Chat uploads and downloads remain channel-scoped.
-func (p *Platform) ensureSharedKnowledgeWorkspace(baseDir, channelDir string) error {
-	p.sharedWorkspaceMu.Lock()
-	defer p.sharedWorkspaceMu.Unlock()
-
-	sharedFilesDir := filepath.Join(baseDir, workspaceFilesDir)
-	channelFilesDir := filepath.Join(channelDir, workspaceFilesDir)
-	if err := os.MkdirAll(sharedFilesDir, 0o755); err != nil {
-		return fmt.Errorf("chat-api: create shared files directory: %w", err)
-	}
-	if err := os.MkdirAll(channelFilesDir, 0o755); err != nil {
-		return fmt.Errorf("chat-api: create channel files directory: %w", err)
-	}
-	for _, name := range []string{"knowledge", "memory"} {
-		sharedDir := filepath.Join(sharedFilesDir, name)
-		if err := os.MkdirAll(sharedDir, 0o755); err != nil {
-			return fmt.Errorf("chat-api: create shared %s directory: %w", name, err)
-		}
-		channelPath := filepath.Join(channelFilesDir, name)
-		if info, err := os.Lstat(channelPath); err == nil {
-			if info.Mode()&os.ModeSymlink != 0 {
-				resolved, resolveErr := filepath.EvalSymlinks(channelPath)
-				expected, expectedErr := filepath.EvalSymlinks(sharedDir)
-				if resolveErr != nil || expectedErr != nil || resolved != expected {
-					return fmt.Errorf("chat-api: channel %s link does not target project shared directory", name)
-				}
-				continue
-			}
-			if !info.IsDir() {
-				return fmt.Errorf("chat-api: channel %s path already exists and is not a directory", name)
-			}
-			entries, readErr := os.ReadDir(channelPath)
-			if readErr != nil {
-				return fmt.Errorf("chat-api: inspect channel %s directory: %w", name, readErr)
-			}
-			if len(entries) != 0 {
-				return fmt.Errorf("chat-api: channel %s directory is not empty; refusing to replace it", name)
-			}
-			if removeErr := os.Remove(channelPath); removeErr != nil {
-				return fmt.Errorf("chat-api: remove empty channel %s directory: %w", name, removeErr)
-			}
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("chat-api: inspect channel %s link: %w", name, err)
-		}
-		relTarget, err := filepath.Rel(channelFilesDir, sharedDir)
-		if err != nil {
-			return fmt.Errorf("chat-api: resolve shared %s link: %w", name, err)
-		}
-		if err := os.Symlink(relTarget, channelPath); err != nil && !os.IsExist(err) {
-			return fmt.Errorf("chat-api: link shared %s directory: %w", name, err)
-		}
-	}
 	return nil
 }
 
