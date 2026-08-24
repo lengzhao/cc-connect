@@ -412,8 +412,16 @@ func (p *Platform) handleReadSharedFiles(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	rawPath := r.URL.Query().Get("path")
 	root := filepath.Join(workspace, workspaceFilesDir)
-	rel, target, err := resolveSharedPath(root, r.URL.Query().Get("path"))
+	if isProjectSharedPath(rawPath) {
+		root, err = p.projectSharedFilesRoot()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+	}
+	rel, target, err := resolveSharedPath(root, rawPath)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request")
 		return
@@ -551,12 +559,30 @@ func (p *Platform) sharedFilesRoot(w http.ResponseWriter, r *http.Request) (stri
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return "", false
 	}
-	workspace, err := p.workspaceDirForChannel(channelKey)
+	root, err := p.projectSharedFilesRoot()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return "", false
 	}
-	return filepath.Join(workspace, workspaceFilesDir), true
+	return root, true
+}
+
+func (p *Platform) projectSharedFilesRoot() (string, error) {
+	baseDir := strings.TrimSpace(p.multiWorkspaceBaseDir)
+	if baseDir == "" {
+		return "", errWorkspaceNotConfigured
+	}
+	baseDir, err := expandHomeDir(baseDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Clean(baseDir), workspaceFilesDir), nil
+}
+
+func isProjectSharedPath(raw string) bool {
+	clean := pathpkg.Clean(strings.TrimSpace(raw))
+	return clean == "knowledge" || strings.HasPrefix(clean, "knowledge/") ||
+		clean == "memory" || strings.HasPrefix(clean, "memory/")
 }
 
 var errInvalidManagedPath = errors.New("invalid managed markdown path")

@@ -65,6 +65,7 @@ type Platform struct {
 
 	downloadGCMu       sync.Mutex
 	downloadGCLast     map[string]time.Time // channelKey -> last lazy GC time
+	sharedWorkspaceMu  sync.Mutex
 	workspaceBindingMu sync.Mutex
 
 	mu        sync.Mutex

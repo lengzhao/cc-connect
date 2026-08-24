@@ -269,6 +269,24 @@ func TestSharedFilesInitializesManagedDirectories(t *testing.T) {
 	}
 }
 
+func TestSharedKnowledgeAPIIsProjectScoped(t *testing.T) {
+	p, baseDir := testWorkspacePlatform(t)
+	if err := p.ensureChannelWorkspace(testChannel); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, "files", "knowledge", "shared.md"), []byte("shared knowledge"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=knowledge/shared.md", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-Channel", "another-channel")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != "shared knowledge" {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
 func TestSharedMarkdownPutCreatesOverwritesAndDeletes(t *testing.T) {
 	p, baseDir := testWorkspacePlatform(t)
 	path := "knowledge/team/guide.md"
