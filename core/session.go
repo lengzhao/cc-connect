@@ -40,6 +40,9 @@ type Session struct {
 	// processes an actual incoming user message. It is used by reset_on_idle_mins
 	// so that automated activity cannot prevent idle session rotation.
 	LastUserActivity time.Time `json:"last_user_activity,omitempty"`
+	// ContextResourceVersions is the last context snapshot accepted by the
+	// agent for this conversation. It is never added to visible chat history.
+	ContextResourceVersions map[string]string `json:"context_resource_versions,omitempty"`
 
 	mu   sync.Mutex `json:"-"`
 	busy bool       `json:"-"`
@@ -191,6 +194,29 @@ func (s *Session) GetLastUserActivity() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.LastUserActivity
+}
+
+func (s *Session) GetContextResourceVersions() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneStringMap(s.ContextResourceVersions)
+}
+
+func (s *Session) SetContextResourceVersions(versions map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ContextResourceVersions = cloneStringMap(versions)
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func (s *Session) GetUpdatedAt() time.Time {
@@ -757,15 +783,16 @@ func (sm *SessionManager) saveLocked() {
 			s.AgentSessionID = ""
 		}
 		snapSessions[id] = &Session{
-			ID:                  s.ID,
-			Name:                s.Name,
-			CreatedBy:           s.CreatedBy,
-			AgentSessionID:      agentSID,
-			AgentType:           s.AgentType,
-			PastAgentSessionIDs: append([]string(nil), s.PastAgentSessionIDs...),
-			History:             append([]HistoryEntry(nil), s.History...),
-			CreatedAt:           s.CreatedAt,
-			UpdatedAt:           s.UpdatedAt,
+			ID:                      s.ID,
+			Name:                    s.Name,
+			CreatedBy:               s.CreatedBy,
+			AgentSessionID:          agentSID,
+			AgentType:               s.AgentType,
+			PastAgentSessionIDs:     append([]string(nil), s.PastAgentSessionIDs...),
+			History:                 append([]HistoryEntry(nil), s.History...),
+			CreatedAt:               s.CreatedAt,
+			UpdatedAt:               s.UpdatedAt,
+			ContextResourceVersions: cloneStringMap(s.ContextResourceVersions),
 		}
 		s.mu.Unlock()
 	}
