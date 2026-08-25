@@ -588,7 +588,11 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 		return p.startWebhookMode()
 	}
 
-	return p.startWebSocketMode()
+	if err := p.startWebSocketMode(); err != nil {
+		return err
+	}
+	p.startCatchupPoller(p.getContext())
+	return nil
 }
 
 func (p *Platform) shouldUseWebhookMode() bool {
@@ -4639,6 +4643,13 @@ func (p *Platform) Stop() error {
 		if cancel := p.getCancel(); cancel != nil {
 			cancel()
 		}
+		// Stop catch-up poller explicitly.
+		p.mu.Lock()
+		if p.catchupCancel != nil {
+			p.catchupCancel()
+			p.catchupCancel = nil
+		}
+		p.mu.Unlock()
 	} else {
 		unregisterSharedWS(p)
 	}
