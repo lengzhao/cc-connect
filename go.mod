@@ -76,4 +76,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/larksuite/oapi-sdk-go/v3 => ./third_party/oapi-sdk-go
+replace github.com/larksuite/oapi-sdk-go/v3 => github.com/decren/oapi-sdk-go/v3 v3.10.1-amber.1.0.20260825135827-f84ac821c6ab
