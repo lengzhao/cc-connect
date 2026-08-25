@@ -4637,9 +4637,6 @@ func (p *Platform) Stop() error {
 			slog.Warn(p.tag()+": primary shutting down, secondary platforms will lose event source",
 				"remaining", remaining)
 		}
-		if p.wsClient != nil {
-			p.wsClient.Close()
-		}
 		if cancel := p.getCancel(); cancel != nil {
 			cancel()
 		}
