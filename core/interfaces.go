@@ -672,6 +672,24 @@ type SkillProvider interface {
 	SkillDirs() []string
 }
 
+// ContextResource describes one mutable, agent-visible context file. Version
+// must change whenever the effective file content changes; UpdatedAt is for
+// human-readable notices only and must not be used as the sole comparator.
+type ContextResource struct {
+	Kind      string
+	Path      string
+	Version   string
+	UpdatedAt time.Time
+}
+
+// ContextResourceProvider is implemented by agents that can enumerate their
+// effective Automon instructions, Skills, Memory, and Knowledge files. Engine
+// stores a per-conversation version checkpoint and adds a hidden notice to the
+// next accepted user turn when these resources changed.
+type ContextResourceProvider interface {
+	ContextResources() ([]ContextResource, error)
+}
+
 // SessionDeleter is an optional interface for agents that support deleting sessions.
 type SessionDeleter interface {
 	DeleteSession(ctx context.Context, sessionID string) error
