@@ -7,15 +7,17 @@ import (
 )
 
 func TestContextResourcesIncludesAutomonSkillsMemoryAndKnowledge(t *testing.T) {
-	workDir := t.TempDir()
+	sharedRoot := t.TempDir()
+	workDir := filepath.Join(sharedRoot, "nex-training")
+	t.Setenv("AGENT_WORK_DIR", sharedRoot)
 	configDir := filepath.Join(t.TempDir(), ".claude")
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	automonPath := filepath.Join(configDir, "AUTOMON.md")
 	files := map[string]string{
 		automonPath: "# Automon\n",
-		filepath.Join(configDir, "skills", "daily", "SKILL.md"):        "# Daily\n",
-		filepath.Join(workDir, "files", "memory", "correction.md"):     "# Correction\n",
-		filepath.Join(workDir, "files", "knowledge", "company-sop.md"): "# SOP\n",
+		filepath.Join(configDir, "skills", "daily", "SKILL.md"):           "# Daily\n",
+		filepath.Join(sharedRoot, "files", "memory", "correction.md"):     "# Correction\n",
+		filepath.Join(sharedRoot, "files", "knowledge", "company-sop.md"): "# SOP\n",
 	}
 	for path, content := range files {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -43,7 +45,7 @@ func TestContextResourcesIncludesAutomonSkillsMemoryAndKnowledge(t *testing.T) {
 	}
 
 	before := versions["memory:files/memory/correction.md"]
-	if err := os.WriteFile(filepath.Join(workDir, "files", "memory", "correction.md"), []byte("# Updated\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sharedRoot, "files", "memory", "correction.md"), []byte("# Updated\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	resources, err = agent.ContextResources()

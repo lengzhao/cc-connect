@@ -1137,12 +1137,16 @@ func (a *Agent) ContextResources() ([]core.ContextResource, error) {
 		}
 	}
 
-	absWorkDir, err := filepath.Abs(workDir)
+	sharedFilesRoot := strings.TrimSpace(os.Getenv("AGENT_WORK_DIR"))
+	if sharedFilesRoot == "" {
+		sharedFilesRoot = workDir
+	}
+	absSharedFilesRoot, err := filepath.Abs(sharedFilesRoot)
 	if err != nil {
 		return nil, err
 	}
 	for _, kind := range []string{"memory", "knowledge"} {
-		root := filepath.Join(absWorkDir, "files", kind)
+		root := filepath.Join(absSharedFilesRoot, "files", kind)
 		walkErr := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if errors.Is(walkErr, os.ErrNotExist) {
 				return nil
@@ -1156,7 +1160,7 @@ func (a *Agent) ContextResources() ([]core.ContextResource, error) {
 			if !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
 				return nil
 			}
-			rel, err := filepath.Rel(absWorkDir, path)
+			rel, err := filepath.Rel(absSharedFilesRoot, path)
 			if err != nil {
 				return err
 			}
