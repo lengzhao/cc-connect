@@ -93,6 +93,7 @@ func TestSessionManager_JSONLChannelSaveReload(t *testing.T) {
 		t.Fatalf("new session: %v", err)
 	}
 	s.SetCreatedBy("bob")
+	s.SetContextResourceVersions(map[string]string{"automon:/runtime/AUTOMON.md": "sha256-v2"})
 	s.AddHistory("user", "question")
 	s.AddHistory("assistant", "answer")
 	sm1.Save()
@@ -109,6 +110,9 @@ func TestSessionManager_JSONLChannelSaveReload(t *testing.T) {
 	}
 	if len(got.GetHistory(0)) != 2 {
 		t.Fatalf("history = %d, want 2", len(got.GetHistory(0)))
+	}
+	if version := got.GetContextResourceVersions()["automon:/runtime/AUTOMON.md"]; version != "sha256-v2" {
+		t.Fatalf("context resource version = %q, want sha256-v2", version)
 	}
 	list := sm2.ListSessions(channelKey)
 	if len(list) != 1 {

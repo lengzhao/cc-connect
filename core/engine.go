@@ -3855,7 +3855,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 			sendDone <- fmt.Errorf("agent session became nil")
 			return
 		}
-		sendDone <- as.Send(promptContent, msg.Images, msg.Files)
+		sendDone <- e.sendWithContextRefresh(agent, as, session, sessions, promptContent, msg.Images, msg.Files)
 	}()
 
 	e.processInteractiveEvents(state, session, sessions, interactiveKey, msg.MessageID, turnStart, stopTyping, sendDone, msg.ReplyCtx, msg.SkipHistory)
@@ -6108,7 +6108,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 						nextSend <- fmt.Errorf("agent session became nil")
 						return
 					}
-					nextSend <- as.Send(queuedPrompt, queued.images, queued.files)
+					nextSend <- e.sendWithContextRefresh(e.contextRefreshAgent(state), as, session, sessions, queuedPrompt, queued.images, queued.files)
 				}()
 				pendingSend = nextSend
 
@@ -6456,7 +6456,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 				sendDone <- fmt.Errorf("agent session became nil")
 				return
 			}
-			sendDone <- as.Send(prompt, queued.images, queued.files)
+			sendDone <- e.sendWithContextRefresh(e.contextRefreshAgent(state), as, session, sessions, prompt, queued.images, queued.files)
 		}()
 
 		var stopTyping func()
@@ -16056,6 +16056,15 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, sourceSessionKey,
 		return "", err
 	}
 	session := sessions.GetOrCreateActive(relaySessionKey)
+	if !session.TryLock() {
+		return "", fmt.Errorf("relay conversation is busy")
+	}
+	unlockSession := true
+	defer func() {
+		if unlockSession {
+			session.Unlock()
+		}
+	}()
 
 	if inj, ok := agent.(SessionEnvInjector); ok {
 		envVars := []string{
@@ -16113,7 +16122,7 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, sourceSessionKey,
 
 	saveRelaySessionID(agentSession.CurrentSessionID(), false)
 
-	if err := agentSession.Send(message, nil, nil); err != nil {
+	if err := e.sendWithContextRefresh(agent, agentSession, session, sessions, message, nil, nil); err != nil {
 		agentSession.Close()
 		return "", fmt.Errorf("send relay message: %w", err)
 	}
@@ -16172,6 +16181,7 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, sourceSessionKey,
 			// Relay timed out. Let the agent finish its turn in the
 			// background so the session state is saved cleanly and the
 			// session remains resumable for the next relay call.
+			unlockSession = false
 			go e.drainRelaySession(agentSession, session, sessions, agent.Name(), relaySessionKey)
 			return relayPartialResponseOrError(ctx.Err(), textParts, fromProject, e.name)
 		}
@@ -16210,6 +16220,7 @@ func relayPartialResponseOrError(ctxErr error, textParts []string, fromProject, 
 // auto-approves any permission requests, and then closes the session. A 10-minute
 // safety timeout prevents the goroutine from leaking if the agent hangs.
 func (e *Engine) drainRelaySession(agentSession AgentSession, session *Session, sessions *SessionManager, agentName, relaySessionKey string) {
+	defer session.Unlock()
 	timer := time.NewTimer(10 * time.Minute)
 	defer timer.Stop()
 
