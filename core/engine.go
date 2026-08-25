@@ -3835,7 +3835,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 
 	promptContent := msg.Content
 	if !msg.SkipPromptMeta {
-		promptContent = e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, p, msg.AgentContext)
+		promptContent = e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, msg.MessageID, p, msg.AgentContext)
 	}
 
 	sendStart := time.Now()
@@ -6095,7 +6095,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 				queuedPrompt := queued.content
 				if !queued.skipPromptMeta {
-					queuedPrompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext)
+					queuedPrompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.messageID, queued.platform, queued.agentContext)
 				}
 
 				state.mu.Lock()
@@ -6434,7 +6434,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		e.i18n.DetectAndSet(queued.content)
 		prompt := queued.content
 		if !queued.skipPromptMeta {
-			prompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext)
+			prompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.messageID, queued.platform, queued.agentContext)
 		}
 
 		state.mu.Lock()
@@ -16448,8 +16448,10 @@ func (e *Engine) cmdBindSetup(p Platform, msg *Message) {
 }
 
 // buildAgentPrompt prepends cc-connect metadata to content when injectTimestamp,
-// injectSender, and/or injectContext are enabled.
-func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey string, p Platform, agentCtx AgentContext) string {
+// injectSender, and/or injectContext are enabled. messageID, when non-empty, is
+// included as message_id so agents can use it for thread-aware tools (e.g.
+// lark_send reply_to_message_id).
+func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey, messageID string, p Platform, agentCtx AgentContext) string {
 	var attrs []string
 	if e.injectTimestamp {
 		tzName := e.resolveUserTimezone(userID, p)
@@ -16468,6 +16470,9 @@ func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platfo
 			attrs = append(attrs, fmt.Sprintf(`sender_email="%s"`, promptAttrValue(senderEmail)))
 		}
 		attrs = append(attrs, fmt.Sprintf("platform=%s", platform), fmt.Sprintf("chat_id=%s", chatID))
+		if messageID != "" {
+			attrs = append(attrs, fmt.Sprintf("message_id=%s", messageID))
+		}
 	}
 	if len(e.injectContext) > 0 && !agentCtx.Empty() {
 		filtered := FilterAgentContextByAllowlist(SanitizeAgentContext(agentCtx), e.injectContext)

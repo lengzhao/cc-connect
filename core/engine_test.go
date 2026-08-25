@@ -11341,7 +11341,7 @@ func TestBuildSenderPrompt_Enabled(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(true)
 
-	result := e.buildAgentPrompt("hello world", "user123", "Alice", "", "feishu", "feishu:channel42:user123", "", nil, AgentContext{})
+	result := e.buildAgentPrompt("hello world", "user123", "Alice", "", "feishu", "feishu:channel42:user123", "", "", nil, AgentContext{})
 	expected := "[cc-connect sender_id=user123 sender_name=\"Alice\" platform=feishu chat_id=channel42]\nhello world"
 	if result != expected {
 		t.Fatalf("got %q, want %q", result, expected)
@@ -11352,7 +11352,7 @@ func TestBuildSenderPrompt_Disabled(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(false)
 
-	result := e.buildAgentPrompt("hello", "user1", "Alice", "", "feishu", "feishu:ch:user1", "", nil, AgentContext{})
+	result := e.buildAgentPrompt("hello", "user1", "Alice", "", "feishu", "feishu:ch:user1", "", "", nil, AgentContext{})
 	if result != "hello" {
 		t.Fatalf("expected raw content when disabled, got %q", result)
 	}
@@ -11362,7 +11362,7 @@ func TestBuildSenderPrompt_EmptyUserID(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(true)
 
-	result := e.buildAgentPrompt("hello", "", "Bob", "", "telegram", "telegram:ch:user1", "", nil, AgentContext{})
+	result := e.buildAgentPrompt("hello", "", "Bob", "", "telegram", "telegram:ch:user1", "", "", nil, AgentContext{})
 	if result != "hello" {
 		t.Fatalf("expected raw content when userID is empty, got %q", result)
 	}
@@ -11372,7 +11372,7 @@ func TestBuildSenderPrompt_EmptyUserName(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(true)
 
-	result := e.buildAgentPrompt("hello", "user1", "", "", "feishu", "feishu:ch:user1", "", nil, AgentContext{})
+	result := e.buildAgentPrompt("hello", "user1", "", "", "feishu", "feishu:ch:user1", "", "", nil, AgentContext{})
 	expected := "[cc-connect sender_id=user1 platform=feishu chat_id=ch]\nhello"
 	if result != expected {
 		t.Fatalf("got %q, want %q", result, expected)
@@ -11383,7 +11383,7 @@ func TestBuildSenderPrompt_NameWithSpaces(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(true)
 
-	result := e.buildAgentPrompt("hi", "U999", "Jim Tang", "", "slack", "slack:C012:U999", "", nil, AgentContext{})
+	result := e.buildAgentPrompt("hi", "U999", "Jim Tang", "", "slack", "slack:C012:U999", "", "", nil, AgentContext{})
 	expected := "[cc-connect sender_id=U999 sender_name=\"Jim Tang\" platform=slack chat_id=C012]\nhi"
 	if result != expected {
 		t.Fatalf("got %q, want %q", result, expected)
@@ -11394,7 +11394,7 @@ func TestBuildSenderPrompt_IncludesEmailWhenProvided(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(true)
 
-	result := e.buildAgentPrompt("hi", "U999", "Jim Tang", "jim@example.com", "slack", "slack:C012:U999", "", nil, AgentContext{})
+	result := e.buildAgentPrompt("hi", "U999", "Jim Tang", "jim@example.com", "slack", "slack:C012:U999", "", "", nil, AgentContext{})
 	expected := "[cc-connect sender_id=U999 sender_name=\"Jim Tang\" sender_email=\"jim@example.com\" platform=slack chat_id=C012]\nhi"
 	if result != expected {
 		t.Fatalf("got %q, want %q", result, expected)
@@ -11441,7 +11441,7 @@ func TestBuildSenderPrompt_DifferentPlatforms(t *testing.T) {
 		{"slack", "slack:C012345:carol", "C012345"},
 	}
 	for _, tc := range platforms {
-		result := e.buildAgentPrompt("msg", "uid", "TestUser", "", tc.platform, tc.sessionKey, "", nil, AgentContext{})
+		result := e.buildAgentPrompt("msg", "uid", "TestUser", "", tc.platform, tc.sessionKey, "", "", nil, AgentContext{})
 		if !strings.Contains(result, "platform="+tc.platform) {
 			t.Errorf("missing platform=%s in %q", tc.platform, result)
 		}
@@ -11455,7 +11455,7 @@ func TestBuildSenderPrompt_SanitizesSpecialChars(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(true)
 
-	result := e.buildAgentPrompt("hi", "U1", "Evil\"Name\nInject", "", "slack", "slack:C1:U1", "", nil, AgentContext{})
+	result := e.buildAgentPrompt("hi", "U1", "Evil\"Name\nInject", "", "slack", "slack:C1:U1", "", "", nil, AgentContext{})
 	if strings.Contains(result, `"Name`) || strings.Contains(result, "\n"+`Inject`) {
 		t.Fatalf("quotes/newlines should be sanitized, got %q", result)
 	}
@@ -11470,7 +11470,7 @@ func TestBuildSenderPrompt_ChannelKeyOverridesSessionKey(t *testing.T) {
 
 	// When channelKey is provided, it should be used as chat_id instead of
 	// extracting from sessionKey (which would give "g" for dingtalk).
-	result := e.buildAgentPrompt("hello", "staff1", "Alice", "", "dingtalk", "dingtalk:g:cidXXX:staff1", "cidXXX", nil, AgentContext{})
+	result := e.buildAgentPrompt("hello", "staff1", "Alice", "", "dingtalk", "dingtalk:g:cidXXX:staff1", "cidXXX", "", nil, AgentContext{})
 	expected := "[cc-connect sender_id=staff1 sender_name=\"Alice\" platform=dingtalk chat_id=cidXXX]\nhello"
 	if result != expected {
 		t.Fatalf("got %q, want %q", result, expected)
@@ -11483,7 +11483,7 @@ func TestBuildSenderPrompt_FallbackWithoutChannelKey(t *testing.T) {
 
 	// When channelKey is empty, extractChannelID heuristic should detect
 	// the 4-segment format and extract the correct channel.
-	result := e.buildAgentPrompt("hello", "staff1", "Alice", "", "dingtalk", "dingtalk:g:cidXXX:staff1", "", nil, AgentContext{})
+	result := e.buildAgentPrompt("hello", "staff1", "Alice", "", "dingtalk", "dingtalk:g:cidXXX:staff1", "", "", nil, AgentContext{})
 	expected := "[cc-connect sender_id=staff1 sender_name=\"Alice\" platform=dingtalk chat_id=cidXXX]\nhello"
 	if result != expected {
 		t.Fatalf("got %q, want %q", result, expected)
@@ -11495,7 +11495,7 @@ func TestBuildAgentPrompt_InjectTimestamp(t *testing.T) {
 	e.SetInjectTimestamp(true)
 	e.SetDefaultTimezone("Asia/Shanghai")
 
-	result := e.buildAgentPrompt("hello", "user1", "", "", "feishu", "feishu:ch:user1", "", nil, AgentContext{})
+	result := e.buildAgentPrompt("hello", "user1", "", "", "feishu", "feishu:ch:user1", "", "", nil, AgentContext{})
 	if !strings.Contains(result, `timezone="Asia/Shanghai"`) {
 		t.Fatalf("expected Asia/Shanghai timezone, got %q", result)
 	}
@@ -11516,7 +11516,7 @@ func (s stubTZPlatform) UserTimezone(string) string               { return s.tz 
 func TestBuildAgentPrompt_InjectTimestampUsesPlatformTimezone(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectTimestamp(true)
-	result := e.buildAgentPrompt("hello", "U1", "", "", "stub", "stub:C1:U1", "", stubTZPlatform{tz: "America/New_York"}, AgentContext{})
+	result := e.buildAgentPrompt("hello", "U1", "", "", "stub", "stub:C1:U1", "", "", stubTZPlatform{tz: "America/New_York"}, AgentContext{})
 	if !strings.Contains(result, `timezone="America/New_York"`) {
 		t.Fatalf("expected platform timezone, got %q", result)
 	}
@@ -11534,7 +11534,7 @@ func TestBuildAgentPrompt_InjectContextAllowlist(t *testing.T) {
 			"custom.region":    "cn",
 		},
 	}
-	result := e.buildAgentPrompt("hello", "u1", "Alice", "", "chat-api", "chat-api:ch:u1", "ch", nil, ctx)
+	result := e.buildAgentPrompt("hello", "u1", "Alice", "", "chat-api", "chat-api:ch:u1", "ch", "", nil, ctx)
 	expected := `[cc-connect language="zh" task_id="task-42" custom.tenant_id="acme"]` + "\nhello"
 	if result != expected {
 		t.Fatalf("got %q, want %q", result, expected)
@@ -11544,7 +11544,7 @@ func TestBuildAgentPrompt_InjectContextAllowlist(t *testing.T) {
 func TestBuildAgentPrompt_InjectContextDisabled(t *testing.T) {
 	e := newTestEngine()
 	ctx := AgentContext{Language: "zh", TaskID: "t1"}
-	result := e.buildAgentPrompt("hello", "u1", "", "", "chat-api", "chat-api:ch:u1", "", nil, ctx)
+	result := e.buildAgentPrompt("hello", "u1", "", "", "chat-api", "chat-api:ch:u1", "", "", nil, ctx)
 	if result != "hello" {
 		t.Fatalf("expected raw content when inject_context unset, got %q", result)
 	}
@@ -11554,10 +11554,30 @@ func TestBuildAgentPrompt_InjectContextWithSender(t *testing.T) {
 	e := newTestEngine()
 	e.SetInjectSender(true)
 	e.SetInjectContext([]string{"task_id"})
-	result := e.buildAgentPrompt("hi", "U1", "Rock", "", "slack", "slack:C1:U1", "", nil, AgentContext{TaskID: "job-9"})
+	result := e.buildAgentPrompt("hi", "U1", "Rock", "", "slack", "slack:C1:U1", "", "", nil, AgentContext{TaskID: "job-9"})
 	expected := `[cc-connect sender_id=U1 sender_name="Rock" platform=slack chat_id=C1 task_id="job-9"]` + "\nhi"
 	if result != expected {
 		t.Fatalf("got %q, want %q", result, expected)
+	}
+}
+
+func TestBuildAgentPrompt_WithMessageID(t *testing.T) {
+	e := newTestEngine()
+	e.SetInjectSender(true)
+
+	result := e.buildAgentPrompt("hello", "user1", "Alice", "", "lark", "lark:oc_abc:root:om_xyz", "", "om_xyz", nil, AgentContext{})
+	if !strings.Contains(result, "message_id=om_xyz") {
+		t.Fatalf("expected message_id in header, got %q", result)
+	}
+}
+
+func TestBuildAgentPrompt_EmptyMessageIDOmitted(t *testing.T) {
+	e := newTestEngine()
+	e.SetInjectSender(true)
+
+	result := e.buildAgentPrompt("hi", "user1", "Bob", "", "lark", "lark:oc_abc:user1", "", "", nil, AgentContext{})
+	if strings.Contains(result, "message_id") {
+		t.Fatalf("message_id should be absent when empty, got %q", result)
 	}
 }
 
