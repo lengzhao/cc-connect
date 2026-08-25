@@ -18,18 +18,19 @@ const sessionRecordVersion = 1
 
 // SessionRecordEvent is one append-only JSONL record for channel-sharded storage.
 type SessionRecordEvent struct {
-	V                  int           `json:"v"`
-	Op                 string        `json:"op"`
-	TS                 int64         `json:"ts"`
-	ConvID             string        `json:"conv_id,omitempty"`
-	Name               string        `json:"name,omitempty"`
-	CreatedBy          string        `json:"created_by,omitempty"`
-	CreatedAt          int64         `json:"created_at,omitempty"`
-	AgentSessionID     string        `json:"agent_session_id,omitempty"`
-	AgentType          string        `json:"agent_type,omitempty"`
-	ActiveProvider     string        `json:"active_provider,omitempty"`
-	PastAgentSessionIDs []string     `json:"past_agent_session_ids,omitempty"`
-	Entry              *HistoryEntry `json:"entry,omitempty"`
+	V                       int               `json:"v"`
+	Op                      string            `json:"op"`
+	TS                      int64             `json:"ts"`
+	ConvID                  string            `json:"conv_id,omitempty"`
+	Name                    string            `json:"name,omitempty"`
+	CreatedBy               string            `json:"created_by,omitempty"`
+	CreatedAt               int64             `json:"created_at,omitempty"`
+	AgentSessionID          string            `json:"agent_session_id,omitempty"`
+	AgentType               string            `json:"agent_type,omitempty"`
+	ActiveProvider          string            `json:"active_provider,omitempty"`
+	PastAgentSessionIDs     []string          `json:"past_agent_session_ids,omitempty"`
+	ContextResourceVersions map[string]string `json:"context_resource_versions,omitempty"`
+	Entry                   *HistoryEntry     `json:"entry,omitempty"`
 }
 
 type jsonlChannelStore struct {
@@ -169,10 +170,10 @@ func foldJSONLFile(path, channelKey string) (*sessionSnapshot, error) {
 	defer f.Close()
 
 	snap := &sessionSnapshot{
-		Sessions:      make(map[string]*Session),
-		UserSessions:  map[string][]string{channelKey: {}},
-		ActiveSession: make(map[string]string),
-		Version:       snapshotVersion,
+		Sessions:       make(map[string]*Session),
+		UserSessions:   map[string][]string{channelKey: {}},
+		ActiveSession:  make(map[string]string),
+		Version:        snapshotVersion,
 		PastIDTracking: true,
 	}
 	convOrder := make([]string, 0)
@@ -235,6 +236,7 @@ func applySessionRecordEvent(snap *sessionSnapshot, channelKey string, convOrder
 		s.AgentSessionID = ev.AgentSessionID
 		s.AgentType = ev.AgentType
 		s.ActiveProvider = ev.ActiveProvider
+		s.ContextResourceVersions = cloneStringMap(ev.ContextResourceVersions)
 		if len(ev.PastAgentSessionIDs) > 0 {
 			s.PastAgentSessionIDs = append([]string(nil), ev.PastAgentSessionIDs...)
 		}
@@ -269,6 +271,9 @@ func mergeSnapshots(dst, src *sessionSnapshot) {
 			if s.AgentSessionID != "" {
 				existing.AgentSessionID = s.AgentSessionID
 			}
+			if len(s.ContextResourceVersions) > 0 {
+				existing.ContextResourceVersions = cloneStringMap(s.ContextResourceVersions)
+			}
 			continue
 		}
 		dst.Sessions[id] = s
@@ -295,17 +300,23 @@ func uniqueStrings(in []string) []string {
 }
 
 type sessionPersistSnap struct {
-	known       bool
-	historyLen  int
-	name        string
-	agentSID    string
-	agentType   string
-	activeProv  string
-	pastIDs     string
+	known           bool
+	historyLen      int
+	name            string
+	agentSID        string
+	agentType       string
+	activeProv      string
+	pastIDs         string
+	contextVersions string
 }
 
 func pastIDsKey(ids []string) string {
 	return strings.Join(ids, "\x00")
+}
+
+func contextVersionsKey(values map[string]string) string {
+	data, _ := json.Marshal(values)
+	return string(data)
 }
 
 func (sm *SessionManager) appendJSONLChannelDeltas() {
@@ -317,6 +328,7 @@ func (sm *SessionManager) appendJSONLChannelDeltas() {
 	}
 
 	eventsByKey := make(map[string][]SessionRecordEvent)
+	nextSnapsByKey := make(map[string]map[string]sessionPersistSnap)
 	now := time.Now().Unix()
 
 	for userKey, ids := range sm.userSessions {
@@ -330,13 +342,14 @@ func (sm *SessionManager) appendJSONLChannelDeltas() {
 			}
 			s.mu.Lock()
 			snap := sessionPersistSnap{
-				known:      true,
-				historyLen: len(s.History),
-				name:       s.Name,
-				agentSID:   s.AgentSessionID,
-				agentType:  s.AgentType,
-				activeProv: s.ActiveProvider,
-				pastIDs:    pastIDsKey(s.PastAgentSessionIDs),
+				known:           true,
+				historyLen:      len(s.History),
+				name:            s.Name,
+				agentSID:        s.AgentSessionID,
+				agentType:       s.AgentType,
+				activeProv:      s.ActiveProvider,
+				pastIDs:         pastIDsKey(s.PastAgentSessionIDs),
+				contextVersions: contextVersionsKey(s.ContextResourceVersions),
 			}
 			prev, had := sm.persistSnap[id]
 			if !had {
@@ -361,16 +374,18 @@ func (sm *SessionManager) appendJSONLChannelDeltas() {
 				prev.agentSID != snap.agentSID ||
 				prev.agentType != snap.agentType ||
 				prev.activeProv != snap.activeProv ||
-				prev.pastIDs != snap.pastIDs
-			if metaChanged && (snap.agentSID != "" || snap.agentType != "" || snap.activeProv != "" || snap.pastIDs != "") {
+				prev.pastIDs != snap.pastIDs ||
+				prev.contextVersions != snap.contextVersions
+			if metaChanged && (snap.agentSID != "" || snap.agentType != "" || snap.activeProv != "" || snap.pastIDs != "" || snap.contextVersions != "") {
 				eventsByKey[userKey] = append(eventsByKey[userKey], SessionRecordEvent{
-					Op:                  "conv_meta",
-					TS:                  now,
-					ConvID:              id,
-					AgentSessionID:      snap.agentSID,
-					AgentType:           snap.agentType,
-					ActiveProvider:      snap.activeProv,
-					PastAgentSessionIDs: append([]string(nil), s.PastAgentSessionIDs...),
+					Op:                      "conv_meta",
+					TS:                      now,
+					ConvID:                  id,
+					AgentSessionID:          snap.agentSID,
+					AgentType:               snap.agentType,
+					ActiveProvider:          snap.activeProv,
+					PastAgentSessionIDs:     append([]string(nil), s.PastAgentSessionIDs...),
+					ContextResourceVersions: cloneStringMap(s.ContextResourceVersions),
 				})
 			}
 			start := 0
@@ -388,13 +403,20 @@ func (sm *SessionManager) appendJSONLChannelDeltas() {
 				})
 			}
 			s.mu.Unlock()
-			sm.persistSnap[id] = snap
+			if nextSnapsByKey[userKey] == nil {
+				nextSnapsByKey[userKey] = make(map[string]sessionPersistSnap)
+			}
+			nextSnapsByKey[userKey][id] = snap
 		}
 	}
 
 	for userKey, events := range eventsByKey {
 		if err := sm.channelStore.append(userKey, events); err != nil {
 			slog.Error("session: jsonl channel append failed", "channel_key", userKey, "error", err)
+			continue
+		}
+		for id, snap := range nextSnapsByKey[userKey] {
+			sm.persistSnap[id] = snap
 		}
 	}
 }
@@ -418,6 +440,11 @@ func (sm *SessionManager) loadJSONLChannels() {
 			}
 			s.stripContinueSessionSentinel()
 			if existing, ok := sm.sessions[id]; ok {
+				existing.mu.Lock()
+				if len(s.ContextResourceVersions) > 0 {
+					existing.ContextResourceVersions = cloneStringMap(s.ContextResourceVersions)
+				}
+				existing.mu.Unlock()
 				if len(s.History) > len(existing.History) {
 					existing.mu.Lock()
 					existing.History = append([]HistoryEntry(nil), s.History...)
@@ -444,13 +471,14 @@ func (sm *SessionManager) loadJSONLChannels() {
 	for id, s := range sm.sessions {
 		s.mu.Lock()
 		sm.persistSnap[id] = sessionPersistSnap{
-			known:      true,
-			historyLen: len(s.History),
-			name:       s.Name,
-			agentSID:   s.AgentSessionID,
-			agentType:  s.AgentType,
-			activeProv: s.ActiveProvider,
-			pastIDs:    pastIDsKey(s.PastAgentSessionIDs),
+			known:           true,
+			historyLen:      len(s.History),
+			name:            s.Name,
+			agentSID:        s.AgentSessionID,
+			agentType:       s.AgentType,
+			activeProv:      s.ActiveProvider,
+			pastIDs:         pastIDsKey(s.PastAgentSessionIDs),
+			contextVersions: contextVersionsKey(s.ContextResourceVersions),
 		}
 		s.mu.Unlock()
 	}
@@ -477,17 +505,18 @@ func (sm *SessionManager) snapshotExcludingChannelKeys() sessionSnapshot {
 			s.AgentSessionID = ""
 		}
 		snapSessions[id] = &Session{
-			ID:                  s.ID,
-			Name:                s.Name,
-			CreatedBy:           s.CreatedBy,
-			AgentSessionID:      agentSID,
-			AgentType:           s.AgentType,
-			PastAgentSessionIDs: append([]string(nil), s.PastAgentSessionIDs...),
-			ActiveProvider:      s.ActiveProvider,
-			History:             append([]HistoryEntry(nil), s.History...),
-			CreatedAt:           s.CreatedAt,
-			UpdatedAt:           s.UpdatedAt,
-			LastUserActivity:    s.LastUserActivity,
+			ID:                      s.ID,
+			Name:                    s.Name,
+			CreatedBy:               s.CreatedBy,
+			AgentSessionID:          agentSID,
+			AgentType:               s.AgentType,
+			PastAgentSessionIDs:     append([]string(nil), s.PastAgentSessionIDs...),
+			ActiveProvider:          s.ActiveProvider,
+			History:                 append([]HistoryEntry(nil), s.History...),
+			CreatedAt:               s.CreatedAt,
+			UpdatedAt:               s.UpdatedAt,
+			LastUserActivity:        s.LastUserActivity,
+			ContextResourceVersions: cloneStringMap(s.ContextResourceVersions),
 		}
 		s.mu.Unlock()
 	}

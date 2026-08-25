@@ -3,8 +3,12 @@ package claudecode
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -1019,6 +1023,157 @@ func (a *Agent) SkillDirs() []string {
 		absDir = workDir
 	}
 	return appendProjectClaudeSkillDirs(absDir, claudeConfigHomeDir())
+}
+
+const (
+	maxContextResourceFiles = 512
+	maxContextResourceBytes = 4 << 20
+	maxContextSnapshotBytes = 32 << 20
+)
+
+// ContextResources returns the effective mutable context visible to Claude.
+// Content hashes are used as versions so timestamp granularity and clock skew
+// cannot make a conversation miss an update.
+func (a *Agent) ContextResources() ([]core.ContextResource, error) {
+	a.mu.RLock()
+	workDir := a.workDir
+	promptFiles := append([]string(nil), a.appendSystemPromptFiles...)
+	a.mu.RUnlock()
+
+	resources := make([]core.ContextResource, 0)
+	seen := make(map[string]struct{})
+	var totalBytes int64
+	addFile := func(kind, path, displayPath string) error {
+		info, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		if len(resources) >= maxContextResourceFiles {
+			return fmt.Errorf("context resources exceed %d files", maxContextResourceFiles)
+		}
+		if info.Size() > maxContextResourceBytes {
+			return fmt.Errorf("context resource %q exceeds %d bytes", displayPath, maxContextResourceBytes)
+		}
+		if totalBytes+info.Size() > maxContextSnapshotBytes {
+			return fmt.Errorf("context resources exceed %d bytes in total", maxContextSnapshotBytes)
+		}
+		key := kind + ":" + displayPath
+		if _, ok := seen[key]; ok {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			// Preserve the resource in the snapshot so one temporarily unreadable
+			// file is not misreported as deleted and does not suppress every
+			// other context update.
+			seen[key] = struct{}{}
+			resources = append(resources, core.ContextResource{
+				Kind: kind, Path: displayPath,
+				Version: fmt.Sprintf("unreadable:%d:%d", info.ModTime().UnixNano(), info.Size()), UpdatedAt: info.ModTime(),
+			})
+			slog.Warn("claudecode: context resource is unreadable", "path", displayPath, "error", err)
+			return nil
+		}
+		hash := sha256.New()
+		_, copyErr := io.Copy(hash, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			slog.Warn("claudecode: context resource read failed", "path", displayPath, "error", copyErr)
+			seen[key] = struct{}{}
+			resources = append(resources, core.ContextResource{
+				Kind: kind, Path: displayPath,
+				Version: fmt.Sprintf("unreadable:%d:%d", info.ModTime().UnixNano(), info.Size()), UpdatedAt: info.ModTime(),
+			})
+			return nil
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		seen[key] = struct{}{}
+		totalBytes += info.Size()
+		resources = append(resources, core.ContextResource{
+			Kind: kind, Path: displayPath,
+			Version: hex.EncodeToString(hash.Sum(nil)), UpdatedAt: info.ModTime(),
+		})
+		return nil
+	}
+
+	for _, configuredPath := range promptFiles {
+		path, err := expandRuntimePromptFilePath(configuredPath)
+		if err != nil {
+			return nil, err
+		}
+		kind := "runtime_instruction"
+		if strings.EqualFold(filepath.Base(path), "AUTOMON.md") {
+			kind = "automon"
+		}
+		if err := addFile(kind, path, path); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, dir := range a.SkillDirs() {
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name(), "SKILL.md")
+			if err := addFile("skill", path, path); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	absWorkDir, err := filepath.Abs(workDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, kind := range []string{"memory", "knowledge"} {
+		root := filepath.Join(absWorkDir, "files", kind)
+		walkErr := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if errors.Is(walkErr, os.ErrNotExist) {
+				return nil
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+			if !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+				return nil
+			}
+			rel, err := filepath.Rel(absWorkDir, path)
+			if err != nil {
+				return err
+			}
+			return addFile(kind, path, filepath.ToSlash(rel))
+		})
+		if walkErr != nil && !errors.Is(walkErr, os.ErrNotExist) {
+			return nil, walkErr
+		}
+	}
+
+	sort.Slice(resources, func(i, j int) bool {
+		if resources[i].Kind == resources[j].Kind {
+			return resources[i].Path < resources[j].Path
+		}
+		return resources[i].Kind < resources[j].Kind
+	})
+	return resources, nil
 }
 
 // ── ContextCompressor implementation ──────────────────────────
