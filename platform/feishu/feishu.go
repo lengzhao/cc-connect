@@ -130,6 +130,9 @@ type Platform struct {
 	doneEmoji                  string
 	allowFrom                  string
 	allowChat                  string
+	catchupChats               string             // comma-sep chat IDs for catch-up polling; empty = disabled
+	catchupCursor              sync.Map           // chatID -> int64 (unix seconds, last poll window end)
+	catchupCancel              context.CancelFunc
 	groupOnly                  bool
 	groupReplyAll              bool
 	respondToAtEveryoneAndHere bool
@@ -146,6 +149,7 @@ type Platform struct {
 	handler          core.MessageHandler
 	cardNavHandler   core.CardNavigationHandler
 	cancel           context.CancelFunc
+	ctx              context.Context
 	dedup            *core.MessageDedup
 	botOpenID        string
 	peerBots         map[string]string // app_id -> friendly alias, for quoted-reply attribution
@@ -307,6 +311,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	allowFrom, _ := opts["allow_from"].(string)
 	core.CheckAllowFrom(name, allowFrom)
 	allowChat, _ := opts["allow_chat"].(string)
+	catchupChats, _ := opts["catchup_chats"].(string)
 	groupOnly, _ := opts["group_only"].(bool)
 	groupReplyAll, _ := opts["group_reply_all"].(bool)
 	// require_mention = false is equivalent to group_reply_all = true:
@@ -404,6 +409,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		doneEmoji:                  doneEmoji,
 		allowFrom:                  allowFrom,
 		allowChat:                  allowChat,
+		catchupChats:               catchupChats,
 		groupOnly:                  groupOnly,
 		groupReplyAll:              groupReplyAll,
 		respondToAtEveryoneAndHere: respondToAtEveryoneAndHere,
@@ -457,6 +463,12 @@ func (p *Platform) getCancel() context.CancelFunc {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.cancel
+}
+
+func (p *Platform) getContext() context.Context {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.ctx
 }
 
 func (p *Platform) getServer() *http.Server {
@@ -598,6 +610,7 @@ func (p *Platform) startWebSocketMode() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.mu.Lock()
 	p.cancel = cancel
+	p.ctx = ctx
 	p.mu.Unlock()
 
 	go func() {
@@ -4619,6 +4632,9 @@ func (p *Platform) Stop() error {
 		if remaining > 0 {
 			slog.Warn(p.tag()+": primary shutting down, secondary platforms will lose event source",
 				"remaining", remaining)
+		}
+		if p.wsClient != nil {
+			p.wsClient.Close()
 		}
 		if cancel := p.getCancel(); cancel != nil {
 			cancel()
