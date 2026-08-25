@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
@@ -270,7 +271,8 @@ func (dispatcher *EventDispatcher) Do(ctx context.Context, payload []byte) (inte
 
 	handler := dispatcher.eventType2EventHandler[eventType]
 	if handler == nil {
-		return nil, &NotFoundEventHandlerErr{eventType: eventType}
+		slog.Debug("lark dispatcher: no handler registered for event type, ignoring", "event_type", eventType)
+		return nil, nil
 	}
 
 	req := &larkevent.EventReq{
