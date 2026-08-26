@@ -1336,7 +1336,7 @@ func main() {
 		apiSrv.Start()
 	}
 
-	slog.Info("cc-connect is running", "projects", len(engines))
+	slog.Info("[amber-fork] cc-connect is running", "version", version, "projects", len(engines))
 
 	// After startup, check if we were restarted and queue the success
 	// notification. The engine dispatches it on the first OnPlatformReady
@@ -1415,7 +1415,7 @@ func main() {
 		}
 	}
 
-	slog.Info("bye")
+	slog.Info("[amber-fork] cc-connect stopped")
 }
 
 // sessionStorePath builds a unique filename from project name + work_dir.

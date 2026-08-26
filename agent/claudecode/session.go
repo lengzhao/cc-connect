@@ -1074,9 +1074,9 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, file
 	} else if textPart == "" {
 		textPart = "Please analyze the attached image(s)."
 	}
-	if len(savedPaths) > 0 {
+	/*	if len(savedPaths) > 0 {
 		textPart += "\n\n(Images also saved locally: " + strings.Join(savedPaths, ", ") + ")"
-	}
+	}*/
 	if len(filePaths) > 0 {
 		textPart += "\n\n(Files saved locally, please read them: " + strings.Join(filePaths, ", ") + ")"
 	}
