@@ -17,10 +17,15 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"image"
+	"image/jpeg"
+	_ "image/png"
 	"syscall"
 	"time"
 
 	"github.com/chenhg5/cc-connect/core"
+	"golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
 )
 
 // claudeSession manages a long-running Claude Code process using
@@ -1054,12 +1059,13 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, file
 		if mimeType == "" {
 			mimeType = "image/png"
 		}
+		imgData, mimeType := downscaleImageIfNeeded(img.Data, mimeType)
 		parts = append(parts, map[string]any{
 			"type": "image",
 			"source": map[string]any{
 				"type":       "base64",
 				"media_type": mimeType,
-				"data":       base64.StdEncoding.EncodeToString(img.Data),
+				"data":       base64.StdEncoding.EncodeToString(imgData),
 			},
 		})
 	}
@@ -1074,9 +1080,9 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, file
 	} else if textPart == "" {
 		textPart = "Please analyze the attached image(s)."
 	}
-	/*	if len(savedPaths) > 0 {
+	if len(savedPaths) > 0 {
 		textPart += "\n\n(Images also saved locally: " + strings.Join(savedPaths, ", ") + ")"
-	}*/
+	}
 	if len(filePaths) > 0 {
 		textPart += "\n\n(Files saved locally, please read them: " + strings.Join(filePaths, ", ") + ")"
 	}
@@ -1086,6 +1092,46 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, file
 		"type":    "user",
 		"message": map[string]any{"role": "user", "content": parts},
 	})
+}
+
+// maxImageDimension is the per-image pixel limit enforced by the Anthropic API
+// for multi-image requests (see https://github.com/anthropics/claude-code/issues/1908).
+const maxImageDimension = 1992
+
+// downscaleImageIfNeeded decodes the image, and if either dimension exceeds
+// maxImageDimension re-encodes it as JPEG scaled to fit within the limit.
+// Returns the original bytes unchanged on any decode/encode error.
+func downscaleImageIfNeeded(data []byte, mimeType string) ([]byte, string) {
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return data, mimeType
+	}
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	if w <= maxImageDimension && h <= maxImageDimension {
+		return data, mimeType
+	}
+	newW, newH := w, h
+	if w > h {
+		newW = maxImageDimension
+		newH = h * maxImageDimension / w
+	} else {
+		newH = maxImageDimension
+		newW = w * maxImageDimension / h
+	}
+	if newW < 1 {
+		newW = 1
+	}
+	if newH < 1 {
+		newH = 1
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+	draw.BiLinear.Scale(dst, dst.Bounds(), img, img.Bounds(), draw.Over, nil)
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: 85}); err != nil {
+		return data, mimeType
+	}
+	slog.Debug("claudeSession: downscaled image", "from", fmt.Sprintf("%dx%d", w, h), "to", fmt.Sprintf("%dx%d", newW, newH))
+	return buf.Bytes(), "image/jpeg"
 }
 
 func extFromMime(mime string) string {
