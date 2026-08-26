@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(git add:*)",
-      "Bash(git commit -m ':*)"
+      "Bash(git commit -m ':*)",
+      "Bash(go build *)",
+      "Bash(git commit -m ' *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "mcp-atlassian",
+    "googledocs",
+    "codegraph"
+  ]
 }
