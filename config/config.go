@@ -203,6 +203,7 @@ type DisplayConfig struct {
 	ShowContextIndicator *bool   `toml:"show_context_indicator"` // whether [ctx: ~N%] suffix is shown; default true
 	ReplyFooter          *bool   `toml:"reply_footer"`           // whether Codex-like footer is shown; default true
 	HideAgentFooter      *bool   `toml:"hide_agent_footer"`      // strip agent-emitted model/token footer lines; default false
+	HideIntermediateText *bool   `toml:"hide_intermediate_text"` // suppress all intermediate text; only deliver final EventResult content; default false
 }
 
 // StreamPreviewConfig controls real-time streaming preview in IM.
@@ -832,7 +833,7 @@ func projectQuietEffective(cfg *Config, proj *ProjectConfig) bool {
 //  1. project-level [projects.display].<field> (highest precedence)
 //  2. global [display].<field>
 //  3. mode-derived default (compact/quiet → false, full → true)
-func EffectiveDisplay(cfg *Config, proj *ProjectConfig) (mode string, thinkingMessages, toolMessages bool, thinkingMaxLen, toolMaxLen int, showContextIndicator, replyFooter, hideAgentFooter bool) {
+func EffectiveDisplay(cfg *Config, proj *ProjectConfig) (mode string, thinkingMessages, toolMessages bool, thinkingMaxLen, toolMaxLen int, showContextIndicator, replyFooter, hideAgentFooter, hideIntermediateText bool) {
 	var projDisp *DisplayConfig
 	if proj != nil {
 		projDisp = proj.Display
@@ -933,6 +934,12 @@ func EffectiveDisplay(cfg *Config, proj *ProjectConfig) (mode string, thinkingMe
 	hideAgentFooter = pickBool(
 		getProjBool(func(d *DisplayConfig) *bool { return d.HideAgentFooter }),
 		cfg.Display.HideAgentFooter,
+		false,
+	)
+
+	hideIntermediateText = pickBool(
+		getProjBool(func(d *DisplayConfig) *bool { return d.HideIntermediateText }),
+		cfg.Display.HideIntermediateText,
 		false,
 	)
 

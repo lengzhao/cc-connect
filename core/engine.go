@@ -311,7 +311,8 @@ type DisplayCfg struct {
 	ToolMaxLen       int // max runes for tool use preview; 0 = no truncation
 	ToolMessages     bool
 	HistoryMaxLen    *int // max runes for /history entries; nil = default, 0 = no truncation
-	HideAgentFooter  bool // strip model/token footer lines emitted as agent text
+	HideAgentFooter      bool // strip model/token footer lines emitted as agent text
+	HideIntermediateText bool // suppress all intermediate text; only the final EventResult content is delivered
 }
 
 // InstantReplyCfg controls the immediate confirmation reply sent when a message
@@ -5445,6 +5446,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			content := event.Content
 			if e.display.HideAgentFooter {
 				content = stripAgentFooterLines(content)
+			}
+			if e.display.HideIntermediateText {
+				continue
 			}
 			if content != "" && !isEllipsisOnly(content) {
 				// Pre-compute silentHold transition including this chunk so the
