@@ -1071,7 +1071,7 @@ func (p *Platform) IsMessageRecalled(ctx context.Context, rctx any) (bool, error
 
 	req := larkim.NewGetMessageReqBuilder().
 		MessageId(messageID).
-		UserIdType(larkim.UserIdTypeGetMessageOpenId).
+		UserIdType(larkim.UserIdTypeOpenId).
 		Build()
 
 	var resp *larkim.GetMessageResp
