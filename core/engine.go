@@ -505,6 +505,7 @@ type queuedMessage struct {
 	userMessageTimeMs int64  // Feishu create_time ms (optional); see Message.UserMessageTimeMs
 	agentContext      AgentContext
 	skipPromptMeta    bool // see Message.SkipPromptMeta
+	botMentioned      bool // see Message.BotMentioned
 }
 
 // interactiveState tracks a running interactive agent session and its permission state.
@@ -3199,6 +3200,7 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 		userMessageTimeMs: msg.UserMessageTimeMs,
 		agentContext:      msg.AgentContext.Clone(),
 		skipPromptMeta:    msg.SkipPromptMeta,
+		botMentioned:      msg.BotMentioned,
 	})
 	queueDepth := len(state.pendingMessages)
 
@@ -3836,7 +3838,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 
 	promptContent := msg.Content
 	if !msg.SkipPromptMeta {
-		promptContent = e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, msg.MessageID, p, msg.AgentContext)
+		promptContent = e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, msg.MessageID, msg.BotMentioned, p, msg.AgentContext)
 	}
 
 	sendStart := time.Now()
@@ -6099,7 +6101,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 				queuedPrompt := queued.content
 				if !queued.skipPromptMeta {
-					queuedPrompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.messageID, queued.platform, queued.agentContext)
+					queuedPrompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.messageID, queued.botMentioned, queued.platform, queued.agentContext)
 				}
 
 				state.mu.Lock()
@@ -6438,7 +6440,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		e.i18n.DetectAndSet(queued.content)
 		prompt := queued.content
 		if !queued.skipPromptMeta {
-			prompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.messageID, queued.platform, queued.agentContext)
+			prompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.messageID, queued.botMentioned, queued.platform, queued.agentContext)
 		}
 
 		state.mu.Lock()
@@ -16465,8 +16467,10 @@ func (e *Engine) cmdBindSetup(p Platform, msg *Message) {
 // buildAgentPrompt prepends cc-connect metadata to content when injectTimestamp,
 // injectSender, and/or injectContext are enabled. messageID, when non-empty, is
 // included as message_id so agents can use it for thread-aware tools (e.g.
-// lark_send reply_to_message_id).
-func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey, messageID string, p Platform, agentCtx AgentContext) string {
+// lark_send reply_to_message_id). botMentioned, when true, adds bot_mentioned=true
+// so agents can distinguish explicit @-bot messages from ambient group traffic
+// (relevant when group_reply_all / require_mention=false is configured).
+func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey, messageID string, botMentioned bool, p Platform, agentCtx AgentContext) string {
 	var attrs []string
 	if e.injectTimestamp {
 		tzName := e.resolveUserTimezone(userID, p)
@@ -16488,6 +16492,9 @@ func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platfo
 		if messageID != "" {
 			attrs = append(attrs, fmt.Sprintf("message_id=%s", messageID))
 		}
+		if botMentioned {
+			attrs = append(attrs, "bot_mentioned=true")
+		}
 	}
 	if len(e.injectContext) > 0 && !agentCtx.Empty() {
 		filtered := FilterAgentContextByAllowlist(SanitizeAgentContext(agentCtx), e.injectContext)
@@ -16496,7 +16503,11 @@ func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platfo
 	if len(attrs) == 0 {
 		return content
 	}
-	return fmt.Sprintf("[cc-connect %s]\n%s", strings.Join(attrs, " "), content)
+	// Escape any "[cc-connect" sequences in user content to prevent prompt
+	// injection where a user crafts a fake header line to spoof metadata fields
+	// (e.g. "bot_mentioned=true") that the agent trusts.
+	safeContent := strings.ReplaceAll(content, "[cc-connect", `\[cc-connect`)
+	return fmt.Sprintf("[cc-connect %s]\n%s", strings.Join(attrs, " "), safeContent)
 }
 
 func (e *Engine) resolveUserTimezone(userID string, p Platform) string {

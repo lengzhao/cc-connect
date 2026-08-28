@@ -175,7 +175,8 @@ func (p *Platform) injectCatchupMessage(ctx context.Context, msg *larkim.Message
 		"msg_type", msgType,
 	)
 
-	go p.dispatchMessage(ctx, msgType, content, mentions, messageID, sessionKey, userID, chatID, rctx, parentID, createTimeMs)
+	// Catchup messages are pre-filtered by isBotMentionedInList, so bot was always mentioned.
+	go p.dispatchMessage(ctx, msgType, content, mentions, true, messageID, sessionKey, userID, chatID, rctx, parentID, createTimeMs)
 }
 
 // convertMentions converts REST API []*larkim.Mention to []*larkim.MentionEvent

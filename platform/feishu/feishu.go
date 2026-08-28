@@ -1410,6 +1410,13 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	mentions := msg.Mentions
 	parentID := stringValue(msg.ParentId)
 
+	// Record whether the bot was explicitly @-mentioned so dispatchMessage can
+	// set Message.BotMentioned and the agent can see bot_mentioned=true in its
+	// prompt header. This lets the agent distinguish intentional @-bot commands
+	// (e.g. "@bot 处理完毕") from ambient group messages that arrive only when
+	// group_reply_all / require_mention=false is enabled.
+	botMentioned := p.getBotOpenID() != "" && isBotMentioned(msg.Mentions, p.getBotOpenID())
+
 	rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
 	slog.Debug(p.tag()+": routed inbound message",
 		"message_id", messageID,
@@ -1425,7 +1432,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	// blocked by IO-heavy operations (image/audio download, handler HTTP calls).
 	// The dedup and old-message checks above remain synchronous to guarantee
 	// correctness before spawning the goroutine.
-	go p.dispatchMessage(ctx, msgType, content, mentions, messageID, sessionKey, userID, chatID, rctx, parentID, createTimeMs)
+	go p.dispatchMessage(ctx, msgType, content, mentions, botMentioned, messageID, sessionKey, userID, chatID, rctx, parentID, createTimeMs)
 
 	return nil
 }
@@ -1442,7 +1449,7 @@ func (p *Platform) replyUnauthorizedAccess(ctx context.Context, rctx replyContex
 // dispatchMessage handles the message content parsing, media download, and
 // handler invocation. It runs in its own goroutine so that onMessage returns
 // quickly and does not block the SDK event loop.
-func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, messageID, sessionKey, userID, chatID string, rctx replyContext, parentID string, createTimeMs int64) {
+func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, botMentioned bool, messageID, sessionKey, userID, chatID string, rctx replyContext, parentID string, createTimeMs int64) {
 	if p.isMessageRecalled(messageID) {
 		slog.Debug(p.tag()+": recalled message ignored in async dispatch", "message_id", messageID)
 		return
@@ -1486,6 +1493,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Content: text, ExtraContent: quoted.text, Images: quoted.images, ReplyCtx: rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "image":
@@ -1535,6 +1543,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			Images:            append(quoted.images, core.ImageAttachment{MimeType: mimeType, Data: imgData}),
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "audio":
@@ -1567,6 +1576,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			},
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "post":
@@ -1582,6 +1592,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			Content: text, ExtraContent: quoted.text, Images: append(quoted.images, images...),
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "file":
@@ -1615,6 +1626,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			}},
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "merge_forward":
@@ -1632,6 +1644,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			Files:             files,
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		}
 		p.dispatchCoreMessage(coreMsg)
 
@@ -1653,6 +1666,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 				UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 				Content: "[sticker]", ExtraContent: quoted.text, ReplyCtx: rctx,
 				UserMessageTimeMs: createTimeMs,
+				BotMentioned:      botMentioned,
 			})
 			return
 		}
@@ -1663,6 +1677,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			Images:            []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "media":
@@ -1699,6 +1714,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Content: text, ExtraContent: quoted.text, Images: images, ReplyCtx: rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	default:
