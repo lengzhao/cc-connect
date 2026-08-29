@@ -16492,6 +16492,11 @@ func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platfo
 		if messageID != "" {
 			attrs = append(attrs, fmt.Sprintf("message_id=%s", messageID))
 		}
+		// Inject root_id for thread-isolated sessions so agents can reliably
+		// identify the thread root regardless of which message triggered them.
+		if rootID := extractThreadRootID(sessionKey); rootID != "" {
+			attrs = append(attrs, fmt.Sprintf("root_id=%s", rootID))
+		}
 		if botMentioned {
 			attrs = append(attrs, "bot_mentioned=true")
 		}
@@ -16544,6 +16549,20 @@ func formatInjectTimestamp(now time.Time, tzName string) string {
 
 func promptAttrValue(value string) string {
 	return strings.NewReplacer(`"`, `'`, "\n", " ", "\r", "").Replace(value)
+}
+
+// extractThreadRootID returns the thread root message ID encoded in a
+// thread-isolated Feishu session key (format "platform:chatID:root:<rootID>"
+// or "platform:chatID:thread:<rootID>"). Returns "" for other formats.
+func extractThreadRootID(sessionKey string) string {
+	parts := strings.SplitN(sessionKey, ":", 4)
+	if len(parts) < 4 {
+		return ""
+	}
+	if parts[2] != "root" && parts[2] != "thread" {
+		return ""
+	}
+	return parts[3]
 }
 
 func extractChannelID(sessionKey string) string {

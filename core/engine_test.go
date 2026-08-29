@@ -11613,6 +11613,59 @@ func TestBuildAgentPrompt_EscapesCCConnectInContent(t *testing.T) {
 	}
 }
 
+func TestExtractThreadRootID(t *testing.T) {
+	cases := []struct {
+		sessionKey string
+		want       string
+	}{
+		{"feishu:oc_abc:root:om_ROOT", "om_ROOT"},
+		{"feishu-uat:oc_abc:root:om_ROOT", "om_ROOT"},
+		{"feishu:oc_abc:thread:om_ROOT", "om_ROOT"},
+		{"feishu:oc_abc:ou_user1", ""},      // non-thread key
+		{"feishu:oc_abc:root:", ""},          // empty root id
+		{"feishu:oc_abc", ""},               // too short
+		{"feishu:oc_abc:user:om_notroot", ""}, // unknown segment type
+	}
+	for _, c := range cases {
+		got := extractThreadRootID(c.sessionKey)
+		if got != c.want {
+			t.Errorf("extractThreadRootID(%q) = %q, want %q", c.sessionKey, got, c.want)
+		}
+	}
+}
+
+func TestBuildAgentPrompt_InjectsRootID(t *testing.T) {
+	e := newTestEngine()
+	e.SetInjectSender(true)
+
+	// Thread-isolated session: root_id injected with distinct message_id (follow-up case).
+	result := e.buildAgentPrompt("处理完毕", "ou_user1", "Alice", "", "feishu",
+		"feishu:oc_abc:root:om_ROOT", "", "om_REPLY", true, nil, AgentContext{})
+	if !strings.Contains(result, "message_id=om_REPLY") {
+		t.Fatalf("expected message_id in header, got %q", result)
+	}
+	if !strings.Contains(result, "root_id=om_ROOT") {
+		t.Fatalf("expected root_id in header, got %q", result)
+	}
+
+	// Non-thread session: no root_id.
+	result2 := e.buildAgentPrompt("hello", "ou_user1", "Alice", "", "feishu",
+		"feishu:oc_abc:ou_user1", "", "om_XYZ", false, nil, AgentContext{})
+	if strings.Contains(result2, "root_id") {
+		t.Fatalf("root_id should be absent for non-thread session, got %q", result2)
+	}
+
+	// Initial intake: message_id == root_id, both should appear.
+	result3 := e.buildAgentPrompt("card content", "ou_bot", "FeedbackBot", "", "feishu",
+		"feishu:oc_abc:root:om_CARD", "", "om_CARD", false, nil, AgentContext{})
+	if !strings.Contains(result3, "message_id=om_CARD") {
+		t.Fatalf("expected message_id in header, got %q", result3)
+	}
+	if !strings.Contains(result3, "root_id=om_CARD") {
+		t.Fatalf("expected root_id in header, got %q", result3)
+	}
+}
+
 func TestSkipPromptMeta_BypassesAllInjection(t *testing.T) {
 	agentSession := newResultAgentSession("ok")
 	agent := &resultAgent{session: agentSession}
