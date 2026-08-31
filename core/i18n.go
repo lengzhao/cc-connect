@@ -206,6 +206,7 @@ const (
 	MsgUnknownCommand            MsgKey = "unknown_command"
 	MsgWelcome                   MsgKey = "welcome"
 	MsgHelp                      MsgKey = "message_help" // change from "help", which is used now for builtin command help
+	MsgHelpTimerLine             MsgKey = "help_timer_line"
 	MsgHelpTitle                 MsgKey = "help_title"
 	MsgHelpSessionSection        MsgKey = "help_session_section"
 	MsgHelpAgentSection          MsgKey = "help_agent_section"
@@ -275,6 +276,7 @@ const (
 	MsgCronAddedExec          MsgKey = "cron_added_exec"
 	MsgCronAddExecUsage       MsgKey = "cron_addexec_usage"
 	MsgCronEmpty              MsgKey = "cron_empty"
+	MsgCronEmptyNoTimer       MsgKey = "cron_empty_no_timer"
 	MsgCronListTitle          MsgKey = "cron_list_title"
 	MsgCronListFooter         MsgKey = "cron_list_footer"
 	MsgCronExecUsage          MsgKey = "cron_exec_usage"
@@ -1193,6 +1195,13 @@ var messages = map[MsgKey]map[Language]string{
 			"Skills del agente: descubiertos de .claude/skills/<name>/SKILL.md etc.\n\n" +
 			"Modos de permisos: default / edit / plan / yolo",
 	},
+	MsgHelpTimerLine: {
+		LangEnglish:            "/timer [add|list|del|mute|unmute]\n  Manage one-shot timers\n\n",
+		LangChinese:            "/timer [add|list|del|mute|unmute]\n  管理一次性定时器\n\n",
+		LangTraditionalChinese: "/timer [add|list|del|mute|unmute]\n  管理一次性定時器\n\n",
+		LangJapanese:           "/timer [add|list|del|mute|unmute]\n  ワンショットタイマー管理\n\n",
+		LangSpanish:            "/timer [add|list|del|mute|unmute]\n  Gestionar temporizadores de uso único\n\n",
+	},
 	MsgHelpTitle: {
 		LangEnglish:            "cc-connect Help",
 		LangChinese:            "cc-connect 帮助",
@@ -1853,6 +1862,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "暫無週期任務。\n（一次性提醒/延遲任務請用 /timer 查看）",
 		LangJapanese:           "繰り返しタスクはありません。\n（ワンショットのリマインダーは /timer をご利用ください）",
 		LangSpanish:            "No hay tareas recurrentes.\n(Para recordatorios únicos use /timer)",
+	},
+	MsgCronEmptyNoTimer: {
+		LangEnglish:            "No recurring tasks.",
+		LangChinese:            "暂无周期任务。",
+		LangTraditionalChinese: "暫無週期任務。",
+		LangJapanese:           "繰り返しタスクはありません。",
+		LangSpanish:            "No hay tareas recurrentes.",
 	},
 	MsgCronListTitle: {
 		LangEnglish:            "⏰ Scheduled Tasks (%d)",

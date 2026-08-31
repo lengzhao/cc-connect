@@ -848,6 +848,15 @@ Optional: `--session-mode new-per-run` starts a fresh agent session on each run 
 
 Claude Code auto-creates the cron job. For other agents that rely on memory files, run `/cron setup` or `/bind setup` once first; both write the same instructions.
 
+### One-Shot Timers
+
+Unlike cron, timers are for **one-time** delayed reminders (e.g. "check PR in 30 minutes"). Enabled by default; disable in `config.toml`:
+
+```toml
+[timer]
+enabled = false   # Disables /timer, cc-connect timer, and timer docs in agent system prompt
+```
+
 ---
 
 ## Shell Configuration

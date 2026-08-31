@@ -353,6 +353,11 @@ func main() {
 	config.ConfigPath = configPath
 	slog.Info("config loaded", "path", configPath)
 
+	core.SetTimerFeatureEnabled(config.TimerEnabled(cfg))
+	if !config.TimerEnabled(cfg) {
+		slog.Info("one-shot timers disabled via [timer] enabled = false")
+	}
+
 	if len(cfg.Projects) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: no projects configured in %s\n", configPath)
 		fmt.Fprintln(os.Stderr, "Add at least one [[project]] section to your config.toml, or run:")
@@ -1019,23 +1024,31 @@ func main() {
 		}
 	}
 
-	// Start timer scheduler
-	timerStore, err := core.NewTimerStore(cfg.DataDir)
-	if err != nil {
-		slog.Warn("timer store unavailable", "error", err)
-	}
+	// Start timer scheduler (optional via [timer] enabled)
 	var timerSched *core.TimerScheduler
-	if timerStore != nil {
-		timerSched = core.NewTimerScheduler(timerStore)
-		if cfg.Cron.Silent != nil && *cfg.Cron.Silent {
-			timerSched.SetDefaultSilent(true)
+	if config.TimerEnabled(cfg) {
+		timerStore, err := core.NewTimerStore(cfg.DataDir)
+		if err != nil {
+			slog.Warn("timer store unavailable", "error", err)
 		}
-		if cfg.Cron.SessionMode != "" {
-			timerSched.SetDefaultSessionMode(cfg.Cron.SessionMode)
+		if timerStore != nil {
+			timerSched = core.NewTimerScheduler(timerStore)
+			if cfg.Cron.Silent != nil && *cfg.Cron.Silent {
+				timerSched.SetDefaultSilent(true)
+			}
+			if cfg.Cron.SessionMode != "" {
+				timerSched.SetDefaultSessionMode(cfg.Cron.SessionMode)
+			}
+			for i, e := range engines {
+				timerSched.RegisterEngine(cfg.Projects[i].Name, e)
+				e.SetTimerScheduler(timerSched)
+			}
 		}
-		for i, e := range engines {
-			timerSched.RegisterEngine(cfg.Projects[i].Name, e)
-			e.SetTimerScheduler(timerSched)
+	} else if timerStore, err := core.NewTimerStore(cfg.DataDir); err == nil && timerStore != nil {
+		pending := timerStore.ListPending()
+		if len(pending) > 0 {
+			slog.Warn("timer disabled but pending jobs exist — they will not run until timer is re-enabled",
+				"pending", len(pending))
 		}
 	}
 

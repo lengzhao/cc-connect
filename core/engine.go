@@ -6692,6 +6692,15 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		return true
 	}
 
+	if cmdID == "timer" && !TimerFeatureEnabled() {
+		slog.Info("audit: command_blocked",
+			"user_id", msg.UserID, "platform", msg.Platform,
+			"project", e.name, "command", cmdID, "reason", "feature_disabled")
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgTimerNotAvailable))
+		e.notifyProcessingEnd(p, msg.ReplyCtx, ProcessingEndEvent{Kind: ProcessingEndCommand})
+		return true
+	}
+
 	if cmdID != "" && privilegedCommands[cmdID] && !e.isAdmin(msg.UserID) {
 		slog.Info("audit: command_blocked",
 			"user_id", msg.UserID, "platform", msg.Platform,
@@ -9459,9 +9468,17 @@ func langDisplayName(lang Language) string {
 	}
 }
 
+func (e *Engine) helpText() string {
+	text := e.i18n.T(MsgHelp)
+	if !TimerFeatureEnabled() {
+		text = strings.Replace(text, e.i18n.T(MsgHelpTimerLine), "", 1)
+	}
+	return text
+}
+
 func (e *Engine) cmdHelp(p Platform, msg *Message, args []string) {
 	if !supportsCards(p) {
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgHelp))
+		e.reply(p, msg.ReplyCtx, e.helpText())
 		return
 	}
 	groupKey := defaultHelpGroup
@@ -9631,6 +9648,9 @@ func (e *Engine) renderHelpGroupCard(groupKey string) *Card {
 		cb.ButtonsEqual(row...)
 	}
 	for _, item := range current.items {
+		if item.command == "/timer" && !TimerFeatureEnabled() {
+			continue
+		}
 		cb.ListItem(commandText(item.command), "▶", item.action)
 	}
 	if current.key == defaultHelpGroup {
@@ -9706,6 +9726,9 @@ func (e *Engine) GetAllCommands() []BotCommandInfo {
 
 		// Skip disabled commands
 		if disabledCmds[c.id] {
+			continue
+		}
+		if c.id == "timer" && !TimerFeatureEnabled() {
 			continue
 		}
 
@@ -12251,6 +12274,9 @@ func (e *Engine) handleCardNav(action string, sessionKey string) *Card {
 	case "/cron":
 		return e.renderCronCard(sessionKey, extractUserID(sessionKey))
 	case "/timer":
+		if !TimerFeatureEnabled() {
+			return e.simpleCard(e.i18n.T(MsgCardTitleTimer), "blue", e.i18n.T(MsgTimerNotAvailable))
+		}
 		return e.renderTimerCard(sessionKey, extractUserID(sessionKey))
 	case "/heartbeat":
 		return e.renderHeartbeatCard()
@@ -13745,7 +13771,7 @@ func (e *Engine) renderCronCard(sessionKey string, userID string) *Card {
 
 	jobs := e.cronScheduler.Store().ListBySessionKey(sessionKey)
 	if len(jobs) == 0 {
-		return e.simpleCard(e.i18n.T(MsgCardTitleCron), "orange", e.i18n.T(MsgCronEmpty))
+		return e.simpleCard(e.i18n.T(MsgCardTitleCron), "orange", e.cronEmptyText())
 	}
 
 	lang := e.i18n.CurrentLang()
@@ -14258,7 +14284,7 @@ func (e *Engine) cmdCronAddExec(p Platform, msg *Message, args []string) {
 func (e *Engine) cmdCronList(p Platform, msg *Message) {
 	jobs := e.cronScheduler.Store().ListBySessionKey(msg.SessionKey)
 	if len(jobs) == 0 {
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronEmpty))
+		e.reply(p, msg.ReplyCtx, e.cronEmptyText())
 		return
 	}
 
@@ -14424,6 +14450,13 @@ func (e *Engine) cmdCronSetup(p Platform, msg *Message) {
 	case setupOK:
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronSetupOK), baseName))
 	}
+}
+
+func (e *Engine) cronEmptyText() string {
+	if TimerFeatureEnabled() {
+		return e.i18n.T(MsgCronEmpty)
+	}
+	return e.i18n.T(MsgCronEmptyNoTimer)
 }
 
 // ──────────────────────────────────────────────────────────────

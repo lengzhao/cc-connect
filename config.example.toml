@@ -335,6 +335,18 @@ level = "info" # debug, info, warn, error
 #                            # 定时任务默认会话模式："reuse"（复用活跃会话）或 "new_per_run"（每次新建会话）
 
 # =============================================================================
+# One-Shot Timers / 一次性定时器
+# =============================================================================
+# Controls one-shot timer jobs (delay reminders, fire once then archive).
+# 控制一次性定时器（延迟提醒，触发后自动归档）。
+#
+# [timer]
+# enabled = true             # Enable /timer and cc-connect timer (default: true)
+#                            # 启用 /timer 与 cc-connect timer（默认 true）
+# enabled = false            # Hide from agents and disable user commands/API
+#                            # 对 agent 隐藏，并禁用用户命令与 API
+
+# =============================================================================
 # Webhook / 外部 Webhook 端点
 # =============================================================================
 # Exposes an HTTP endpoint for external systems (git hooks, CI/CD, file watchers)

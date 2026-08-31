@@ -107,6 +107,7 @@ type Config struct {
 	OutgoingRateLimit  OutgoingRateLimitConfig `toml:"outgoing_rate_limit"` // outgoing message throttling
 	Relay              RelayConfig             `toml:"relay"`               // bot-to-bot relay behavior
 	Cron               CronConfig              `toml:"cron"`
+	Timer              TimerConfig             `toml:"timer"`
 	Queue              QueueConfig             `toml:"queue"`
 	Webhook            WebhookConfig           `toml:"webhook"`
 	Bridge             BridgeConfig            `toml:"bridge"`
@@ -141,6 +142,19 @@ type Config struct {
 type CronConfig struct {
 	Silent      *bool  `toml:"silent"`       // suppress cron start notification; default false
 	SessionMode string `toml:"session_mode"` // default session mode: "" or "reuse" (default) or "new_per_run"
+}
+
+// TimerConfig controls one-shot timer behavior.
+type TimerConfig struct {
+	Enabled *bool `toml:"enabled"` // enable one-shot timers; default true
+}
+
+// TimerEnabled reports whether one-shot timers are enabled process-wide.
+func TimerEnabled(cfg *Config) bool {
+	if cfg == nil || cfg.Timer.Enabled == nil {
+		return true
+	}
+	return *cfg.Timer.Enabled
 }
 
 // QueueConfig controls the per-session message queue.

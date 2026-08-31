@@ -761,6 +761,15 @@ cc-connect cron del <job-id>
 
 Claude Code 会自动创建定时任务。对依赖记忆文件的其他 Agent，先执行一次 `/cron setup` 或 `/bind setup`，效果相同。
 
+### 一次性定时器（Timer）
+
+与 cron 不同，timer 用于**一次性**延迟提醒（如「30 分钟后检查 PR」）。默认启用；可在 `config.toml` 中关闭：
+
+```toml
+[timer]
+enabled = false   # 禁用 /timer、cc-connect timer，且 agent 系统提示中不再包含 timer 说明
+```
+
 ---
 
 ## Shell 配置
