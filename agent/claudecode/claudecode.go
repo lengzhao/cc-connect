@@ -314,6 +314,8 @@ func normalizeEffort(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "":
 		return ""
+	case "none", "off", "disabled":
+		return "none"
 	case "low":
 		return "low"
 	case "medium", "med":
@@ -325,6 +327,25 @@ func normalizeEffort(raw string) string {
 	default:
 		return ""
 	}
+}
+
+// modelRequiresNoneReasoningEffort reports models that cannot combine
+// reasoning_effort with function tools on ChatAI /v1/chat/completions.
+func modelRequiresNoneReasoningEffort(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(m, "gpt-5.6-terra")
+}
+
+// resolveReasoningEffort returns the configured effort when set; otherwise
+// defaults to "none" for models that require it so MCP/function tools work.
+func resolveReasoningEffort(configured, model string) string {
+	if configured != "" {
+		return configured
+	}
+	if modelRequiresNoneReasoningEffort(model) {
+		return "none"
+	}
+	return ""
 }
 
 // normalizePermissionMode maps user-friendly aliases to Claude CLI values.
@@ -390,7 +411,7 @@ func (a *Agent) GetReasoningEffort() string {
 }
 
 func (a *Agent) AvailableReasoningEfforts() []string {
-	return []string{"low", "medium", "high", "max"}
+	return []string{"none", "low", "medium", "high", "max"}
 }
 
 func (a *Agent) configuredModels() []core.ModelOption {
@@ -537,7 +558,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	copy(disTools, a.disallowedTools)
 	maxTok := a.maxContextTokens
 	model := a.model
-	effort := a.reasoningEffort
+	effort := resolveReasoningEffort(a.reasoningEffort, model)
 	workDir := a.workDir
 	mode := a.mode
 	pluginDirs := make([]string, len(a.pluginDirs))

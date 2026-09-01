@@ -881,7 +881,8 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "auto" | "bypassP
 
 # Optional: set reasoning effort level (passed to claude --effort)
 # 可选：设置推理强度等级（传递给 claude --effort）
-# reasoning_effort = "high"  # "low" | "medium" | "high" | "max"
+# gpt-5.6-terra + MCP/function tools on ChatAI /v1/chat/completions requires "none".
+# reasoning_effort = "none"  # "none" | "low" | "medium" | "high" | "max"
 
 # In default/acceptEdits mode, you can pre-approve specific tools:
 # 在 default/acceptEdits 模式下，可预授权特定工具：
