@@ -10,17 +10,18 @@ Do not answer training questions yourself and do not call training.* MCP tools i
 `
 
 // prependSkillGuideTrainingRoute forces main-agent delegation when Training Station
-// prefixes a turn with @skill-guide and LTS injects the training bootstrap block.
+// prefixes a turn with @skill-guide and LTS injects training routing context.
 // Plain @skill-guide without training context is left unchanged.
 func prependSkillGuideTrainingRoute(prompt string) string {
 	trimmed := strings.TrimSpace(prompt)
 	if trimmed == "" {
 		return prompt
 	}
-	if !strings.Contains(trimmed, "[Authoritative Automon training context]") {
+	if !strings.HasPrefix(strings.ToLower(trimmed), "@skill-guide") {
 		return prompt
 	}
-	if !strings.HasPrefix(strings.ToLower(trimmed), "@skill-guide") {
+	if !(strings.Contains(trimmed, "[Authoritative Automon training context]") ||
+		strings.Contains(trimmed, "[Training routing]")) {
 		return prompt
 	}
 	if strings.HasPrefix(trimmed, strings.TrimSpace(skillGuideTrainingRoutePrefix)) {

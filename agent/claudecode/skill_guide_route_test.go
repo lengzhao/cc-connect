@@ -22,6 +22,14 @@ tenantId: nex-workbench:xiang.gu`
 		}
 	})
 
+	t.Run("prepends for follow-up training routing block", func(t *testing.T) {
+		in := "@skill-guide inspect skill\n\n[Training routing]\n- delegate"
+		got := prependSkillGuideTrainingRoute(in)
+		if got == in {
+			t.Fatal("expected training route prefix for follow-up routing block")
+		}
+	})
+
 	t.Run("no-op without training bootstrap", func(t *testing.T) {
 		in := "@skill-guide hello"
 		if got := prependSkillGuideTrainingRoute(in); got != in {
