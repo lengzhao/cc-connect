@@ -309,6 +309,7 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 		"--input-format", "stream-json",
 		"--permission-prompt-tool", "stdio",
 		"--replay-user-messages",
+		"--forward-subagent-text",
 	}
 	if !disableVerbose {
 		innerArgs = append(innerArgs, "--verbose")
@@ -1026,7 +1027,7 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, file
 	if len(images) == 0 && len(files) == 0 {
 		return cs.writeJSON(map[string]any{
 			"type":    "user",
-			"message": map[string]any{"role": "user", "content": prependSkillGuideTrainingRoute(prompt)},
+			"message": map[string]any{"role": "user", "content": prompt},
 		})
 	}
 
@@ -1068,7 +1069,7 @@ func (cs *claudeSession) Send(prompt string, images []core.ImageAttachment, file
 	filePaths := core.SaveFilesToDisk(cs.workDir, files)
 
 	// Build text part: user prompt + file path references
-	textPart := prependSkillGuideTrainingRoute(prompt)
+	textPart := prompt
 	if textPart == "" && len(filePaths) > 0 {
 		textPart = "Please analyze the attached file(s)."
 	} else if textPart == "" {
