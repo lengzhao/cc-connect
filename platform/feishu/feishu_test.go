@@ -1337,6 +1337,29 @@ func TestBuildReplyContent_NoFalsePositiveOnEmail(t *testing.T) {
 	}
 }
 
+func TestBuildReplyContent_BulletListUsesCard(t *testing.T) {
+	content := "title\n- item1\n- item2"
+	msgType, _ := buildReplyContent(content)
+	if msgType != larkim.MsgTypeInteractive {
+		t.Fatalf("agent replies with bullet lists should use card markdown, got %s", msgType)
+	}
+}
+
+func TestBuildPlainTextContent_PreservesBulletList(t *testing.T) {
+	content := "Automon目标：\n- 第一项\n- 第二项"
+	msgType, body := buildPlainTextContent(content)
+	if msgType != larkim.MsgTypeText {
+		t.Fatalf("expected text message, got %s", msgType)
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if parsed["text"] != content {
+		t.Fatalf("text body changed: %q", parsed["text"])
+	}
+}
+
 // TestBuildReplyContent_RealMentionForcesText confirms a resolved mention
 // (<at user_id="...">) still forces MsgTypeText even when markdown is present.
 func TestBuildReplyContent_RealMentionForcesText(t *testing.T) {

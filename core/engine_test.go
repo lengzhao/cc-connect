@@ -1126,11 +1126,17 @@ func TestEngineSendToSessionWithAttachments_MultiWorkspaceRawSessionKey(t *testi
 type stubProactiveSendPlatform struct {
 	stubMediaPlatform
 	reconstructKey string
+	usedPlainSend  bool
 }
 
 func (p *stubProactiveSendPlatform) ReconstructReplyCtx(sessionKey string) (any, error) {
 	p.reconstructKey = sessionKey
 	return "proactive-rctx", nil
+}
+
+func (p *stubProactiveSendPlatform) SendPlain(ctx context.Context, rctx any, content string) error {
+	p.usedPlainSend = true
+	return p.Send(ctx, rctx, content)
 }
 
 func TestEngineSendToSessionWithAttachments_WorkspacePrefixedSessionKey(t *testing.T) {
@@ -1183,6 +1189,27 @@ func TestEngineCmdSend_DeliversMultilineToTargetChat(t *testing.T) {
 	}
 	if !strings.Contains(sent[1], "sent") {
 		t.Fatalf("ack = %q, want success message", sent[1])
+	}
+}
+
+func TestEngineCmdSend_UsesPlainTextDelivery(t *testing.T) {
+	p := &stubProactiveSendPlatform{
+		stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}},
+	}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("admin1")
+
+	msg := &Message{
+		Platform:   "feishu",
+		UserID:     "admin1",
+		SessionKey: "feishu:source:admin1",
+		ReplyCtx:   "reply-ctx",
+	}
+	if !e.handleCommand(p, msg, "/send oc_target - item one\n- item two") {
+		t.Fatal("handleCommand returned false for /send")
+	}
+	if !p.usedPlainSend {
+		t.Fatal("cmdSend should deliver via PlainTextSender")
 	}
 }
 

@@ -188,6 +188,13 @@ type AtMentionSender interface {
 	ReplyWithAt(ctx context.Context, replyCtx any, content string, atUsers []string, atAll bool) error
 }
 
+// PlainTextSender is an optional interface for platforms that can deliver outbound
+// messages without markdown interpretation (e.g. /send, API send). When set,
+// SendOptions.PlainText routes through SendPlain instead of Send.
+type PlainTextSender interface {
+	SendPlain(ctx context.Context, replyCtx any, content string) error
+}
+
 // ImageSender is an optional interface for platforms that support sending images.
 type ImageSender interface {
 	SendImage(ctx context.Context, replyCtx any, img ImageAttachment) error

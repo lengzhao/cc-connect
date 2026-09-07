@@ -2712,6 +2712,23 @@ func (p *Platform) Send(ctx context.Context, rctx any, content string) error {
 	return p.sendNewMessageToChat(ctx, rc, msgType, msgBody)
 }
 
+// SendPlain delivers outbound text literally as MsgTypeText, without markdown
+// card/post rendering. Used by /send and API send so bullet lists and other
+// punctuation are not misinterpreted as formatting.
+func (p *Platform) SendPlain(ctx context.Context, rctx any, content string) error {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("%s: invalid reply context type %T", p.tag(), rctx)
+	}
+
+	content = p.resolveMentionsInContent(ctx, rc.chatID, content)
+	msgType, msgBody := buildPlainTextContent(content)
+	if p.shouldUseThreadOrReplyAPI(rc) {
+		return p.replyMessage(ctx, rc, msgType, msgBody)
+	}
+	return p.sendNewMessageToChat(ctx, rc, msgType, msgBody)
+}
+
 // SendWithStatusFooter implements core.StatusFooterSender: send a reply with
 // the body content followed by a small/dim status-footer block. Always uses
 // the interactive card path so the footer can render with text_size:
@@ -2969,8 +2986,7 @@ func buildReplyContent(content string) (msgType string, body string) {
 	// and escaped characters.
 	hasMention := strings.Contains(content, `<at user_id=`) || strings.Contains(content, `<at id=`)
 	if !containsMarkdown(content) || hasMention {
-		b, _ := json.Marshal(map[string]string{"text": content})
-		return larkim.MsgTypeText, string(b)
+		return buildPlainTextContent(content)
 	}
 	// Prefer card for all markdown content — card schema 2.0 has the best
 	// markdown rendering (headings, blockquotes, code blocks, tables, links,
@@ -2980,6 +2996,11 @@ func buildReplyContent(content string) (msgType string, body string) {
 		return larkim.MsgTypePost, buildPostMdJSON(content)
 	}
 	return larkim.MsgTypeInteractive, buildCardJSON(sanitizeMarkdownURLs(preprocessFeishuMarkdown(content)))
+}
+
+func buildPlainTextContent(content string) (msgType string, body string) {
+	b, _ := json.Marshal(map[string]string{"text": content})
+	return larkim.MsgTypeText, string(b)
 }
 
 // hasComplexMarkdown detects code blocks or tables that require card rendering.

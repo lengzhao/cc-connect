@@ -8284,7 +8284,8 @@ func (e *Engine) cmdSend(p Platform, msg *Message, args []string) {
 	}
 
 	sessionKey := outboundSessionKeyForChat(msg.Platform, chatID, msg.UserID)
-	if err := e.SendToSession(sessionKey, body); err != nil {
+	// Deliver the body literally: no markdown/card rendering on the target platform.
+	if err := e.SendToSessionWithOptions(sessionKey, body, nil, nil, SendOptions{PlainText: true}); err != nil {
 		slog.Error("send command: outbound delivery failed",
 			"session_key", sessionKey, "user", msg.UserID, "error", err)
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgSendFailed, err.Error()))
@@ -11269,15 +11270,30 @@ func (e *Engine) SendToSession(sessionKey, message string) error {
 	return e.SendToSessionWithAttachments(sessionKey, message, nil, nil, nil, false)
 }
 
+func sendPlatformMessage(ctx context.Context, p Platform, replyCtx any, message string, opts SendOptions) error {
+	if opts.PlainText {
+		if sender, ok := p.(PlainTextSender); ok {
+			return sender.SendPlain(ctx, replyCtx, message)
+		}
+	}
+	if len(opts.AtUsers) > 0 || opts.AtAll {
+		if atSender, ok := p.(AtMentionSender); ok {
+			return atSender.ReplyWithAt(ctx, replyCtx, message, opts.AtUsers, opts.AtAll)
+		}
+	}
+	return p.Send(ctx, replyCtx, message)
+}
+
 // SendOptions controls optional behavior for external send callers.
 type SendOptions struct {
-	WorkDir string
-	AtUsers []string
-	AtAll   bool
+	WorkDir   string
+	AtUsers   []string
+	AtAll     bool
+	PlainText bool // deliver message literally, without markdown rendering
 }
 
 func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images []ImageAttachment, files []FileAttachment, atUsers []string, atAll bool) error {
-	return e.SendToSessionWithOptions(sessionKey, message, images, files, SendOptions{AtUsers: atUsers, AtAll: atAll})
+	return e.SendToSessionWithOptions(sessionKey, message, images, files, SendOptions{AtUsers: atUsers, AtAll: atAll, PlainText: true})
 }
 
 func (e *Engine) SendToSessionWithOptions(sessionKey, message string, images []ImageAttachment, files []FileAttachment, opts SendOptions) error {
@@ -11325,21 +11341,8 @@ func (e *Engine) SendToSessionWithOptions(sessionKey, message string, images []I
 		if err := e.waitOutgoing(p); err != nil {
 			return err
 		}
-		// Use AtMentionSender when @users specified and platform supports it
-		if len(opts.AtUsers) > 0 || opts.AtAll {
-			if atSender, ok := p.(AtMentionSender); ok {
-				if err := atSender.ReplyWithAt(e.ctx, replyCtx, message, opts.AtUsers, opts.AtAll); err != nil {
-					return err
-				}
-			} else {
-				if err := p.Send(e.ctx, replyCtx, message); err != nil {
-					return err
-				}
-			}
-		} else {
-			if err := p.Send(e.ctx, replyCtx, message); err != nil {
-				return err
-			}
+		if err := sendPlatformMessage(e.ctx, p, replyCtx, message, opts); err != nil {
+			return err
 		}
 		if state != nil {
 			state.mu.Lock()
@@ -11422,18 +11425,8 @@ func (e *Engine) SendToSessionInWorkDir(sessionKey, message string, images []Ima
 		if err := e.waitOutgoing(target.platform); err != nil {
 			return err
 		}
-		if len(atUsers) > 0 || atAll {
-			if atSender, ok := target.platform.(AtMentionSender); ok {
-				if err := atSender.ReplyWithAt(e.ctx, target.replyCtx, message, atUsers, atAll); err != nil {
-					return err
-				}
-			} else if err := target.platform.Send(e.ctx, target.replyCtx, message); err != nil {
-				return err
-			}
-		} else {
-			if err := target.platform.Send(e.ctx, target.replyCtx, message); err != nil {
-				return err
-			}
+		if err := sendPlatformMessage(e.ctx, target.platform, target.replyCtx, message, SendOptions{AtUsers: atUsers, AtAll: atAll, PlainText: true}); err != nil {
+			return err
 		}
 		if target.state != nil {
 			target.state.mu.Lock()
