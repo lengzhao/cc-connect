@@ -32,6 +32,7 @@ import (
 	larkapplication "github.com/larksuite/oapi-sdk-go/v3/service/application/v6"
 	larkcontact "github.com/larksuite/oapi-sdk-go/v3/service/contact/v3"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	"github.com/gorilla/websocket"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 )
 
@@ -601,10 +602,16 @@ func (p *Platform) shouldUseWebhookMode() bool {
 
 // startWebSocketMode starts the WebSocket long connection mode.
 func (p *Platform) startWebSocketMode() error {
+	wsDialer := &websocket.Dialer{
+		NetDialContext: (&net.Dialer{
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+	}
 	wsOpts := []larkws.ClientOption{
 		larkws.WithEventHandler(p.eventHandler),
 		larkws.WithLogLevel(larkcore.LogLevelInfo),
 		larkws.WithLogger(&sanitizingLogger{inner: larkcore.NewEventLogger()}),
+		larkws.WithWebSocketDialer(wsDialer),
 	}
 	if p.domain != lark.FeishuBaseUrl {
 		wsOpts = append(wsOpts, larkws.WithDomain(p.domain))
