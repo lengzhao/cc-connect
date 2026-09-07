@@ -612,6 +612,9 @@ const (
 	MsgShowNotFound        MsgKey = "show_not_found"
 	MsgShowDirWithLocation MsgKey = "show_dir_with_location"
 	MsgShowReadFailed      MsgKey = "show_read_failed"
+	MsgSendUsage           MsgKey = "send_usage"
+	MsgSendOK              MsgKey = "send_ok"
+	MsgSendFailed          MsgKey = "send_failed"
 
 	// Multi-workspace messages
 	MsgWsNotEnabled             MsgKey = "ws_not_enabled"
@@ -998,6 +1001,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/compress\n  Compress conversation context\n\n" +
 			"/tts [always|voice_only]\n  View/switch text-to-speech mode\n\n" +
 			"/shell [--timeout <sec>] <command>\n  Run a shell command and return the output (! prefix shortcut: !cmd)\n\n" +
+			"/send <chat_id> <message>\n  Send a message to another chat/channel (admin only; multiline supported)\n\n" +
 			"/show <ref>\n  View a file, directory, or code snippet by reference\n\n" +
 			"/dir [path|reset]\n  Show, switch, or reset agent working directory\n\n" +
 			"/stop\n  Stop current execution\n\n" +
@@ -1042,6 +1046,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/compress\n  压缩会话上下文\n\n" +
 			"/tts [always|voice_only]\n  查看/切换语音合成模式\n\n" +
 			"/shell [--timeout <秒>] <命令>\n  执行 Shell 命令并返回结果（快捷方式：!命令）\n\n" +
+			"/send <群ID> <消息>\n  向其他群/会话发送消息（需管理员；支持多行）\n\n" +
 			"/show <引用>\n  按引用查看文件、目录或代码片段\n\n" +
 			"/dir [路径|reset]\n  查看、切换或重置 Agent 工作目录\n\n" +
 			"/stop\n  停止当前执行\n\n" +
@@ -1086,6 +1091,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/compress\n  壓縮會話上下文\n\n" +
 			"/tts [always|voice_only]\n  查看/切換語音合成模式\n\n" +
 			"/shell [--timeout <秒>] <命令>\n  執行 Shell 命令並返回結果（快捷方式：!命令）\n\n" +
+			"/send <群ID> <訊息>\n  向其他群/會話發送訊息（需管理員；支援多行）\n\n" +
 			"/dir [路徑|reset]\n  查看、切換或重置 Agent 工作目錄\n\n" +
 			"/stop\n  停止當前執行\n\n" +
 			"/cron [add|list|exec|del|enable|disable]\n  管理定時任務\n\n" +
@@ -1128,6 +1134,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/compress\n  会話コンテキストを圧縮\n\n" +
 			"/tts [always|voice_only]\n  音声合成モードの表示/切り替え\n\n" +
 			"/shell [--timeout <秒>] <コマンド>\n  シェルコマンドを実行して結果を返す（ショートカット：!コマンド）\n\n" +
+			"/send <チャットID> <メッセージ>\n  別のチャット/グループへ送信（管理者のみ；複数行対応）\n\n" +
 			"/dir [パス|reset]\n  エージェントの作業ディレクトリを表示/切り替え/リセット\n\n" +
 			"/stop\n  現在の実行を停止\n\n" +
 			"/cron [add|list|exec|del|enable|disable]\n  スケジュールタスク管理\n\n" +
@@ -1170,6 +1177,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/compress\n  Comprimir contexto de conversación\n\n" +
 			"/tts [always|voice_only]\n  Ver/cambiar modo de síntesis de voz\n\n" +
 			"/shell [--timeout <seg>] <comando>\n  Ejecutar un comando shell y devolver la salida (atajo: !comando)\n\n" +
+			"/send <chat_id> <mensaje>\n  Enviar mensaje a otro chat/canal (solo admin; admite varias líneas)\n\n" +
 			"/dir [ruta|reset]\n  Ver, cambiar o restablecer el directorio de trabajo del agente\n\n" +
 			"/stop\n  Detener ejecución actual\n\n" +
 			"/cron [add|list|exec|del|enable|disable]\n  Gestionar tareas programadas\n\n" +
@@ -1296,6 +1304,7 @@ var messages = map[MsgKey]map[Language]string{
 	MsgHelpToolsSection: {
 		LangEnglish: "**Tools & Automation**\n" +
 			"/shell <command> — Run a shell command (! shortcut)\n" +
+			"/send <chat_id> <message> — Send to another chat/channel (admin)\n" +
 			"/show <ref> — View file / directory / snippet by reference\n" +
 			"/dir [path|reset] — Show, switch, or reset work directory\n" +
 			"/cron [add|list|exec|del|...] — Scheduled tasks\n" +
@@ -1307,6 +1316,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/stop — Stop current execution",
 		LangChinese: "**工具与自动化**\n" +
 			"/shell <命令> — 执行 Shell 命令（!快捷方式）\n" +
+			"/send <群ID> <消息> — 向其他群/会话发送（管理员）\n" +
 			"/show <引用> — 按引用查看文件、目录或代码片段\n" +
 			"/dir [路径|reset] — 查看、切换或重置工作目录\n" +
 			"/cron [add|list|exec|del|...] — 定时任务\n" +
@@ -1318,6 +1328,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/stop — 停止当前执行",
 		LangTraditionalChinese: "**工具與自動化**\n" +
 			"/shell <命令> — 執行 Shell 命令（!快捷方式）\n" +
+			"/send <群ID> <訊息> — 向其他群/會話發送（管理員）\n" +
 			"/show <引用> — 按引用查看檔案、目錄或程式碼片段\n" +
 			"/dir [路徑|reset] — 查看、切換或重置工作目錄\n" +
 			"/cron [add|list|exec|del|...] — 定時任務\n" +
@@ -1329,6 +1340,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/stop — 停止當前執行",
 		LangJapanese: "**ツール・自動化**\n" +
 			"/shell <コマンド> — シェルコマンド実行（!ショートカット）\n" +
+			"/send <チャットID> <メッセージ> — 別チャットへ送信（管理者）\n" +
 			"/show <参照> — ファイル/ディレクトリ/スニペットを参照で表示\n" +
 			"/dir [パス|reset] — 作業ディレクトリの表示/切り替え/リセット\n" +
 			"/cron [add|list|exec|del|...] — スケジュールタスク\n" +
@@ -1340,6 +1352,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/stop — 現在の実行を停止",
 		LangSpanish: "**Herramientas y automatización**\n" +
 			"/shell <comando> — Ejecutar comando shell (! atajo)\n" +
+			"/send <chat_id> <mensaje> — Enviar a otro chat/canal (admin)\n" +
 			"/show <ref> — Ver archivo/directorio/fragmento por referencia\n" +
 			"/dir [ruta|reset] — Ver, cambiar o restablecer directorio de trabajo\n" +
 			"/cron [add|list|exec|del|...] — Tareas programadas\n" +
@@ -3975,6 +3988,27 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "❌ 讀取引用失敗: %s",
 		LangJapanese:           "❌ 参照の読み取りに失敗しました: %s",
 		LangSpanish:            "❌ Error al leer la referencia: %s",
+	},
+	MsgSendUsage: {
+		LangEnglish:            "Usage: `/send <chat_id> <message>`\nExample: `/send oc_xxx Build completed`",
+		LangChinese:            "用法: `/send <群ID> <消息>`\n示例: `/send oc_xxx 构建完成`",
+		LangTraditionalChinese: "用法: `/send <群ID> <訊息>`\n範例: `/send oc_xxx 建置完成`",
+		LangJapanese:           "使い方: `/send <チャットID> <メッセージ>`\n例: `/send oc_xxx ビルド完了`",
+		LangSpanish:            "Uso: `/send <chat_id> <mensaje>`\nEjemplo: `/send oc_xxx Compilación lista`",
+	},
+	MsgSendOK: {
+		LangEnglish:            "✅ Message sent.",
+		LangChinese:            "✅ 消息已发送。",
+		LangTraditionalChinese: "✅ 訊息已發送。",
+		LangJapanese:           "✅ メッセージを送信しました。",
+		LangSpanish:            "✅ Mensaje enviado.",
+	},
+	MsgSendFailed: {
+		LangEnglish:            "❌ Failed to send message: %s",
+		LangChinese:            "❌ 发送失败: %s",
+		LangTraditionalChinese: "❌ 發送失敗: %s",
+		LangJapanese:           "❌ 送信に失敗しました: %s",
+		LangSpanish:            "❌ Error al enviar el mensaje: %s",
 	},
 
 	// Multi-workspace messages

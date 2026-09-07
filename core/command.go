@@ -186,6 +186,40 @@ func (r *CommandRegistry) ListAll() []*CustomCommand {
 // placeholderRe matches {{1}}, {{2*}}, {{args}}, and variants with defaults like {{1:foo}}.
 var placeholderRe = regexp.MustCompile(`\{\{(\d+\*?|args)(:[^}]*)?\}\}`)
 
+func resolvePlaceholderValue(inner string, args []string) string {
+	key, defaultVal, hasDefault := strings.Cut(inner, ":")
+
+	if key == "args" {
+		if len(args) > 0 {
+			return strings.Join(args, " ")
+		}
+		if hasDefault {
+			return defaultVal
+		}
+		return ""
+	}
+	if strings.HasSuffix(key, "*") {
+		idx := 0
+		_, _ = fmt.Sscanf(key, "%d", &idx)
+		if idx >= 1 && idx-1 < len(args) {
+			return strings.Join(args[idx-1:], " ")
+		}
+		if hasDefault {
+			return defaultVal
+		}
+		return ""
+	}
+	idx := 0
+	_, _ = fmt.Sscanf(key, "%d", &idx)
+	if idx >= 1 && idx-1 < len(args) {
+		return args[idx-1]
+	}
+	if hasDefault {
+		return defaultVal
+	}
+	return ""
+}
+
 // ExpandPrompt replaces template placeholders with the provided arguments.
 //
 // Supported placeholders:
@@ -205,40 +239,24 @@ func ExpandPrompt(template string, args []string) string {
 		return template
 	}
 
-	result := placeholderRe.ReplaceAllStringFunc(template, func(match string) string {
-		inner := match[2 : len(match)-2] // strip {{ and }}
-		key, defaultVal, hasDefault := strings.Cut(inner, ":")
-
-		if key == "args" {
-			if len(args) > 0 {
-				return strings.Join(args, " ")
-			}
-			if hasDefault {
-				return defaultVal
-			}
-			return ""
-		}
-		if strings.HasSuffix(key, "*") {
-			idx := 0
-			_, _ = fmt.Sscanf(key, "%d", &idx)
-			if idx >= 1 && idx-1 < len(args) {
-				return strings.Join(args[idx-1:], " ")
-			}
-			if hasDefault {
-				return defaultVal
-			}
-			return ""
-		}
-		idx := 0
-		_, _ = fmt.Sscanf(key, "%d", &idx)
-		if idx >= 1 && idx-1 < len(args) {
-			return args[idx-1]
-		}
-		if hasDefault {
-			return defaultVal
-		}
-		return ""
+	return placeholderRe.ReplaceAllStringFunc(template, func(match string) string {
+		return resolvePlaceholderValue(match[2:len(match)-2], args)
 	})
+}
 
-	return result
+// ExpandExecPrompt is like ExpandPrompt but POSIX-shell-quotes every substituted
+// value. Custom [[commands]] exec templates run through /bin/sh; unquoted
+// newlines in a placeholder (e.g. /send channel msg1\nmsg2) truncate the
+// command at the first line, so only msg1 reaches cc-connect send -m.
+func ExpandExecPrompt(template string, args []string) string {
+	if !placeholderRe.MatchString(template) {
+		if len(args) > 0 {
+			return template + " " + shellQuote(strings.Join(args, " "))
+		}
+		return template
+	}
+
+	return placeholderRe.ReplaceAllStringFunc(template, func(match string) string {
+		return shellQuote(resolvePlaceholderValue(match[2:len(match)-2], args))
+	})
 }

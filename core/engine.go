@@ -1234,7 +1234,7 @@ func (e *Engine) SetAdminFrom(adminFrom string) {
 	shellDisabled := e.disabledCmds["shell"]
 	e.userRolesMu.Unlock()
 	if af == "" && !shellDisabled {
-		slog.Warn("admin_from is not set — privileged commands (/shell, /show, /dir, /restart, /upgrade) are blocked. "+
+		slog.Warn("admin_from is not set — privileged commands (/shell, /send, /show, /dir, /restart, /upgrade) are blocked. "+
 			"Set admin_from in config to enable them, or use disabled_commands to hide them.",
 			"project", e.name)
 	}
@@ -1243,6 +1243,7 @@ func (e *Engine) SetAdminFrom(adminFrom string) {
 // privilegedCommands are commands that require admin_from authorization.
 var privilegedCommands = map[string]bool{
 	"shell":   true,
+	"send":    true,
 	"show":    true,
 	"dir":     true,
 	"restart": true,
@@ -6514,6 +6515,7 @@ var builtinCommands = []struct {
 	{[]string{"bind"}, "bind"},
 	{[]string{"search", "find"}, "search"},
 	{[]string{"shell", "sh", "exec", "run"}, "shell"},
+	{[]string{"send"}, "send"},
 	{[]string{"show"}, "show"},
 	{[]string{"dir", "cd", "chdir", "workdir"}, "dir"},
 	{[]string{"tts"}, "tts"},
@@ -6792,6 +6794,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdSearch(p, msg, args)
 	case "shell":
 		e.cmdShell(p, msg, raw)
+	case "send":
+		e.cmdSend(p, msg, args)
 	case "diff":
 		e.cmdDiff(p, msg, raw)
 	case "show":
@@ -8254,6 +8258,41 @@ func updaterFor(p Platform) MessageUpdater {
 	return p.(MessageUpdater)
 }
 
+// outboundSessionKeyForChat builds a session key for proactive outbound delivery
+// to a chat/channel on the same platform as the caller. chatID is the
+// platform-native group/chat identifier (e.g. Feishu oc_xxx).
+func outboundSessionKeyForChat(platform, chatID, userID string) string {
+	platform = strings.TrimSpace(platform)
+	chatID = strings.TrimSpace(chatID)
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return platform + ":" + chatID
+	}
+	return platform + ":" + chatID + ":" + userID
+}
+
+func (e *Engine) cmdSend(p Platform, msg *Message, args []string) {
+	if len(args) < 2 {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgSendUsage))
+		return
+	}
+	chatID := strings.TrimSpace(args[0])
+	body := strings.TrimSpace(strings.Join(args[1:], " "))
+	if chatID == "" || body == "" {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgSendUsage))
+		return
+	}
+
+	sessionKey := outboundSessionKeyForChat(msg.Platform, chatID, msg.UserID)
+	if err := e.SendToSession(sessionKey, body); err != nil {
+		slog.Error("send command: outbound delivery failed",
+			"session_key", sessionKey, "user", msg.UserID, "error", err)
+		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgSendFailed, err.Error()))
+		return
+	}
+	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgSendOK))
+}
+
 func (e *Engine) cmdShell(p Platform, msg *Message, raw string) {
 	// Strip the command prefix ("/shell ", "/sh ", "/exec ", "/run ")
 	shellCmd := raw
@@ -9558,6 +9597,7 @@ func helpCardGroups() []helpCardGroup {
 			titleKey: MsgHelpToolsSection,
 			items: []helpCardItem{
 				{command: "/shell", action: "cmd:/shell"},
+				{command: "/send", action: "cmd:/send"},
 				{command: "/show", action: "cmd:/show"},
 				{command: "/cron", action: "nav:/cron"},
 				{command: "/timer", action: "nav:/timer"},
@@ -14925,8 +14965,9 @@ func (e *Engine) executeShellCommand(p Platform, msg *Message, cmd *CustomComman
 		"work_dir", workDir,
 	)
 
-	// Expand placeholders in exec command
-	execCmd := ExpandPrompt(cmd.Exec, args)
+	// Expand placeholders in exec command. Values are shell-quoted so
+	// multi-line payloads survive sh -c parsing.
+	execCmd := ExpandExecPrompt(cmd.Exec, args)
 
 	defer e.notifyProcessingEnd(p, msg.ReplyCtx, ProcessingEndEvent{Kind: ProcessingEndCommand})
 	_ = e.runShellWithProgressEnv(p, msg.ReplyCtx, execCmd, workDir, 60*time.Second, 4000, extraEnv)

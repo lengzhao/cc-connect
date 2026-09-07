@@ -187,6 +187,22 @@ func TestExpandPrompt_ArgsDefault(t *testing.T) {
 	}
 }
 
+func TestExpandExecPrompt_QuotesMultilineMessage(t *testing.T) {
+	got := ExpandExecPrompt("cc-connect send -s {{1}} -m {{2}}", []string{"channel1", "message1\nmessage2\nmessage3"})
+	want := "cc-connect send -s 'channel1' -m 'message1\nmessage2\nmessage3'"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandExecPrompt_QuotesStarPlaceholder(t *testing.T) {
+	got := ExpandExecPrompt("notify.sh {{1}} {{2*}}", []string{"ops", "line1\nline2"})
+	want := "notify.sh 'ops' 'line1\nline2'"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestMatchSubCommand(t *testing.T) {
 	candidates := []string{"list", "add", "del", "delete"}
 

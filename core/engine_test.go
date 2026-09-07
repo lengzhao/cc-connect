@@ -1152,6 +1152,89 @@ func TestEngineSendToSessionWithAttachments_WorkspacePrefixedSessionKey(t *testi
 	}
 }
 
+func TestEngineCmdSend_DeliversMultilineToTargetChat(t *testing.T) {
+	p := &stubProactiveSendPlatform{
+		stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}},
+	}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("admin1")
+
+	wantBody := "message1\nmessage2\nmessage3"
+	msg := &Message{
+		Platform:   "feishu",
+		UserID:     "admin1",
+		SessionKey: "feishu:source:admin1",
+		ReplyCtx:   "reply-ctx",
+	}
+	raw := "/send oc_target message1\nmessage2\nmessage3"
+
+	if !e.handleCommand(p, msg, raw) {
+		t.Fatal("handleCommand returned false for /send")
+	}
+	if p.reconstructKey != "feishu:oc_target:admin1" {
+		t.Fatalf("ReconstructReplyCtx key = %q, want feishu:oc_target:admin1", p.reconstructKey)
+	}
+	sent := p.getSent()
+	if len(sent) != 2 {
+		t.Fatalf("sent = %#v, want outbound + ack", sent)
+	}
+	if sent[0] != wantBody {
+		t.Fatalf("outbound body = %q, want %q", sent[0], wantBody)
+	}
+	if !strings.Contains(sent[1], "sent") {
+		t.Fatalf("ack = %q, want success message", sent[1])
+	}
+}
+
+func TestEngineCmdSend_RequiresAdmin(t *testing.T) {
+	p := &stubProactiveSendPlatform{
+		stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}},
+	}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("admin1")
+
+	msg := &Message{
+		Platform: "feishu",
+		UserID:   "user2",
+		ReplyCtx: "reply-ctx",
+	}
+	e.handleCommand(p, msg, "/send oc_target hello")
+
+	sent := p.getSent()
+	if len(sent) != 1 || !strings.Contains(sent[0], "admin") {
+		t.Fatalf("non-admin should be blocked, got: %#v", sent)
+	}
+}
+
+func TestEngineCmdSend_UsageWhenTooFewArgs(t *testing.T) {
+	p := &stubProactiveSendPlatform{
+		stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}},
+	}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("admin1")
+
+	msg := &Message{
+		Platform: "feishu",
+		UserID:   "admin1",
+		ReplyCtx: "reply-ctx",
+	}
+	e.handleCommand(p, msg, "/send oc_target")
+
+	sent := p.getSent()
+	if len(sent) != 1 || !strings.Contains(sent[0], "/send") {
+		t.Fatalf("expected usage reply, got: %#v", sent)
+	}
+}
+
+func TestOutboundSessionKeyForChat(t *testing.T) {
+	if got := outboundSessionKeyForChat("feishu", "oc_1", "u1"); got != "feishu:oc_1:u1" {
+		t.Fatalf("got %q", got)
+	}
+	if got := outboundSessionKeyForChat("feishu", "oc_1", ""); got != "feishu:oc_1" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestEngineStart_DefersAsyncPlatformReadyInitialization(t *testing.T) {
 	p := &stubLifecyclePlatform{stubPlatformEngine: stubPlatformEngine{n: "telegram"}}
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)

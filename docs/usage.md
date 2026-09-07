@@ -46,6 +46,7 @@ Each user gets an independent session with full conversation context. Manage ses
 | `/reasoning [level]` | View or switch reasoning effort (Codex) |
 | `/mode [name]` | View or switch permission mode |
 | `/stop` | Stop current execution |
+| `/send <chat_id> <message>` | Send a message to another chat/channel (admin only; multiline supported) |
 | `/help` | Show available commands |
 
 During a session, the agent may request tool permissions. Reply **allow** / **deny** / **allow all**.
@@ -67,6 +68,20 @@ To restore the previous behavior of always continuing, set `reset_on_idle_mins =
 ### Model switch preserves history
 
 `/model` preserves the current session — the agent resumes the conversation with the new model (no extra token cost). Model switching affects the shared agent instance — if multiple platforms use the same project, the model change applies to all of them.
+
+### Outbound `/send`
+
+Send a proactive message to another chat on the same platform without shelling out to `cc-connect send`:
+
+```text
+/send oc_xxx Build completed
+Line 2 of the report
+```
+
+- `<chat_id>` is the platform-native group/chat ID (Feishu `oc_xxx`, etc.).
+- Requires `admin_from` under `[[projects]]` (same as `/shell` and `/dir`).
+- Multiline text in the same message is delivered as one outbound message.
+- Built-in `/send` takes precedence over a custom `[[commands]]` named `send`; remove the old config entry to avoid confusion.
 
 ---
 
