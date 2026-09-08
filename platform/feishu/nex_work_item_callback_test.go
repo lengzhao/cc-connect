@@ -21,7 +21,7 @@ func TestHandleNexWorkItemCardAction_ForwardsAndReturnsToast(t *testing.T) {
 			t.Errorf("api key = %q", r.Header.Get("X-LTS-API-Key"))
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok","cardPatches":[{"messageId":"om_card_1","card":{"schema":"2.0"}}]}`))
 	}))
 	defer server.Close()
 

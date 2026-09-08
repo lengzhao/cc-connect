@@ -102,7 +102,46 @@ func (p *Platform) postNexWorkItemCallback(body map[string]any) {
 			"work_item_id", body["workItemId"],
 			"body", strings.TrimSpace(string(responseBody)),
 		)
+		return
 	}
+	p.applyNexWorkItemCardPatches(context.Background(), responseBody)
+}
+
+type nexWorkItemCallbackResponse struct {
+	CardPatches []nexWorkItemCardPatch `json:"cardPatches"`
+}
+
+type nexWorkItemCardPatch struct {
+	MessageID string         `json:"messageId"`
+	Card      map[string]any `json:"card"`
+}
+
+func (p *Platform) applyNexWorkItemCardPatches(ctx context.Context, responseBody []byte) {
+	var parsed nexWorkItemCallbackResponse
+	if err := json.Unmarshal(responseBody, &parsed); err != nil {
+		slog.Error(p.tag()+": nex work item callback response decode failed", "error", err)
+		return
+	}
+	for _, patch := range parsed.CardPatches {
+		messageID := strings.TrimSpace(patch.MessageID)
+		if messageID == "" || patch.Card == nil {
+			continue
+		}
+		if err := p.patchWorkItemCardMap(ctx, messageID, patch.Card); err != nil {
+			slog.Error(p.tag()+": nex work item card patch failed",
+				"error", err,
+				"message_id", messageID,
+			)
+		}
+	}
+}
+
+func (p *Platform) patchWorkItemCardMap(ctx context.Context, messageID string, card map[string]any) error {
+	content, err := json.Marshal(card)
+	if err != nil {
+		return fmt.Errorf("marshal card: %w", err)
+	}
+	return p.patchCardMessage(ctx, messageID, string(content))
 }
 
 func mapStringValue(v any) string {
