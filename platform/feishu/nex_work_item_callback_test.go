@@ -6,12 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
-func TestHandleNexWorkItemCardAction_ForwardsAndReturnsToast(t *testing.T) {
+func TestHandleNexWorkItemCardAction_ForwardsAndReturnsToastAndCard(t *testing.T) {
 	var received map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
@@ -21,15 +20,15 @@ func TestHandleNexWorkItemCardAction_ForwardsAndReturnsToast(t *testing.T) {
 			t.Errorf("api key = %q", r.Header.Get("X-LTS-API-Key"))
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok","cardPatches":[{"messageId":"om_card_1","card":{"schema":"2.0"}}]}`))
+		_, _ = w.Write([]byte(`{"status":"ok","cardPatches":[{"messageId":"om_card_1","card":{"schema":"2.0","header":{"title":{"tag":"plain_text","content":"done"}}}}]}`))
 	}))
 	defer server.Close()
 
 	p := &Platform{
-		platformName:              "lark",
-		ltsWorkItemCallbackURL:      server.URL + "/api/lark/work-items/callback",
-		ltsWorkItemCallbackAPIKey:   "test-key",
-		ltsWorkItemCallbackHTTP:     server.Client(),
+		platformName:            "lark",
+		ltsWorkItemCallbackURL:    server.URL + "/api/lark/work-items/callback",
+		ltsWorkItemCallbackAPIKey: "test-key",
+		ltsWorkItemCallbackHTTP:   server.Client(),
 	}
 	resp, handled := p.handleNexWorkItemCardAction(&callback.CardActionTriggerEvent{
 		Event: &callback.CardActionTriggerRequest{
@@ -58,13 +57,12 @@ func TestHandleNexWorkItemCardAction_ForwardsAndReturnsToast(t *testing.T) {
 	if resp.Toast.Content == "" {
 		t.Fatalf("expected toast content")
 	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for received == nil {
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for LTS callback")
-		}
-		time.Sleep(10 * time.Millisecond)
+	if resp.Card == nil || resp.Card.Type != "raw" {
+		t.Fatalf("expected raw card in callback response, got %#v", resp.Card)
+	}
+	card, ok := resp.Card.Data.(map[string]any)
+	if !ok || card["schema"] != "2.0" {
+		t.Fatalf("card data = %#v", resp.Card.Data)
 	}
 	if received["workItemId"] != "wi-1" || received["messageId"] != "om_card_1" {
 		t.Fatalf("payload = %#v", received)
@@ -83,5 +81,14 @@ func TestHandleNexWorkItemCardAction_IgnoresNonNexCallback(t *testing.T) {
 	})
 	if handled || resp != nil {
 		t.Fatalf("expected ignore, got handled=%v resp=%#v", handled, resp)
+	}
+}
+
+func TestPatchCardForMessage(t *testing.T) {
+	card := patchCardForMessage([]nexWorkItemCardPatch{
+		{MessageID: "om_1", Card: map[string]any{"schema": "2.0"}},
+	}, "om_1")
+	if card == nil || card["schema"] != "2.0" {
+		t.Fatalf("card = %#v", card)
 	}
 }

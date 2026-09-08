@@ -9,14 +9,17 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
 const larkCommentFieldName = "nex_comment"
 
+const nexWorkItemCallbackTimeout = 2*time.Second + 500*time.Millisecond
+
 // handleNexWorkItemCardAction forwards Nex work-item card clicks to LTS HTTP and
-// returns an immediate toast so Feishu does not hit error 200671.
+// returns an immediate toast plus the updated card in the callback response.
 func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, bool) {
 	if event == nil || event.Event == nil || event.Event.Action == nil || event.Event.Action.Value == nil {
 		return nil, false
@@ -38,7 +41,6 @@ func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTrigger
 		label = action
 	}
 	comment := extractNexFormComment(event.Event.Action.FormValue, event.Event.Action.InputValue)
-	_, toastContent, _ := resultPresentationForNex("ok", label, comment)
 
 	messageID := ""
 	if event.Event.Context != nil {
@@ -62,24 +64,61 @@ func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTrigger
 		"details":        mapStringValue(value["details"]),
 		"inboxUrl":       mapStringValue(value["inboxUrl"]),
 	}
-	go p.postNexWorkItemCallback(body)
 
-	slog.Info(p.tag()+": nex work item card action forwarded", "work_item_id", workItemID, "message_id", messageID)
-	return &callback.CardActionTriggerResponse{
-		Toast: &callback.Toast{Type: "success", Content: toastContent},
-	}, true
+	parsed, err := p.postNexWorkItemCallbackSync(body)
+	status := strings.TrimSpace(parsed.Status)
+	if err != nil {
+		slog.Error(p.tag()+": nex work item callback failed", "error", err, "work_item_id", workItemID)
+		status = "error"
+	} else if status == "" {
+		status = "ok"
+	}
+
+	toastType, toastContent, _ := resultPresentationForNex(status, label, comment)
+	resp := &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: toastType, Content: toastContent},
+	}
+	if clickerCard := patchCardForMessage(parsed.CardPatches, messageID); clickerCard != nil {
+		resp.Card = &callback.Card{Type: "raw", Data: clickerCard}
+	} else if err == nil {
+		slog.Warn(p.tag()+": nex work item callback returned no card patch for clicker",
+			"work_item_id", workItemID,
+			"message_id", messageID,
+			"patches", len(parsed.CardPatches),
+		)
+	}
+
+	go p.applyNexWorkItemCardPatches(context.Background(), parsed.CardPatches, messageID, resp.Card != nil)
+
+	slog.Info(p.tag()+": nex work item card action handled",
+		"work_item_id", workItemID,
+		"message_id", messageID,
+		"status", status,
+		"callback_card", resp.Card != nil,
+	)
+	return resp, true
 }
 
-func (p *Platform) postNexWorkItemCallback(body map[string]any) {
+type nexWorkItemCallbackResponse struct {
+	Status      string                 `json:"status"`
+	CardPatches []nexWorkItemCardPatch `json:"cardPatches"`
+}
+
+type nexWorkItemCardPatch struct {
+	MessageID string         `json:"messageId"`
+	Card      map[string]any `json:"card"`
+}
+
+func (p *Platform) postNexWorkItemCallbackSync(body map[string]any) (nexWorkItemCallbackResponse, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
-		slog.Error(p.tag()+": nex work item callback marshal failed", "error", err)
-		return
+		return nexWorkItemCallbackResponse{}, fmt.Errorf("marshal body: %w", err)
 	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, p.ltsWorkItemCallbackURL, bytes.NewReader(payload))
+	ctx, cancel := context.WithTimeout(context.Background(), nexWorkItemCallbackTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.ltsWorkItemCallbackURL, bytes.NewReader(payload))
 	if err != nil {
-		slog.Error(p.tag()+": nex work item callback request failed", "error", err)
-		return
+		return nexWorkItemCallbackResponse{}, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if key := strings.TrimSpace(p.ltsWorkItemCallbackAPIKey); key != "" {
@@ -91,40 +130,41 @@ func (p *Platform) postNexWorkItemCallback(body map[string]any) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		slog.Error(p.tag()+": nex work item callback transport failed", "error", err, "work_item_id", body["workItemId"])
-		return
+		return nexWorkItemCallbackResponse{}, err
 	}
 	defer resp.Body.Close()
 	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		slog.Error(p.tag()+": nex work item callback rejected",
-			"status", resp.StatusCode,
-			"work_item_id", body["workItemId"],
-			"body", strings.TrimSpace(string(responseBody)),
-		)
-		return
+		return nexWorkItemCallbackResponse{}, fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
 	}
-	p.applyNexWorkItemCardPatches(context.Background(), responseBody)
-}
-
-type nexWorkItemCallbackResponse struct {
-	CardPatches []nexWorkItemCardPatch `json:"cardPatches"`
-}
-
-type nexWorkItemCardPatch struct {
-	MessageID string         `json:"messageId"`
-	Card      map[string]any `json:"card"`
-}
-
-func (p *Platform) applyNexWorkItemCardPatches(ctx context.Context, responseBody []byte) {
 	var parsed nexWorkItemCallbackResponse
 	if err := json.Unmarshal(responseBody, &parsed); err != nil {
-		slog.Error(p.tag()+": nex work item callback response decode failed", "error", err)
-		return
+		return nexWorkItemCallbackResponse{}, fmt.Errorf("decode response: %w", err)
 	}
-	for _, patch := range parsed.CardPatches {
+	return parsed, nil
+}
+
+func patchCardForMessage(patches []nexWorkItemCardPatch, messageID string) map[string]any {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return nil
+	}
+	for _, patch := range patches {
+		if strings.TrimSpace(patch.MessageID) == messageID && patch.Card != nil {
+			return patch.Card
+		}
+	}
+	return nil
+}
+
+func (p *Platform) applyNexWorkItemCardPatches(ctx context.Context, patches []nexWorkItemCardPatch, clickerMessageID string, clickerUpdatedInCallback bool) {
+	clickerMessageID = strings.TrimSpace(clickerMessageID)
+	for _, patch := range patches {
 		messageID := strings.TrimSpace(patch.MessageID)
 		if messageID == "" || patch.Card == nil {
+			continue
+		}
+		if clickerUpdatedInCallback && messageID == clickerMessageID {
 			continue
 		}
 		if err := p.patchWorkItemCardMap(ctx, messageID, patch.Card); err != nil {
