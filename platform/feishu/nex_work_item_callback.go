@@ -16,16 +16,17 @@ import (
 
 const larkCommentFieldName = "nex_comment"
 
-const nexWorkItemCallbackTimeout = 2*time.Second + 500*time.Millisecond
+const nexWorkItemCallbackTimeout = 8 * time.Second
 
-// handleNexWorkItemCardAction forwards Nex work-item card clicks to LTS HTTP and
-// returns an immediate toast plus the updated card in the callback response.
+// handleNexWorkItemCardAction records Nex work-item card clicks. Feishu requires
+// an HTTP 200 within ~3s, so we return toast + an optimistic result card immediately
+// and POST to LTS asynchronously (then PATCH siblings / refresh from cardPatches).
 func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, bool) {
 	if event == nil || event.Event == nil || event.Event.Action == nil || event.Event.Action.Value == nil {
 		return nil, false
 	}
 	value := event.Event.Action.Value
-	if value["nexCallback"] != true {
+	if !isNexCallbackValue(value) {
 		return nil, false
 	}
 	if strings.TrimSpace(p.ltsWorkItemCallbackURL) == "" {
@@ -41,6 +42,7 @@ func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTrigger
 		label = action
 	}
 	comment := extractNexFormComment(event.Event.Action.FormValue, event.Event.Action.InputValue)
+	_, toastContent, banner := resultPresentationForNex("ok", label, comment)
 
 	messageID := ""
 	if event.Event.Context != nil {
@@ -65,36 +67,26 @@ func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTrigger
 		"inboxUrl":       mapStringValue(value["inboxUrl"]),
 	}
 
-	parsed, err := p.postNexWorkItemCallbackSync(body)
-	status := strings.TrimSpace(parsed.Status)
-	if err != nil {
-		slog.Error(p.tag()+": nex work item callback failed", "error", err, "work_item_id", workItemID)
-		status = "error"
-	} else if status == "" {
-		status = "ok"
-	}
-
-	toastType, toastContent, _ := resultPresentationForNex(status, label, comment)
 	resp := &callback.CardActionTriggerResponse{
-		Toast: &callback.Toast{Type: toastType, Content: toastContent},
-	}
-	if clickerCard := patchCardForMessage(parsed.CardPatches, messageID); clickerCard != nil {
-		resp.Card = &callback.Card{Type: "raw", Data: clickerCard}
-	} else if err == nil {
-		slog.Warn(p.tag()+": nex work item callback returned no card patch for clicker",
-			"work_item_id", workItemID,
-			"message_id", messageID,
-			"patches", len(parsed.CardPatches),
-		)
+		Toast: &callback.Toast{Type: "success", Content: toastContent},
+		Card: &callback.Card{
+			Type: "raw",
+			Data: buildNexOptimisticResultCard(
+				mapStringValue(value["title"]),
+				mapStringValue(value["type"]),
+				mapStringValue(value["details"]),
+				banner,
+				mapStringValue(value["inboxUrl"]),
+			),
+		},
 	}
 
-	go p.applyNexWorkItemCardPatches(context.Background(), parsed.CardPatches, messageID, resp.Card != nil)
+	go p.postNexWorkItemCallbackAsync(body, messageID)
 
-	slog.Info(p.tag()+": nex work item card action handled",
+	slog.Warn(p.tag()+": nex work item card action accepted",
 		"work_item_id", workItemID,
 		"message_id", messageID,
-		"status", status,
-		"callback_card", resp.Card != nil,
+		"action", action,
 	)
 	return resp, true
 }
@@ -107,6 +99,24 @@ type nexWorkItemCallbackResponse struct {
 type nexWorkItemCardPatch struct {
 	MessageID string         `json:"messageId"`
 	Card      map[string]any `json:"card"`
+}
+
+func (p *Platform) postNexWorkItemCallbackAsync(body map[string]any, clickerMessageID string) {
+	parsed, err := p.postNexWorkItemCallbackSync(body)
+	if err != nil {
+		slog.Warn(p.tag()+": nex work item callback failed",
+			"error", err,
+			"work_item_id", body["workItemId"],
+			"callback_url", p.ltsWorkItemCallbackURL,
+		)
+		return
+	}
+	slog.Warn(p.tag()+": nex work item callback recorded",
+		"work_item_id", body["workItemId"],
+		"status", parsed.Status,
+		"patches", len(parsed.CardPatches),
+	)
+	p.applyNexWorkItemCardPatches(context.Background(), parsed.CardPatches, clickerMessageID, false)
 }
 
 func (p *Platform) postNexWorkItemCallbackSync(body map[string]any) (nexWorkItemCallbackResponse, error) {
@@ -144,31 +154,21 @@ func (p *Platform) postNexWorkItemCallbackSync(body map[string]any) (nexWorkItem
 	return parsed, nil
 }
 
-func patchCardForMessage(patches []nexWorkItemCardPatch, messageID string) map[string]any {
-	messageID = strings.TrimSpace(messageID)
-	if messageID == "" {
-		return nil
+func (p *Platform) applyNexWorkItemCardPatches(ctx context.Context, patches []nexWorkItemCardPatch, clickerMessageID string, skipClicker bool) {
+	if p == nil || p.client == nil {
+		return
 	}
-	for _, patch := range patches {
-		if strings.TrimSpace(patch.MessageID) == messageID && patch.Card != nil {
-			return patch.Card
-		}
-	}
-	return nil
-}
-
-func (p *Platform) applyNexWorkItemCardPatches(ctx context.Context, patches []nexWorkItemCardPatch, clickerMessageID string, clickerUpdatedInCallback bool) {
 	clickerMessageID = strings.TrimSpace(clickerMessageID)
 	for _, patch := range patches {
 		messageID := strings.TrimSpace(patch.MessageID)
 		if messageID == "" || patch.Card == nil {
 			continue
 		}
-		if clickerUpdatedInCallback && messageID == clickerMessageID {
+		if skipClicker && messageID == clickerMessageID {
 			continue
 		}
 		if err := p.patchWorkItemCardMap(ctx, messageID, patch.Card); err != nil {
-			slog.Error(p.tag()+": nex work item card patch failed",
+			slog.Warn(p.tag()+": nex work item card patch failed",
 				"error", err,
 				"message_id", messageID,
 			)
@@ -184,6 +184,87 @@ func (p *Platform) patchWorkItemCardMap(ctx context.Context, messageID string, c
 	return p.patchCardMessage(ctx, messageID, string(content))
 }
 
+func isNexCallbackValue(value map[string]any) bool {
+	if value == nil {
+		return false
+	}
+	v, ok := value["nexCallback"]
+	if !ok {
+		return false
+	}
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return strings.EqualFold(strings.TrimSpace(x), "true")
+	case float64:
+		return x != 0
+	default:
+		return fmt.Sprint(x) == "true"
+	}
+}
+
+func buildNexOptimisticResultCard(rawTitle, itemType, details, banner, inboxURL string) map[string]any {
+	elements := make([]any, 0, 5)
+	if strings.TrimSpace(details) != "" {
+		elements = append(elements, map[string]any{"tag": "markdown", "content": details})
+		elements = append(elements, map[string]any{"tag": "hr"})
+	}
+	elements = append(elements, map[string]any{"tag": "markdown", "content": banner})
+	if button := nexWorkbenchJumpButton(inboxURL); button != nil {
+		elements = append(elements, button)
+	}
+	title, template := nexCardHeaderForType(itemType, rawTitle)
+	if strings.TrimSpace(title) == "" {
+		title = "Nex"
+	}
+	return map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"update_multi": true, "width_mode": "fill"},
+		"header": map[string]any{
+			"template": template,
+			"title":    map[string]any{"tag": "plain_text", "content": title},
+		},
+		"body": map[string]any{"elements": elements},
+	}
+}
+
+func nexCardHeaderForType(itemType, rawTitle string) (title, template string) {
+	t := strings.TrimSpace(rawTitle)
+	switch strings.TrimSpace(itemType) {
+	case "review":
+		return "待你审核 · " + t, "orange"
+	case "decision":
+		return "待你决策 · " + t, "orange"
+	case "exception":
+		return "异常待处置 · " + t, "red"
+	case "fyi":
+		return "知会 · " + t, "blue"
+	default:
+		return t, "orange"
+	}
+}
+
+func nexWorkbenchJumpButton(inboxURL string) map[string]any {
+	inboxURL = strings.TrimSpace(inboxURL)
+	if inboxURL == "" {
+		return nil
+	}
+	return map[string]any{
+		"tag":   "button",
+		"text":  map[string]any{"tag": "plain_text", "content": "打开 Workbench"},
+		"type":  "default",
+		"width": "fill",
+		"behaviors": []any{map[string]any{
+			"type":        "open_url",
+			"default_url": inboxURL,
+			"pc_url":      inboxURL,
+			"android_url": inboxURL,
+			"ios_url":     inboxURL,
+		}},
+	}
+}
+
 func mapStringValue(v any) string {
 	if s, ok := v.(string); ok {
 		return strings.TrimSpace(s)
@@ -194,7 +275,7 @@ func mapStringValue(v any) string {
 func extractNexFormComment(formValue map[string]interface{}, inputValue string) string {
 	if len(formValue) > 0 {
 		if v, ok := formValue[larkCommentFieldName]; ok {
-			if comment := strings.TrimSpace(strings.TrimSpace(fmt.Sprint(v))); comment != "" && comment != "<nil>" {
+			if comment := strings.TrimSpace(fmt.Sprint(v)); comment != "" && comment != "<nil>" {
 				return comment
 			}
 		}

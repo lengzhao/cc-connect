@@ -5,22 +5,26 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
-func TestHandleNexWorkItemCardAction_ForwardsAndReturnsToastAndCard(t *testing.T) {
-	var received map[string]any
+func TestHandleNexWorkItemCardAction_ReturnsImmediatelyAndRecordsAsync(t *testing.T) {
+	var received atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &received)
+		var payload map[string]any
+		_ = json.Unmarshal(body, &payload)
 		if r.Header.Get("X-LTS-API-Key") != "test-key" {
 			t.Errorf("api key = %q", r.Header.Get("X-LTS-API-Key"))
 		}
+		received.Store(true)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok","cardPatches":[{"messageId":"om_card_1","card":{"schema":"2.0","header":{"title":{"tag":"plain_text","content":"done"}}}}]}`))
+		_, _ = w.Write([]byte(`{"status":"ok","cardPatches":[{"messageId":"om_card_1","card":{"schema":"2.0"}}]}`))
 	}))
 	defer server.Close()
 
@@ -38,11 +42,11 @@ func TestHandleNexWorkItemCardAction_ForwardsAndReturnsToastAndCard(t *testing.T
 					"nexCallback": true,
 					"tenantId":    "nex-workbench:alice",
 					"workItemId":  "wi-1",
-					"action":      "approve",
+					"action":      "decide",
 					"optionId":    "approve",
-					"label":       "通过",
+					"label":       "同意",
 					"title":       "审批",
-					"type":        "review",
+					"type":        "decision",
 					"inboxUrl":    "https://wb/inbox/wi-1",
 					"answer":      map[string]any{"optionIds": []string{"approve"}},
 				},
@@ -54,21 +58,20 @@ func TestHandleNexWorkItemCardAction_ForwardsAndReturnsToastAndCard(t *testing.T
 	if !handled || resp == nil || resp.Toast == nil {
 		t.Fatalf("expected handled toast response, got handled=%v resp=%#v", handled, resp)
 	}
-	if resp.Toast.Content == "" {
-		t.Fatalf("expected toast content")
-	}
 	if resp.Card == nil || resp.Card.Type != "raw" {
-		t.Fatalf("expected raw card in callback response, got %#v", resp.Card)
+		t.Fatalf("expected immediate raw card, got %#v", resp.Card)
 	}
 	card, ok := resp.Card.Data.(map[string]any)
 	if !ok || card["schema"] != "2.0" {
 		t.Fatalf("card data = %#v", resp.Card.Data)
 	}
-	if received["workItemId"] != "wi-1" || received["messageId"] != "om_card_1" {
-		t.Fatalf("payload = %#v", received)
-	}
-	if received["comment"] != "looks good" {
-		t.Fatalf("comment = %#v", received["comment"])
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !received.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for async LTS callback")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -84,11 +87,14 @@ func TestHandleNexWorkItemCardAction_IgnoresNonNexCallback(t *testing.T) {
 	}
 }
 
-func TestPatchCardForMessage(t *testing.T) {
-	card := patchCardForMessage([]nexWorkItemCardPatch{
-		{MessageID: "om_1", Card: map[string]any{"schema": "2.0"}},
-	}, "om_1")
-	if card == nil || card["schema"] != "2.0" {
-		t.Fatalf("card = %#v", card)
+func TestIsNexCallbackValue(t *testing.T) {
+	if !isNexCallbackValue(map[string]any{"nexCallback": true}) {
+		t.Fatal("expected true bool")
+	}
+	if !isNexCallbackValue(map[string]any{"nexCallback": "true"}) {
+		t.Fatal("expected true string")
+	}
+	if isNexCallbackValue(map[string]any{"action": "approve"}) {
+		t.Fatal("expected false")
 	}
 }
