@@ -181,6 +181,10 @@ type Platform struct {
 	richCardImageFailed     map[string]struct{}
 	richCardImageUploadFunc func(context.Context, string) (string, error)
 
+	ltsWorkItemCallbackURL    string
+	ltsWorkItemCallbackAPIKey string
+	ltsWorkItemCallbackHTTP   *http.Client
+
 	// imageBatch coalesces consecutive image messages from the same session
 	// arriving within imageBatchWindow. Without this, sending N images in rapid
 	// succession from the Feishu mobile client (which posts each as a separate
@@ -420,8 +424,14 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		encryptKey:                 encryptKey,
 		peerBots:                   peerBots,
 		mentionMap:                 mentionMap,
-		imageBatch:                 make(map[string]*imageBatchEntry),
-		imageBatchWindow:           imageBatchWindow,
+		imageBatch:        make(map[string]*imageBatchEntry),
+		imageBatchWindow:  imageBatchWindow,
+	}
+	if v, ok := opts["lts_work_item_callback_url"].(string); ok {
+		base.ltsWorkItemCallbackURL = strings.TrimRight(strings.TrimSpace(v), "/")
+	}
+	if v, ok := opts["lts_work_item_callback_api_key"].(string); ok {
+		base.ltsWorkItemCallbackAPIKey = strings.TrimSpace(v)
 	}
 	if !useInteractiveCard {
 		base.self = base
@@ -669,6 +679,10 @@ func (p *Platform) webhookHandler(w http.ResponseWriter, r *http.Request) {
 func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
 	if event.Event == nil || event.Event.Action == nil {
 		return nil, nil
+	}
+
+	if resp, handled := p.handleNexWorkItemCardAction(event); handled {
+		return resp, nil
 	}
 
 	// Check allow_chat filter: skip card actions from chats this platform doesn't own.
