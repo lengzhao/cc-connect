@@ -2633,6 +2633,19 @@ func (e *Engine) isQueuedUserMessageStaleForDrainLocked(state *interactiveState,
 	return wm > 0 && timeMs < wm
 }
 
+// userMessageTimestamp converts the platform's original user-message create
+// time (Unix ms) into a history timestamp. It returns the zero time when the
+// platform did not provide one, so Session.AddUserHistoryAt falls back to the
+// processing time. Recording the original post time (instead of the time the
+// message starts or is drained from the queue) keeps request↔response latency
+// measurable for slow turns and queued messages.
+func userMessageTimestamp(timeMs int64) time.Time {
+	if timeMs <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(timeMs)
+}
+
 // noteUserTurnCompleted advances lastCompletedUserMessageTimeMs after an
 // agent turn ends with EventResult.
 func (e *Engine) noteUserTurnCompleted(state *interactiveState) {
@@ -3742,7 +3755,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 
 	e.i18n.DetectAndSet(msg.Content)
 	if !msg.SkipHistory {
-		session.AddUserHistory(msg.Content, msg.UserID, msg.UserName)
+		session.AddUserHistoryAt(msg.Content, msg.UserID, msg.UserName, userMessageTimestamp(msg.UserMessageTimeMs))
 		// Persist user message immediately so crashes between user input and
 		// assistant reply don't lose it (the assistant-side Save below depends
 		// on the turn completing without a process crash).
@@ -6170,7 +6183,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					e.send(queued.platform, queued.replyCtx, replyContent)
 				}
 
-				session.AddUserHistory(queued.content, queued.userID, queued.userName)
+				session.AddUserHistoryAt(queued.content, queued.userID, queued.userName, userMessageTimestamp(queued.userMessageTimeMs))
 				// Persist queued user message immediately (mirror of the
 				// initial AddUserHistory save above).
 				sessions.Save()
@@ -6449,7 +6462,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 
 		drainEvents(as.Events())
 
-		session.AddUserHistory(queued.content, queued.userID, queued.userName)
+		session.AddUserHistoryAt(queued.content, queued.userID, queued.userName, userMessageTimestamp(queued.userMessageTimeMs))
 
 		sendDone := make(chan error, 1)
 		go func() {

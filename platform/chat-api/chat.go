@@ -68,6 +68,10 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "invalid request")
 		return
 	}
+	// Origin post time: captured at request receipt so the conversation
+	// history records when the user actually sent the message, not when a
+	// busy session got around to processing it (turns can run 10min+).
+	receivedAtMs := time.Now().UnixMilli()
 	user, ok := p.resolveUser(w, r, true)
 	if !ok {
 		return
@@ -200,21 +204,22 @@ func (p *Platform) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msg := core.Message{
-		SessionKey:     engineSessionKey,
-		Platform:       p.Name(),
-		MessageID:      runID,
-		ChannelID:      channelKey,
-		ChannelKey:     channelKey,
-		ChatName:       chatName,
-		UserID:         user,
-		UserName:       userName,
-		Content:        query,
-		Images:         images,
-		Files:          files,
-		Audio:          audio,
-		ReplyCtx:       rc,
-		AgentContext:   p.agentContextHeaders.collectAgentContext(r),
-		SkipPromptMeta: skipPromptMetaHeader(r),
+		SessionKey:        engineSessionKey,
+		Platform:          p.Name(),
+		MessageID:         runID,
+		ChannelID:         channelKey,
+		ChannelKey:        channelKey,
+		ChatName:          chatName,
+		UserID:            user,
+		UserName:          userName,
+		Content:           query,
+		Images:            images,
+		Files:             files,
+		Audio:             audio,
+		ReplyCtx:          rc,
+		AgentContext:      p.agentContextHeaders.collectAgentContext(r),
+		SkipPromptMeta:    skipPromptMetaHeader(r),
+		UserMessageTimeMs: receivedAtMs,
 	}
 
 	if implicitCreate && autoName {

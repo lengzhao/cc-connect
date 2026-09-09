@@ -9747,6 +9747,75 @@ func TestProcessInteractiveEvents_DrainsQueuedMessages(t *testing.T) {
 	}
 }
 
+func TestProcessInteractiveEvents_DrainPreservesQueuedUserMessageTime(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	sess := newQueuingSession("qs-keep-time")
+	agent := &controllableAgent{nextSession: sess}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	key := "test:user1"
+	session := e.sessions.GetOrCreateActive(key)
+
+	// The queued message was posted while turn 1 was in flight; its original
+	// post time must survive the drain instead of being re-stamped with the
+	// response time of turn 1.
+	postedAt := time.Now().Add(-2 * time.Minute).Truncate(time.Millisecond)
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx-turn1",
+		pendingMessages: []queuedMessage{
+			{platform: p, replyCtx: "ctx-turn2", content: "queued-msg", userMessageTimeMs: postedAt.UnixMilli()},
+		},
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	go func() {
+		sess.events <- Event{Type: EventResult, Content: "response1", Done: true}
+		sess.sendMu.Lock()
+		for len(sess.sendCalls) == 0 {
+			sess.sendMu.Unlock()
+			time.Sleep(5 * time.Millisecond)
+			sess.sendMu.Lock()
+		}
+		sess.sendMu.Unlock()
+		sess.events <- Event{Type: EventResult, Content: "response2", Done: true}
+	}()
+
+	session.AddHistory("user", "initial-msg")
+
+	sendDone := make(chan error, 1)
+	sendDone <- nil
+
+	done := make(chan struct{})
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "msg1", time.Now(), nil, sendDone, nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processInteractiveEvents did not complete in time")
+	}
+
+	var got *HistoryEntry
+	for _, h := range session.GetHistory(100) {
+		if h.Role == "user" && h.Content == "queued-msg" {
+			cp := h
+			got = &cp
+		}
+	}
+	if got == nil {
+		t.Fatal("queued user message missing from history")
+	}
+	if !got.Timestamp.Equal(postedAt) {
+		t.Fatalf("queued user history timestamp = %v, want original post time %v", got.Timestamp, postedAt)
+	}
+}
+
 func TestProcessInteractiveEvents_DrainsQueuedMessagesFIFOWithCreateTimes(t *testing.T) {
 	p := &stubPlatformEngine{n: "test"}
 	sess := newQueuingSession("qs-fifo-times")
@@ -11770,10 +11839,6 @@ func TestSkipPromptMeta_QueuedPreservesFlag(t *testing.T) {
 		t.Fatal("queued message lost SkipPromptMeta")
 	}
 }
-
-
-
-
 
 func TestResolveLocalDirPath_RejectsTraversal(t *testing.T) {
 	base := t.TempDir()

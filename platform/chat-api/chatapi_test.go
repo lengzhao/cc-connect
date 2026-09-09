@@ -278,6 +278,40 @@ func TestChatMessagesPassesUserNameToHandler(t *testing.T) {
 	}
 }
 
+func TestChatMessagesStampsUserMessageTime(t *testing.T) {
+	p := newTestPlatform(t, map[string]any{"token": "secret"})
+	sm := bindTestSessions(t, p)
+	_ = sm.NewSession(testChannelSessionKey(), "default")
+
+	var gotTimeMs int64
+	p.setHandler(func(platform core.Platform, msg *core.Message) {
+		gotTimeMs = msg.UserMessageTimeMs
+		if scp, ok := platform.(core.StreamingCardPlatform); ok {
+			card, _ := scp.CreateStreamingCard(context.Background(), msg.ReplyCtx)
+			_ = card.Finalize(context.Background(), "ok")
+		}
+	})
+
+	before := time.Now().UnixMilli()
+	body := `{"query":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Chat-API-User", "user_001")
+	req.Header.Set("X-Chat-API-Channel", testChannel)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	p.routes().ServeHTTP(rec, req)
+	after := time.Now().UnixMilli()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotTimeMs < before || gotTimeMs > after {
+		t.Fatalf("handler UserMessageTimeMs = %d, want request receipt time within [%d, %d]", gotTimeMs, before, after)
+	}
+}
+
 func TestSharedChannelGuestCanPostAndRead(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	sm := bindTestSessions(t, p)

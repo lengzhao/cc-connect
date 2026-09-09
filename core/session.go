@@ -92,15 +92,26 @@ func (s *Session) AddHistory(role, content string) {
 
 // AddUserHistory records a user message with optional sender identity.
 func (s *Session) AddUserHistory(content, userID, userName string) {
+	s.AddUserHistoryAt(content, userID, userName, time.Time{})
+}
+
+// AddUserHistoryAt records a user message with the sender's original post time
+// (e.g. the platform message create time or, for chat-api, the request receipt
+// time). A zero ts falls back to time.Now() at record time.
+func (s *Session) AddUserHistoryAt(content, userID, userName string, ts time.Time) {
 	storedName := userName
 	if storedName == userID {
 		storedName = ""
 	}
+	if ts.IsZero() {
+		ts = time.Now()
+	}
 	s.AddHistoryEntry(HistoryEntry{
-		Role:     "user",
-		Content:  content,
-		UserID:   userID,
-		UserName: storedName,
+		Role:      "user",
+		Content:   content,
+		Timestamp: ts,
+		UserID:    userID,
+		UserName:  storedName,
 	})
 }
 
