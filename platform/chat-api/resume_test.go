@@ -295,7 +295,7 @@ func TestResumeReplaysPingWhenIdleAfterDisconnect(t *testing.T) {
 	close(block)
 }
 
-func TestResumeAfterFinishedReturnsMessageEnd(t *testing.T) {
+func TestResumeAfterFinishedDeliversRetainedAnswer(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
 	bindTestSessions(t, p)
 
@@ -323,7 +323,7 @@ func TestResumeAfterFinishedReturnsMessageEnd(t *testing.T) {
 	cancel()
 	time.Sleep(20 * time.Millisecond)
 	close(release)
-	waitRunGone(t, p, runID)
+	waitRunRetained(t, p, runID)
 
 	resumeReq := httptest.NewRequest(http.MethodPost, "/v1/chat-messages",
 		strings.NewReader(`{"run_id":`+jsonQuote(runID)+`}`))
@@ -335,10 +335,24 @@ func TestResumeAfterFinishedReturnsMessageEnd(t *testing.T) {
 	resumeRec := httptest.NewRecorder()
 	p.routes().ServeHTTP(resumeRec, resumeReq)
 	if resumeRec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200 after finished run deleted", resumeRec.Code, resumeRec.Body.String())
+		t.Fatalf("status=%d body=%s, want 200", resumeRec.Code, resumeRec.Body.String())
 	}
-	if !hasEvent(parseSSE(resumeRec.Body.String()), "message_end") {
-		t.Fatalf("missing message_end: %s", resumeRec.Body.String())
+	body := resumeRec.Body.String()
+	if !strings.Contains(body, "done offline") {
+		t.Fatalf("resume must deliver the retained answer, got: %s", body)
+	}
+	events := parseSSE(body)
+	last := ""
+	for _, e := range events {
+		if e.Name == "message_end" || e.Name == "text_delta" {
+			last = e.Name
+		}
+	}
+	if last != "message_end" {
+		t.Fatalf("answer must precede message_end: %s", body)
+	}
+	if p.pending.get(runID) != nil {
+		t.Fatal("retained run should be deleted once collected")
 	}
 }
 
@@ -399,7 +413,7 @@ func TestResumeWhileAttachedReturnsConflict(t *testing.T) {
 	close(block)
 }
 
-func TestDetachedFinishDeletesImmediately(t *testing.T) {
+func TestDetachedFinishRetainsRunForResume(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret", "sse_ping_interval": "0s"})
 	run := newRunState("run_done", "u", "ch", "sk", "c", "c:0", p, nil, time.Now().Add(time.Minute))
 	if !p.pending.create(run) {
@@ -409,8 +423,12 @@ func TestDetachedFinishDeletesImmediately(t *testing.T) {
 	if !p.pending.finish(run.id, pendingResult{answer: "offline"}) {
 		t.Fatal("finish")
 	}
-	if p.pending.get(run.id) != nil {
-		t.Fatal("finish must delete run immediately (live or detached)")
+	retained := p.pending.get(run.id)
+	if retained == nil {
+		t.Fatal("finish must retain a detached run so a later run_id resume can collect the answer")
+	}
+	if retained.retainedAtTime().IsZero() {
+		t.Fatal("retained run must carry a retention timestamp for the sweeper")
 	}
 	select {
 	case got := <-run.done:
@@ -418,7 +436,11 @@ func TestDetachedFinishDeletesImmediately(t *testing.T) {
 			t.Fatalf("done answer=%q", got.answer)
 		}
 	default:
-		t.Fatal("finish must still write done so an attached resume loop can wake")
+		t.Fatal("finish must write done so an attached resume loop can wake")
+	}
+	p.pending.sweepExpired(time.Now().Add(p.pending.ttl + time.Minute))
+	if p.pending.get(run.id) != nil {
+		t.Fatal("sweeper must evict the retained run once the TTL has elapsed")
 	}
 }
 
@@ -556,16 +578,18 @@ func waitRunID(t *testing.T, p *Platform) string {
 	return ""
 }
 
-func waitRunGone(t *testing.T, p *Platform, runID string) {
+// waitRunRetained waits until the run has completed with no attached client
+// and is being retained for a later run_id resume.
+func waitRunRetained(t *testing.T, p *Platform, runID string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if p.pending.get(runID) == nil {
+		if run := p.pending.get(runID); run != nil && !run.retainedAtTime().IsZero() {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("expected run to be deleted after finish")
+	t.Fatal("expected run to be retained after detached finish")
 }
 
 func jsonQuote(s string) string {

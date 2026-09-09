@@ -104,6 +104,10 @@ func New(opts map[string]any) (core.Platform, error) {
 	if err != nil {
 		return nil, fmt.Errorf("chat-api: max_runs: %w", err)
 	}
+	runRetentionTTL, err := durationOption(opts, "run_ttl", defaultRunTTL)
+	if err != nil {
+		return nil, fmt.Errorf("chat-api: run_ttl: %w", err)
+	}
 	maxUploadSize, err := intOption(opts, "max_upload_size", defaultMaxUploadSize)
 	if err != nil {
 		return nil, fmt.Errorf("chat-api: max_upload_size: %w", err)
@@ -156,7 +160,7 @@ func New(opts map[string]any) (core.Platform, error) {
 		nameProviderType:          strings.ToLower(stringOption(opts, "name_provider_type", defaultNameProviderType)),
 		nameModel:                 strings.TrimSpace(stringOption(opts, "name_model", "")),
 		projectName:               stringOption(opts, "cc_project", ""),
-		pending:                   newPendingStore(maxRuns),
+		pending:                   newPendingStoreWithTTL(maxRuns, runRetentionTTL),
 		dataDir:                   stringOption(opts, "cc_data_dir", ""),
 		multiWorkspaceBaseDir:     multiWorkspaceBaseDirFromOpts(opts),
 		debugUI:                   boolOption(opts, "debug_ui", false),
@@ -209,6 +213,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 	p.resolvedAddr = ln.Addr().String()
 
 	p.running = true
+	go p.sweepRetainedRuns(serveCtx)
 	go func() {
 		<-serveCtx.Done()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -228,6 +233,25 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 		slog.Info("chat-api: debug UI enabled", "url", "http://"+p.resolvedAddr+"/debug/")
 	}
 	return nil
+}
+
+// sweepRetainedRuns evicts retained runs — completed but never collected —
+// once their retention TTL has elapsed, so answers left behind by disconnected
+// callers stay collectable via run_id resume without growing the store
+// unboundedly.
+func (p *Platform) sweepRetainedRuns(ctx context.Context) {
+	ticker := time.NewTicker(runRetentionSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if n := p.pending.sweepExpired(time.Now()); n > 0 {
+				slog.Info("chat-api: evicted expired retained runs", "count", n)
+			}
+		}
+	}
 }
 
 // ResolvedBaseURL returns the HTTP base URL including API path prefix (e.g. http://127.0.0.1:54321/v1).

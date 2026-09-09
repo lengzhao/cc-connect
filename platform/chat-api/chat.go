@@ -23,6 +23,8 @@ const (
 	defaultMaxRuns            = 1000
 	defaultInteractionTimeout = 10 * time.Minute
 	defaultSSEPingInterval    = 5 * time.Second
+	defaultRunTTL             = 10 * time.Minute
+	runRetentionSweepInterval = time.Minute
 	busyPolicyQueue           = "queue"
 	busyPolicyReject          = "reject"
 	headerSkipPromptMeta      = "X-Chat-API-Skip-Prompt-Meta"

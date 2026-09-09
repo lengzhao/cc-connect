@@ -796,11 +796,13 @@ func TestDisconnectDoesNotRemoveRun(t *testing.T) {
 	}()
 
 	time.Sleep(30 * time.Millisecond)
+	p.pending.mu.Lock()
 	for id, run := range p.pending.runs {
 		runID = id
 		_ = run
 		break
 	}
+	p.pending.mu.Unlock()
 	if runID == "" {
 		t.Fatal("expected active run")
 	}
@@ -813,8 +815,12 @@ func TestDisconnectDoesNotRemoveRun(t *testing.T) {
 	}
 	close(release)
 	time.Sleep(50 * time.Millisecond)
-	if p.pending.get(runID) != nil {
-		t.Fatal("run should be removed after turn completes")
+	retained := p.pending.get(runID)
+	if retained == nil {
+		t.Fatal("completed run with no attached client must be retained so a later run_id resume can collect the answer")
+	}
+	if retained.retainedAtTime().IsZero() {
+		t.Fatal("completed run must be marked retained for the sweeper")
 	}
 }
 

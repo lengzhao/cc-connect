@@ -93,21 +93,36 @@ type runState struct {
 	notify chan struct{}
 	done   chan pendingResult
 	once   sync.Once
+
+	// retainedAt is set when a run completes with no client attached. The
+	// terminal result stays buffered in done so a later POST carrying this
+	// run_id can still collect it; the sweeper evicts the run once runTTL
+	// has elapsed.
+	retainedAt time.Time
 }
 
 type pendingStore struct {
 	mu   sync.Mutex
 	runs map[string]*runState
 	max  int
+	ttl  time.Duration
 }
 
 func newPendingStore(max int) *pendingStore {
+	return newPendingStoreWithTTL(max, defaultRunTTL)
+}
+
+func newPendingStoreWithTTL(max int, ttl time.Duration) *pendingStore {
 	if max <= 0 {
 		max = defaultMaxRuns
+	}
+	if ttl <= 0 {
+		ttl = defaultRunTTL
 	}
 	return &pendingStore{
 		runs: make(map[string]*runState),
 		max:  max,
+		ttl:  ttl,
 	}
 }
 
@@ -115,10 +130,41 @@ func (s *pendingStore) create(run *runState) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.runs) >= s.max {
-		return false
+		// Retained runs (completed but never collected) are evictable; reclaim
+		// them before rejecting a live request.
+		s.evictExpiredLocked(time.Now())
+		if len(s.runs) >= s.max {
+			return false
+		}
 	}
 	s.runs[run.id] = run
 	return true
+}
+
+// evictExpiredLocked drops retained runs past their TTL. Caller holds s.mu.
+func (s *pendingStore) evictExpiredLocked(now time.Time) int {
+	evicted := 0
+	for id, run := range s.runs {
+		if run == nil {
+			delete(s.runs, id)
+			continue
+		}
+		at := run.retainedAtTime()
+		if at.IsZero() || now.Sub(at) < s.ttl {
+			continue
+		}
+		run.stopInteractionTimer()
+		delete(s.runs, id)
+		evicted++
+	}
+	return evicted
+}
+
+// sweepExpired evicts retained runs whose TTL has elapsed.
+func (s *pendingStore) sweepExpired(now time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.evictExpiredLocked(now)
 }
 
 func (s *pendingStore) get(id string) *runState {
@@ -311,6 +357,13 @@ func (r *runState) finishAttach(sse *sseWriter) {
 	r.detached = false
 	r.attaching = false
 	r.sink = &sseEventSink{w: sse}
+	if r.finalized {
+		// Collecting a completed run: the caller holds none of the earlier
+		// deltas, so reset the sent watermarks and let flushDelta re-emit the
+		// full answer with replace=true instead of only the unseen suffix.
+		r.sentAnswer = ""
+		r.sentThinking = ""
+	}
 }
 
 func (r *runState) cancelAttach() {
@@ -548,6 +601,26 @@ func (r *runState) complete(result pendingResult) bool {
 	return ok
 }
 
+func (r *runState) isFinalized() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.finalized
+}
+
+func (r *runState) markRetained() {
+	r.mu.Lock()
+	if r.retainedAt.IsZero() {
+		r.retainedAt = time.Now()
+	}
+	r.mu.Unlock()
+}
+
+func (r *runState) retainedAtTime() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.retainedAt
+}
+
 // attachedForDelivery reports whether a live SSE stream is still attached to
 // this run, i.e. whether serveRunSSE is selecting on run.done and will write
 // the terminal event to a client.
@@ -682,6 +755,12 @@ func (s *pendingStore) setStreamContent(id, content string) bool {
 	if run == nil {
 		return false
 	}
+	// A retained run is closed for new content: it is kept only so its terminal
+	// result can still be collected. Rejecting here preserves the "run is not
+	// pending" signal that surfaces late writes after a turn has ended.
+	if run.isFinalized() {
+		return false
+	}
 	run.applyCardContent(content)
 	return true
 }
@@ -722,8 +801,18 @@ func (s *pendingStore) finish(id string, result pendingResult) bool {
 	}
 	run.lastRecoverableEvent = nil
 	run.mu.Unlock()
+	attached := run.attachedForDelivery()
 	if !run.complete(result) {
 		return false
+	}
+	if !attached {
+		// No client is reading run.done. Deleting here (the previous behaviour)
+		// made the buffered answer unreachable: a later resume got resume_miss
+		// and a bare message_end, so the answer existed only in conversation
+		// history. Keep the run addressable so the caller can collect it, and
+		// let the sweeper evict it after runTTL.
+		run.markRetained()
+		return true
 	}
 	s.delete(id)
 	return true

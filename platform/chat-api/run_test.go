@@ -465,3 +465,78 @@ func TestClassifyShellProgressAsTransient(t *testing.T) {
 		t.Fatalf("final kind = %v, want content", kind)
 	}
 }
+
+func TestSweepExpiredEvictsOnlyPastTTL(t *testing.T) {
+	s := newPendingStoreWithTTL(10, time.Minute)
+	run := newRunState("run1", "u", "", "sk", "c", "c:0", &Platform{}, nil, time.Time{})
+	run.detach()
+	if !s.create(run) {
+		t.Fatal("create")
+	}
+	if !s.finish(run.id, pendingResult{answer: "a"}) {
+		t.Fatal("finish")
+	}
+	if s.sweepExpired(time.Now().Add(59*time.Second)) != 0 {
+		t.Fatal("run must survive before its TTL elapses")
+	}
+	if s.get(run.id) == nil {
+		t.Fatal("run must remain addressable before its TTL elapses")
+	}
+	if s.sweepExpired(time.Now().Add(time.Minute+time.Second)) != 1 {
+		t.Fatal("run must be evicted once its TTL has elapsed")
+	}
+	if s.get(run.id) != nil {
+		t.Fatal("evicted run must be gone")
+	}
+}
+
+func TestCreateEvictsExpiredRetainedWhenFull(t *testing.T) {
+	s := newPendingStoreWithTTL(1, time.Minute)
+	old := newRunState("run_old", "u", "", "sk", "c", "c:0", &Platform{}, nil, time.Time{})
+	old.detach()
+	if !s.create(old) || !s.finish(old.id, pendingResult{answer: "stale"}) {
+		t.Fatal("seed retained run")
+	}
+	old.mu.Lock()
+	old.retainedAt = time.Now().Add(-2 * time.Minute)
+	old.mu.Unlock()
+	fresh := newRunState("run_new", "u", "", "sk", "c", "c:0", &Platform{}, nil, time.Time{})
+	if !s.create(fresh) {
+		t.Fatal("create must reclaim expired retained runs before rejecting a live request")
+	}
+	if s.get("run_old") != nil {
+		t.Fatal("expired retained run should have been evicted")
+	}
+	if s.get("run_new") == nil {
+		t.Fatal("live run should be stored")
+	}
+	// A non-expired retained run is not evictable.
+	s2 := newPendingStoreWithTTL(1, time.Minute)
+	live := newRunState("run_live", "u", "", "sk", "c", "c:0", &Platform{}, nil, time.Time{})
+	live.detach()
+	if !s2.create(live) || !s2.finish(live.id, pendingResult{answer: "fresh"}) {
+		t.Fatal("seed live retained run")
+	}
+	other := newRunState("run_other", "u", "", "sk", "c", "c:0", &Platform{}, nil, time.Time{})
+	if s2.create(other) {
+		t.Fatal("create must not evict a retained run still inside its TTL")
+	}
+}
+
+func TestSetStreamContentRejectsFinalizedRun(t *testing.T) {
+	s := newPendingStoreWithTTL(10, time.Minute)
+	run := newRunState("run1", "u", "", "sk", "c", "c:0", &Platform{}, nil, time.Time{})
+	run.detach()
+	if !s.create(run) {
+		t.Fatal("create")
+	}
+	if !s.setStreamContent(run.id, "progress") {
+		t.Fatal("stream content must be accepted while the run is live")
+	}
+	if !s.finish(run.id, pendingResult{answer: "final"}) {
+		t.Fatal("finish")
+	}
+	if s.setStreamContent(run.id, "late write") {
+		t.Fatal("a retained run is closed for new content")
+	}
+}
