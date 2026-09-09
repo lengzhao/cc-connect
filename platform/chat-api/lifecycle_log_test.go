@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -132,7 +133,7 @@ func TestMessageWriteFailure_DetachesWithoutStart(t *testing.T) {
 	}
 }
 
-func TestComplete_LogsEndWhenDetached(t *testing.T) {
+func TestComplete_LogsDiscardedWhenDetached(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -152,7 +153,53 @@ func TestComplete_LogsEndWhenDetached(t *testing.T) {
 		t.Fatal("complete should succeed once")
 	}
 	out := buf.String()
+	// A detached run reaches no client. This used to log "sse end
+	// terminal=message_end", indistinguishable from a real delivery, so lost
+	// answers were invisible in the logs.
+	if !strings.Contains(out, "chat-api: sse discarded") {
+		t.Fatalf("expected discarded log after detached complete: %s", out)
+	}
+	if !strings.Contains(out, "terminal=message_end") {
+		t.Fatalf("expected terminal kind in discarded log: %s", out)
+	}
+	if !strings.Contains(out, "answer_bytes=12") {
+		t.Fatalf("expected answer_bytes for the lost answer: %s", out)
+	}
+	if strings.Contains(out, "chat-api: sse end") {
+		t.Fatalf("a discarded terminal must not be logged as a delivery: %s", out)
+	}
+}
+
+// A run with a live sink still logs a delivery.
+func TestComplete_LogsEndWhenAttached(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	rec := httptest.NewRecorder()
+	sse, err := newSSEWriter(rec)
+	if err != nil {
+		t.Fatalf("newSSEWriter: %v", err)
+	}
+	run := &runState{
+		id:             "run_attached",
+		user:           "u1",
+		conversationID: "conv_1",
+		channelKey:     "ch1",
+		created:        time.Now(),
+		done:           make(chan pendingResult, 1),
+		sink:           &sseEventSink{w: sse},
+		platform:       &Platform{},
+	}
+	if !run.complete(pendingResult{answer: "delivered ok"}) {
+		t.Fatal("complete should succeed once")
+	}
+	out := buf.String()
 	if !strings.Contains(out, "chat-api: sse end") || !strings.Contains(out, "terminal=message_end") {
-		t.Fatalf("expected end log after detached complete: %s", out)
+		t.Fatalf("expected end log for attached complete: %s", out)
+	}
+	if strings.Contains(out, "chat-api: sse discarded") {
+		t.Fatalf("attached delivery must not be logged as discarded: %s", out)
 	}
 }

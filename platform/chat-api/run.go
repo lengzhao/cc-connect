@@ -534,11 +534,27 @@ func (r *runState) complete(result pendingResult) bool {
 	var ok bool
 	r.once.Do(func() {
 		r.stopInteractionTimer()
+		// Buffered (cap 1): the send never blocks even when serveRunSSE has
+		// already returned. Whether anyone is left to read it is exactly what
+		// separates a delivery from a silent loss, so log the two distinctly.
 		r.done <- result
-		logSSEEnd(r, result)
+		if r.attachedForDelivery() {
+			logSSEEnd(r, result)
+		} else {
+			logSSEDiscarded(r, result)
+		}
 		ok = true
 	})
 	return ok
+}
+
+// attachedForDelivery reports whether a live SSE stream is still attached to
+// this run, i.e. whether serveRunSSE is selecting on run.done and will write
+// the terminal event to a client.
+func (r *runState) attachedForDelivery() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.detached && r.sink != nil && r.sink.Active()
 }
 
 func (r *runState) replyContext() *replyContext {

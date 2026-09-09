@@ -7,8 +7,9 @@ import (
 )
 
 // logSSELifecycle emits an Info SSE connection lifecycle log (one line per event).
-// Events: start, disconnect, resume, resume_miss, resume_rejected, end.
-// Extra attrs may include reason, replay_event, terminal, error.
+// Events: start, disconnect, resume, resume_miss, resume_rejected, aborted,
+// end, discarded.
+// Extra attrs may include reason, replay_event, terminal, error, answer_bytes.
 func logSSELifecycle(event string, run *runState, attrs ...any) {
 	if run == nil {
 		return
@@ -37,6 +38,8 @@ func slogSSELifecycle(event string, args ...any) {
 	slog.Log(context.Background(), slog.LevelInfo, "chat-api: sse "+event, args...)
 }
 
+// logSSEEnd records a terminal event handed to an attached SSE stream, i.e. one
+// the client is still connected to receive.
 func logSSEEnd(run *runState, result pendingResult) {
 	terminal := terminalName(result)
 	if errText := terminalErrorText(result); errText != "" {
@@ -44,6 +47,24 @@ func logSSEEnd(run *runState, result pendingResult) {
 	} else {
 		logSSELifecycle("end", run, "terminal", terminal)
 	}
+}
+
+// logSSEDiscarded records a terminal event that reached no client: the run had
+// already been detached (client_gone or a write error), so serveRunSSE was no
+// longer reading run.done and nothing was written to the wire.
+//
+// This case used to be logged as "sse end terminal=message_end", identical to a
+// successful delivery. A dashboard counting terminal events therefore showed
+// every discarded answer as delivered, which is why answers silently going
+// missing went unnoticed in production. answer_bytes is the size of the answer
+// that was thrown away, so the loss is measurable.
+func logSSEDiscarded(run *runState, result pendingResult) {
+	terminal := terminalName(result)
+	attrs := []any{"terminal", terminal, "answer_bytes", len(result.answer)}
+	if errText := terminalErrorText(result); errText != "" {
+		attrs = append(attrs, "error", errText)
+	}
+	logSSELifecycle("discarded", run, attrs...)
 }
 
 func terminalName(result pendingResult) string {
