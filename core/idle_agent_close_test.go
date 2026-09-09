@@ -337,3 +337,104 @@ func containsString(ss []string, want string) bool {
 	}
 	return false
 }
+
+// TestCloseIdleAgentSessions_BusySessionInEngineStoreWithWorkspacePool is the
+// regression test for the production hang: a chat-api turn was killed mid-flight
+// by close-idle and its SSE run never received a terminal event.
+//
+// chat-api returns UseWorkspaceSessionStore() == false, so handleMessage locks
+// the Session in the ENGINE-level store even though the turn runs inside a
+// workspace. sessionBusyForInteractiveKey used to replace its lookup store with
+// ws.sessions whenever the workspace pool had an entry, so it searched the wrong
+// map, found nothing, and reported the busy session as idle.
+func TestCloseIdleAgentSessions_BusySessionInEngineStoreWithWorkspacePool(t *testing.T) {
+	e := newTestEngine()
+
+	wsDir := filepath.Join(t.TempDir(), "nex-training")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionKey := "chat-api:nex-training:conv_busy"
+	interactiveKey := wsDir + ":" + sessionKey
+
+	// A per-workspace session store exists and is deliberately EMPTY, mirroring
+	// multi-workspace mode with a platform that opts out of it.
+	e.workspacePool = newWorkspacePool(DefaultWorkspaceIdleTimeout)
+	ws := e.workspacePool.GetOrCreate(wsDir)
+	ws.sessions = NewSessionManager(filepath.Join(t.TempDir(), "ws_sessions.json"))
+
+	agentSess := newControllableSession("chat-api-busy-agent")
+	state := &interactiveState{
+		agentSession:     agentSess,
+		eventsNeedResync: false,
+		workspaceDir:     wsDir,
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[interactiveKey] = state
+	e.interactiveMu.Unlock()
+
+	// The in-flight turn holds the lock in the engine-level store.
+	busySession := e.sessions.GetOrCreateActive(sessionKey)
+	if !busySession.TryLock() {
+		t.Fatal("expected TryLock to succeed")
+	}
+	t.Cleanup(func() { busySession.Unlock() })
+
+	if !e.sessionBusyForInteractiveKey(interactiveKey, wsDir) {
+		t.Fatal("sessionBusyForInteractiveKey missed a busy session held in the engine-level store")
+	}
+
+	result := e.CloseIdleAgentSessions()
+	if result.Closed != 0 || result.Skipped != 1 {
+		t.Fatalf("result = closed=%d skipped=%d, want closed=0 skipped=1; %+v",
+			result.Closed, result.Skipped, result)
+	}
+	select {
+	case <-agentSess.closed:
+		t.Fatal("close-idle killed a session with a turn in flight")
+	default:
+	}
+	if !agentSess.Alive() {
+		t.Fatal("agent session should still be Alive")
+	}
+}
+
+// A busy session recorded in the per-workspace store must still be protected —
+// checking both stores must not regress platforms that do use the workspace one.
+func TestCloseIdleAgentSessions_BusySessionInWorkspaceStore(t *testing.T) {
+	e := newTestEngine()
+
+	wsDir := filepath.Join(t.TempDir(), "lark-chat")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionKey := "lark:oc_abc:root"
+	interactiveKey := wsDir + ":" + sessionKey
+
+	e.workspacePool = newWorkspacePool(DefaultWorkspaceIdleTimeout)
+	ws := e.workspacePool.GetOrCreate(wsDir)
+	ws.sessions = NewSessionManager(filepath.Join(t.TempDir(), "ws_sessions.json"))
+
+	agentSess := newControllableSession("lark-busy-agent")
+	e.interactiveMu.Lock()
+	e.interactiveStates[interactiveKey] = &interactiveState{
+		agentSession:     agentSess,
+		eventsNeedResync: false,
+		workspaceDir:     wsDir,
+	}
+	e.interactiveMu.Unlock()
+
+	busySession := ws.sessions.GetOrCreateActive(sessionKey)
+	if !busySession.TryLock() {
+		t.Fatal("expected TryLock to succeed")
+	}
+	t.Cleanup(func() { busySession.Unlock() })
+
+	result := e.CloseIdleAgentSessions()
+	if result.Closed != 0 || result.Skipped != 1 {
+		t.Fatalf("result = closed=%d skipped=%d, want closed=0 skipped=1", result.Closed, result.Skipped)
+	}
+	if !agentSess.Alive() {
+		t.Fatal("agent session should still be Alive")
+	}
+}

@@ -507,13 +507,27 @@ func (p *Platform) CreateStreamingCard(_ context.Context, replyTo any) (core.Str
 	return &streamingCard{platform: p, rc: rc}, nil
 }
 
-func (p *Platform) OnProcessingEnd(_ context.Context, replyCtx any, _ core.ProcessingEndEvent) error {
+func (p *Platform) OnProcessingEnd(_ context.Context, replyCtx any, event core.ProcessingEndEvent) error {
 	rc, ok := replyCtx.(*replyContext)
 	if !ok || rc == nil || rc.runID == "" {
 		return fmt.Errorf("chat-api: unsupported processing-end context %T", replyCtx)
 	}
 	run := p.pending.get(rc.runID)
 	if run == nil {
+		return nil
+	}
+	if event.Kind == core.ProcessingEndAborted {
+		// The agent process was torn down mid-turn: there is no answer coming.
+		// Terminate the run with an error so serveRunSSE emits `event: error`
+		// and the client's stream closes, instead of the request hanging until
+		// the caller times out (observed in production as a 30-minute wait on a
+		// run whose session was killed by close-idle).
+		reason := strings.TrimSpace(event.Reason)
+		if reason == "" {
+			reason = "agent session terminated"
+		}
+		logSSELifecycle("aborted", run, "reason", reason)
+		p.pending.finish(rc.runID, pendingResult{err: errors.New(reason)})
 		return nil
 	}
 	// Fallback for synchronous command paths; normal SSE turns complete via streamingCard.Finalize.

@@ -20,12 +20,20 @@ type ProcessingEndKind string
 
 const (
 	ProcessingEndCommand ProcessingEndKind = "command"
+	// ProcessingEndAborted signals that an in-flight turn was torn down before
+	// it produced a result (agent process closed by close-idle, the reclamation
+	// sweep, the idle timer, or a session reset). Transports that hold a
+	// request open for the duration of a turn must fail it: without this the
+	// caller waits on a stream that will never receive a terminal event.
+	ProcessingEndAborted ProcessingEndKind = "aborted"
 )
 
 // ProcessingEndEvent is emitted to platforms that need an explicit completion
 // signal after core finishes processing a message path.
 type ProcessingEndEvent struct {
 	Kind ProcessingEndKind
+	// Reason is a short human-readable cause, set for ProcessingEndAborted.
+	Reason string
 }
 
 // ProcessingEndNotifier is an optional platform capability for transports that

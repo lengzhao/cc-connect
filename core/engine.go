@@ -4297,6 +4297,7 @@ func (e *Engine) cleanupInteractiveState(sessionKey string, expected ...*interac
 		}
 
 		e.notifyDroppedQueuedMessages(state, fmt.Errorf("session reset"))
+		e.abortPendingPlatformTurn(state, "agent session reset")
 	}
 
 	// Close the agent session BEFORE deleting from the map.
@@ -4507,9 +4508,19 @@ func (e *Engine) tryCloseIdleAgentSession(sessionKey string) (closed, skipped bo
 // Tries exact workspaceDir prefix first, then normalizeWorkspacePath; checks Busy
 // via GetActive on both the trimmed raw key (when trimmed) and the full key.
 func (e *Engine) sessionBusyForInteractiveKey(key, workspaceDir string) bool {
-	sessions := e.sessions
 	rawKey := key
 	trimmed := false
+	// Both the engine-level and the per-workspace store must be consulted.
+	// Which one holds the Session depends on the platform's
+	// UseWorkspaceSessionStore() policy, which is not reachable from here:
+	// chat-api returns false and keeps its sessions in the engine-level store
+	// even though it runs inside a workspace. Replacing the store with
+	// ws.sessions (as this function used to do) therefore reported every busy
+	// chat-api turn as idle, and close-idle killed the agent mid-turn — the
+	// turn never reached "turn complete", so the SSE run never received a
+	// terminal event and the caller hung until it gave up. Checking both
+	// stores is fail-safe: a hit in either one keeps the session alive.
+	stores := []*SessionManager{e.sessions}
 	if workspaceDir != "" {
 		exactPrefix := workspaceDir + ":"
 		if strings.HasPrefix(key, exactPrefix) {
@@ -4524,23 +4535,46 @@ func (e *Engine) sessionBusyForInteractiveKey(key, workspaceDir string) bool {
 		}
 		if e.workspacePool != nil {
 			if ws := e.workspacePool.Get(workspaceDir); ws != nil && ws.sessions != nil {
-				sessions = ws.sessions
+				stores = append(stores, ws.sessions)
 			}
 		}
-	}
-	if sessions == nil {
-		return false
 	}
 	keysToCheck := []string{key}
 	if trimmed && rawKey != key {
 		keysToCheck = []string{rawKey, key}
 	}
-	for _, k := range keysToCheck {
-		if s := sessions.GetActive(k); s != nil && s.Busy() {
-			return true
+	for _, sessions := range stores {
+		if sessions == nil {
+			continue
+		}
+		for _, k := range keysToCheck {
+			if s := sessions.GetActive(k); s != nil && s.Busy() {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// abortPendingPlatformTurn tells the platform that the turn bound to state was
+// torn down without producing a result, so request-scoped transports (chat-api
+// SSE, a2a) can fail the caller instead of leaving it waiting forever.
+// Platforms whose turn already completed see no pending work and ignore this.
+func (e *Engine) abortPendingPlatformTurn(state *interactiveState, reason string) {
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	p := state.platform
+	replyCtx := state.replyCtx
+	state.mu.Unlock()
+	if p == nil || replyCtx == nil {
+		return
+	}
+	e.notifyProcessingEnd(p, replyCtx, ProcessingEndEvent{
+		Kind:   ProcessingEndAborted,
+		Reason: reason,
+	})
 }
 
 // finishCloseLiveIdleAgentSession completes an idle live-agent close after the
@@ -4561,6 +4595,10 @@ func (e *Engine) finishCloseLiveIdleAgentSession(sessionKey string, expected *in
 		pending.resolve()
 	}
 	e.notifyDroppedQueuedMessages(expected, fmt.Errorf("session reset"))
+	// A turn may still be attached here despite the idle checks (a message can
+	// arrive between the busy probe and this teardown). Fail it so a caller
+	// holding an SSE stream gets a terminal event instead of hanging.
+	e.abortPendingPlatformTurn(expected, "agent session closed while idle-reaping")
 
 	e.closeAgentSessionWithTimeout(sessionKey, agentSession)
 
