@@ -70,12 +70,11 @@ const (
 	slowPlatformSend = 2 * time.Second // platform Reply / Send
 	slowAgentStart   = 5 * time.Second // agent.StartSession
 	slowAgentClose   = 3 * time.Second // agentSession.Close
-	// slowAgentSend is a tail tripwire, not a slow-turn definition: every turn
-	// already logs its full stage decomposition in "turn complete". Production
-	// turn durations (84-turn sample): p50=41s p90=212s p95=335s — a threshold
-	// below the median fires on half of all turns and trains alert fatigue.
-	// 5min keeps the fire rate at the ~6% tail.
-	slowAgentSend       = 5 * time.Minute  // agentSession.Send
+	// slowAgentSend marks turns users actually wait on (~1min is where lag
+	// becomes noticeable); it is a visibility marker, not an anomaly signal —
+	// production turns exceeded it 43% of the time (p50=41.5s, p90=212s).
+	// The full stage decomposition lives in "turn complete" on every turn.
+	slowAgentSend       = 1 * time.Minute  // agentSession.Send
 	slowAgentFirstEvent = 15 * time.Second // time from send to first agent event
 )
 
