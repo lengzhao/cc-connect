@@ -17354,7 +17354,7 @@ func TestTurnCompleteLogsToolTiming(t *testing.T) {
 		sess.events <- Event{Type: EventToolUse, ToolName: "Grep", ToolInput: "pattern"}
 		time.Sleep(30 * time.Millisecond)
 		sess.events <- Event{Type: EventToolResult, ToolName: "Grep", ToolResult: "matches"}
-		sess.events <- Event{Type: EventResult, Content: "done", Done: true}
+		sess.events <- Event{Type: EventResult, Content: "done", Done: true, InputTokens: 15, OutputTokens: 5788, CacheReadInputTokens: 90000, CacheCreationInputTokens: 10000}
 	}()
 
 	sendDone := make(chan error, 1)
@@ -17388,6 +17388,14 @@ func TestTurnCompleteLogsToolTiming(t *testing.T) {
 	toolMs, ok := summary["tool_time_ms"].(float64)
 	if !ok || toolMs < 100 {
 		t.Fatalf("tool_time_ms = %v, want >= 100 (80ms Bash + 30ms Grep)", summary["tool_time_ms"])
+	}
+	ctx, ok := summary["ctx_tok"].(float64)
+	if !ok || ctx != 100015 {
+		t.Fatalf("ctx_tok = %v, want 100015 (15 input + 90000 read + 10000 write)", summary["ctx_tok"])
+	}
+	hit, ok := summary["cache_hit_ratio"].(float64)
+	if !ok || hit < 0.899 || hit > 0.901 {
+		t.Fatalf("cache_hit_ratio = %v, want ~0.9 (90000/100015)", summary["cache_hit_ratio"])
 	}
 	if _, ok := summary["model_ms"]; !ok {
 		t.Fatalf("turn complete missing model_ms: %v", summary)

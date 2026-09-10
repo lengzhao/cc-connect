@@ -70,7 +70,7 @@ const (
 	slowPlatformSend    = 2 * time.Second  // platform Reply / Send
 	slowAgentStart      = 5 * time.Second  // agent.StartSession
 	slowAgentClose      = 3 * time.Second  // agentSession.Close
-	slowAgentSend       = 2 * time.Second  // agentSession.Send
+	slowAgentSend       = 30 * time.Second // agentSession.Send
 	slowAgentFirstEvent = 15 * time.Second // time from send to first agent event
 )
 
@@ -5994,7 +5994,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if modelTime < 0 {
 				modelTime = 0
 			}
-			slog.Info("turn complete",
+			ctxTok := event.InputTokens + event.CacheReadInputTokens + event.CacheCreationInputTokens
+			summaryAttrs := []any{
 				"session", session.ID,
 				"agent_session", session.GetAgentSessionID(),
 				"msg_id", msgID,
@@ -6009,8 +6010,19 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				"slow_tools", summarizeToolTiming(toolStats, 3),
 				"input_tokens", event.InputTokens,
 				"output_tokens", event.OutputTokens,
-				"silent", isSilent,
-			)
+				"cache_read_tok", event.CacheReadInputTokens,
+				"cache_write_tok", event.CacheCreationInputTokens,
+				// Context fed to the model on the final call: uncached input
+				// plus everything served from / written to the prompt cache.
+				"ctx_tok", ctxTok,
+			}
+			if ctxTok > 0 {
+				ratio := float64(event.CacheReadInputTokens) / float64(ctxTok)
+				summaryAttrs = append(summaryAttrs,
+					"cache_hit_ratio", math.Round(ratio*1000)/1000)
+			}
+			summaryAttrs = append(summaryAttrs, "silent", isSilent)
+			slog.Info("turn complete", summaryAttrs...)
 			// DEBUG: full assistant response for in-depth debugging.
 			if slog.Default().Enabled(e.ctx, slog.LevelDebug) {
 				slog.Debug("turn response",
