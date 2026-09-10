@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 )
 
 // logSSELifecycle emits an Info SSE connection lifecycle log (one line per event).
@@ -39,14 +40,19 @@ func slogSSELifecycle(event string, args ...any) {
 }
 
 // logSSEEnd records a terminal event handed to an attached SSE stream, i.e. one
-// the client is still connected to receive.
+// the client is still connected to receive. Latency stages:
+//
+//	e2e_ms         request receipt -> terminal written
+//	first_delta_ms request receipt -> first SSE event reached the client
+//	               (dispatch, busy queue, hooks, session spawn, agent TTFT)
+//	stream_ms      first event -> terminal (pure streaming output phase)
 func logSSEEnd(run *runState, result pendingResult) {
 	terminal := terminalName(result)
+	attrs := append(latencyStageAttrs(run), "terminal", terminal)
 	if errText := terminalErrorText(result); errText != "" {
-		logSSELifecycle("end", run, "terminal", terminal, "error", errText)
-	} else {
-		logSSELifecycle("end", run, "terminal", terminal)
+		attrs = append(attrs, "error", errText)
 	}
+	logSSELifecycle("end", run, attrs...)
 }
 
 // logSSEDiscarded records a terminal event that reached no client: the run had
@@ -60,11 +66,29 @@ func logSSEEnd(run *runState, result pendingResult) {
 // that was thrown away, so the loss is measurable.
 func logSSEDiscarded(run *runState, result pendingResult) {
 	terminal := terminalName(result)
-	attrs := []any{"terminal", terminal, "answer_bytes", len(result.answer)}
+	attrs := append(latencyStageAttrs(run), "terminal", terminal, "answer_bytes", len(result.answer))
 	if errText := terminalErrorText(result); errText != "" {
 		attrs = append(attrs, "error", errText)
 	}
 	logSSELifecycle("discarded", run, attrs...)
+}
+
+// latencyStageAttrs reports how long the run took end to end and where the
+// time went: everything before the first flushed SSE event (dispatch, queue,
+// hooks, session spawn, agent TTFT) vs the streaming phase after it.
+func latencyStageAttrs(run *runState) []any {
+	if run.created.IsZero() {
+		return nil
+	}
+	now := time.Now()
+	attrs := []any{"e2e_ms", now.Sub(run.created).Milliseconds()}
+	if ff := run.firstFlushedAtTime(); !ff.IsZero() {
+		attrs = append(attrs,
+			"first_delta_ms", ff.Sub(run.created).Milliseconds(),
+			"stream_ms", now.Sub(ff).Milliseconds(),
+		)
+	}
+	return attrs
 }
 
 func terminalName(result pendingResult) string {

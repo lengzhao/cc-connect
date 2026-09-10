@@ -203,3 +203,75 @@ func TestComplete_LogsEndWhenAttached(t *testing.T) {
 		t.Fatalf("attached delivery must not be logged as discarded: %s", out)
 	}
 }
+
+func TestComplete_LogsLatencyStages(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	created := time.Now().Add(-2 * time.Second)
+	rec := httptest.NewRecorder()
+	sse, err := newSSEWriter(rec)
+	if err != nil {
+		t.Fatalf("newSSEWriter: %v", err)
+	}
+	run := &runState{
+		id:             "run_stages",
+		user:           "u1",
+		conversationID: "conv_1",
+		channelKey:     "ch1",
+		created:        created,
+		firstFlushedAt: created.Add(300 * time.Millisecond),
+		done:           make(chan pendingResult, 1),
+		sink:           &sseEventSink{w: sse},
+		platform:       &Platform{},
+	}
+	if !run.complete(pendingResult{answer: "ok"}) {
+		t.Fatal("complete should succeed once")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "chat-api: sse end") {
+		t.Fatalf("missing end log: %s", out)
+	}
+	if !strings.Contains(out, "first_delta_ms=300") {
+		t.Fatalf("missing first_delta_ms stage: %s", out)
+	}
+	if !strings.Contains(out, "stream_ms=") {
+		t.Fatalf("missing stream_ms stage: %s", out)
+	}
+	if !strings.Contains(out, "e2e_ms=2") {
+		t.Fatalf("missing e2e_ms stage: %s", out)
+	}
+}
+
+func TestComplete_DiscardedWithoutFlushOmitsStreamStages(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	run := &runState{
+		id:             "run_no_flush",
+		user:           "u1",
+		conversationID: "conv_1",
+		channelKey:     "ch1",
+		created:        time.Now().Add(-500 * time.Millisecond),
+		done:           make(chan pendingResult, 1),
+		platform:       &Platform{},
+	}
+	run.detach()
+	if !run.complete(pendingResult{answer: "never seen"}) {
+		t.Fatal("complete should succeed once")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "chat-api: sse discarded") {
+		t.Fatalf("missing discarded log: %s", out)
+	}
+	if !strings.Contains(out, "e2e_ms=") {
+		t.Fatalf("discarded log should still carry e2e_ms: %s", out)
+	}
+	if strings.Contains(out, "first_delta_ms") || strings.Contains(out, "stream_ms") {
+		t.Fatalf("stream stages must be absent when nothing was flushed: %s", out)
+	}
+}

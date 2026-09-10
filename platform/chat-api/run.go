@@ -94,6 +94,11 @@ type runState struct {
 	done   chan pendingResult
 	once   sync.Once
 
+	// firstFlushedAt is when the first SSE event reached a live client: the
+	// boundary between the "waiting" phase (dispatch, queue, hooks, session
+	// spawn, agent first token) and the streaming phase. Zero until then.
+	firstFlushedAt time.Time
+
 	// retainedAt is set when a run completes with no client attached. The
 	// terminal result stays buffered in done so a later POST carrying this
 	// run_id can still collect it; the sweeper evicts the run once runTTL
@@ -450,6 +455,7 @@ func (r *runState) flushThinkingDelta() error {
 	}
 	r.mu.Lock()
 	r.sentThinking = curr
+	r.recordFlushLocked()
 	r.mu.Unlock()
 	return nil
 }
@@ -486,6 +492,7 @@ func (r *runState) flushToolCallEvents() error {
 		}
 		r.mu.Lock()
 		r.sentToolCallIDs[tc.ID] = true
+		r.recordFlushLocked()
 		r.mu.Unlock()
 	}
 	return nil
@@ -579,6 +586,7 @@ func (r *runState) flushAnswerDelta() error {
 	}
 	r.mu.Lock()
 	r.sentAnswer = curr
+	r.recordFlushLocked()
 	r.mu.Unlock()
 	return nil
 }
@@ -619,6 +627,21 @@ func (r *runState) retainedAtTime() time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.retainedAt
+}
+
+// firstFlushedAtTime reports when the first SSE event reached a live client.
+func (r *runState) firstFlushedAtTime() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.firstFlushedAt
+}
+
+// recordFlushLocked marks the first successful write to a live sink.
+// Caller holds r.mu.
+func (r *runState) recordFlushLocked() {
+	if r.firstFlushedAt.IsZero() {
+		r.firstFlushedAt = time.Now()
+	}
 }
 
 // attachedForDelivery reports whether a live SSE stream is still attached to

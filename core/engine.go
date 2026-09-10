@@ -496,12 +496,13 @@ type queuedMessage struct {
 	files             []FileAttachment
 	fromVoice         bool
 	userID            string
-	userName          string // sender's display name for sender injection
-	userEmail         string // sender email for sender injection, when the platform explicitly provides it
-	msgPlatform       string // platform name for sender injection
-	msgSessionKey     string // session key for extracting chat ID
-	channelKey        string // platform-provided channel identifier (preferred over sessionKey extraction)
-	userMessageTimeMs int64  // Feishu create_time ms (optional); see Message.UserMessageTimeMs
+	userName          string    // sender's display name for sender injection
+	userEmail         string    // sender email for sender injection, when the platform explicitly provides it
+	msgPlatform       string    // platform name for sender injection
+	msgSessionKey     string    // session key for extracting chat ID
+	channelKey        string    // platform-provided channel identifier (preferred over sessionKey extraction)
+	userMessageTimeMs int64     // Feishu create_time ms (optional); see Message.UserMessageTimeMs
+	receivedAt        time.Time // engine ingress time; see Message.ReceivedAt
 	agentContext      AgentContext
 	skipPromptMeta    bool // see Message.SkipPromptMeta
 }
@@ -2825,6 +2826,9 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		e.handleMessageRecall(p, msg)
 		return
 	}
+	if msg.ReceivedAt.IsZero() {
+		msg.ReceivedAt = time.Now()
+	}
 
 	slog.Info("message received",
 		"platform", msg.Platform, "msg_id", msg.MessageID,
@@ -3210,6 +3214,7 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 		msgSessionKey:     msg.SessionKey,
 		channelKey:        msg.ChannelKey,
 		userMessageTimeMs: msg.UserMessageTimeMs,
+		receivedAt:        msg.ReceivedAt,
 		agentContext:      msg.AgentContext.Clone(),
 		skipPromptMeta:    msg.SkipPromptMeta,
 	})
@@ -3749,7 +3754,9 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		return
 	}
 
+	hookStart := time.Now()
 	e.emitMessageProcessingHook(p, msg)
+	hookElapsed := time.Since(hookStart)
 
 	turnStart := time.Now()
 
@@ -3872,7 +3879,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		sendDone <- e.sendWithContextRefresh(agent, as, session, sessions, promptContent, msg.Images, msg.Files)
 	}()
 
-	e.processInteractiveEvents(state, session, sessions, interactiveKey, msg.MessageID, turnStart, stopTyping, sendDone, msg.ReplyCtx, msg.SkipHistory)
+	e.processInteractiveEvents(state, session, sessions, interactiveKey, msg.MessageID, turnStart, stopTyping, sendDone, msg.ReplyCtx, turnStages{receivedAt: msg.ReceivedAt, hookElapsed: hookElapsed}, msg.SkipHistory)
 	if elapsed := time.Since(sendStart); elapsed >= slowAgentSend {
 		slog.Warn("slow agent send", "elapsed", elapsed, "session", msg.SessionKey, "content_len", len(msg.Content))
 	}
@@ -4968,7 +4975,25 @@ var agentErrorHandlers = []agentErrorHandler{
 	{"Session not found", MsgSessionNotFound},
 }
 
-func (e *Engine) processInteractiveEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, msgID string, turnStart time.Time, stopTypingFn func(), sendDone <-chan error, replyCtx any, skipHistoryOpt ...bool) {
+// turnStages carries per-turn latency measurements into the event loop so the
+// turn summary can break end-to-end latency into stages. first_event_ms
+// (measured inside the event loop) includes session spawn/resume on cold
+// starts, since Send only runs after the agent session exists.
+type turnStages struct {
+	receivedAt  time.Time     // engine ingress; zero disables queue_wait_ms
+	hookElapsed time.Duration // message.processing sync-hook time (queued turns measure their own)
+}
+
+// queueStageWait returns ingress→turnStart; zero when ingress time is unknown
+// (internal prompts that bypass handleMessage).
+func queueStageWait(receivedAt, turnStart time.Time) time.Duration {
+	if receivedAt.IsZero() || turnStart.IsZero() || turnStart.Before(receivedAt) {
+		return 0
+	}
+	return turnStart.Sub(receivedAt)
+}
+
+func (e *Engine) processInteractiveEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, msgID string, turnStart time.Time, stopTypingFn func(), sendDone <-chan error, replyCtx any, stages turnStages, skipHistoryOpt ...bool) {
 	skipHistory := len(skipHistoryOpt) > 0 && skipHistoryOpt[0]
 	if msgID != "" {
 		state.mu.Lock()
@@ -4982,6 +5007,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 	toolCount := 0
 	waitStart := time.Now()
 	firstEventLogged := false
+	firstEventElapsed := time.Duration(0)
+	stageQueueWait := queueStageWait(stages.receivedAt, turnStart)
+	stageHookElapsed := stages.hookElapsed
 	var toolSteps []ToolStep
 	var lastRichCardUpdate time.Time
 	var lastRichCardLen int
@@ -5190,6 +5218,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 		if !firstEventLogged {
 			firstEventLogged = true
+			firstEventElapsed = time.Since(waitStart)
 			if elapsed := time.Since(waitStart); elapsed >= slowAgentFirstEvent {
 				slog.Warn("slow agent first event", "elapsed", elapsed, "session", sessionKey, "event_type", event.Type)
 			}
@@ -5879,6 +5908,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				"tools", toolCount,
 				"response_len", len(fullResponse),
 				"turn_duration", turnDuration,
+				"queue_wait_ms", stageQueueWait.Milliseconds(),
+				"hook_ms", stageHookElapsed.Milliseconds(),
+				"first_event_ms", firstEventElapsed.Milliseconds(),
 				"input_tokens", event.InputTokens,
 				"output_tokens", event.OutputTokens,
 				"silent", isSilent,
@@ -6175,7 +6207,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				toolCount = 0
 				turnStart = time.Now()
 				firstEventLogged = false
+				firstEventElapsed = 0
 				waitStart = time.Now()
+				stageQueueWait = queueStageWait(queued.receivedAt, turnStart)
+				stageHookElapsed = 0
 				// Reassign the local replyCtx parameter to the queued message's
 				// trigger context. state.replyCtx was updated above, but the
 				// function-scope replyCtx is what gets passed to p.Send / p.Reply
@@ -6266,6 +6301,16 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			state.mu.Lock()
 			state.eventsNeedResync = true
 			state.mu.Unlock()
+			slog.Warn("turn failed",
+				"session", session.ID,
+				"msg_id", msgID,
+				"turn_duration", time.Since(turnStart),
+				"queue_wait_ms", stageQueueWait.Milliseconds(),
+				"hook_ms", stageHookElapsed.Milliseconds(),
+				"first_event_ms", firstEventElapsed.Milliseconds(),
+				"tools", toolCount,
+				"error", event.Error,
+			)
 			if hasRichCard && cardMessageID != nil {
 				errCard := buildResolvedRichCard(CardStatusError, "", toolSteps, partialText, false, e.composeRichStatusFooter(false, turnStart, e.agent, state.agentSession, state.workspaceDir))
 				if updater, ok := p.(MessageUpdater); ok {
@@ -6517,7 +6562,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		}
 
 		slog.Info("processing queued message", "session", sessionKey)
-		e.processInteractiveEvents(state, session, sessions, sessionKey, queued.messageID, time.Now(), stopTyping, sendDone, queued.replyCtx, false)
+		e.processInteractiveEvents(state, session, sessions, sessionKey, queued.messageID, time.Now(), stopTyping, sendDone, queued.replyCtx, turnStages{receivedAt: queued.receivedAt})
 	}
 }
 

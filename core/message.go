@@ -243,6 +243,11 @@ type Message struct {
 	// drop late redeliveries that reuse a new message_id but an older create_time
 	// than a message already processed. Zero means unset (no ordering hint).
 	UserMessageTimeMs int64
+	// ReceivedAt is the engine ingress time (set by Engine.handleMessage when
+	// zero). The turn summary uses it to report queue/dispatch wait: the gap
+	// between a message arriving and its turn actually starting (busy-session
+	// queue dwell, session lock contention). Not persisted.
+	ReceivedAt time.Time
 	// AgentContext is optional per-turn context collected by platforms
 	// (language, task_id, custom.*). Engine may prepend selected fields to
 	// the agent prompt when project inject_context allowlist permits them.
