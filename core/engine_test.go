@@ -17324,3 +17324,126 @@ func TestQueueStageWait(t *testing.T) {
 		t.Fatalf("queue wait = %v, want 1.5s", got)
 	}
 }
+
+func TestTurnCompleteLogsToolTiming(t *testing.T) {
+	prev := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer func() { slog.SetDefault(prev) }()
+
+	p := &stubPlatformEngine{n: "test"}
+	sess := newQueuingSession("qs-tool-timing")
+	agent := &controllableAgent{nextSession: sess}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	key := "test:tool-timing"
+	session := e.sessions.GetOrCreateActive(key)
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx",
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	go func() {
+		sess.events <- Event{Type: EventToolUse, ToolName: "Bash", ToolInput: "sleep 0.08"}
+		time.Sleep(80 * time.Millisecond)
+		sess.events <- Event{Type: EventToolResult, ToolName: "Bash", ToolResult: "ok"}
+		sess.events <- Event{Type: EventToolUse, ToolName: "Grep", ToolInput: "pattern"}
+		time.Sleep(30 * time.Millisecond)
+		sess.events <- Event{Type: EventToolResult, ToolName: "Grep", ToolResult: "matches"}
+		sess.events <- Event{Type: EventResult, Content: "done", Done: true}
+	}()
+
+	sendDone := make(chan error, 1)
+	sendDone <- nil
+	done := make(chan struct{})
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "turn1", time.Now(), nil, sendDone, "ctx", turnStages{})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processInteractiveEvents did not complete in time")
+	}
+
+	var summary map[string]any
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if !strings.Contains(line, "turn complete") {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("parse log line: %v\n%s", err, line)
+		}
+		summary = rec
+		break
+	}
+	if summary == nil {
+		t.Fatalf("no turn complete log captured:\n%s", buf.String())
+	}
+	toolMs, ok := summary["tool_time_ms"].(float64)
+	if !ok || toolMs < 100 {
+		t.Fatalf("tool_time_ms = %v, want >= 100 (80ms Bash + 30ms Grep)", summary["tool_time_ms"])
+	}
+	if _, ok := summary["model_ms"]; !ok {
+		t.Fatalf("turn complete missing model_ms: %v", summary)
+	}
+	slow, _ := summary["slow_tools"].(string)
+	if !strings.Contains(slow, "Bash") || !strings.Contains(slow, "Grep") {
+		t.Fatalf("slow_tools = %q, want Bash and Grep", slow)
+	}
+	if summary["tools"].(float64) != 2 {
+		t.Fatalf("tools = %v, want 2", summary["tools"])
+	}
+}
+
+func TestCloseToolTimingFIFOAndUnmatched(t *testing.T) {
+	var open []openToolCall
+	stats := map[string]*toolTimeStat{}
+	now := time.Now()
+	open = append(open,
+		openToolCall{name: "Bash", start: now.Add(-100 * time.Millisecond)},
+		openToolCall{name: "Grep", start: now.Add(-50 * time.Millisecond)},
+	)
+	if _, ok := closeToolTiming(&open, stats, "Bash", now); !ok {
+		t.Fatal("expected first open call to pair")
+	}
+	d, ok := closeToolTiming(&open, stats, "Grep", now)
+	if !ok {
+		t.Fatal("expected second open call to pair")
+	}
+	if d < 40*time.Millisecond || d > 60*time.Millisecond {
+		t.Fatalf("Grep duration = %v, want ~50ms", d)
+	}
+	if _, ok := closeToolTiming(&open, stats, "Edit", now); ok {
+		t.Fatal("result without open call must not pair")
+	}
+	if stats["Bash"].count != 1 || stats["Grep"].count != 1 {
+		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestSummarizeToolTiming(t *testing.T) {
+	stats := map[string]*toolTimeStat{
+		"Bash": {count: 12, total: 3 * time.Minute, max: 41 * time.Second},
+		"Grep": {count: 20, total: 18 * time.Second, max: 2 * time.Second},
+		"Edit": {count: 5, total: 9 * time.Second, max: 3 * time.Second},
+	}
+	got := summarizeToolTiming(stats, 2)
+	if !strings.Contains(got, "Bashx12(3m0s,max=41s)") {
+		t.Fatalf("slow_tools = %q", got)
+	}
+	if !strings.Contains(got, "Grepx20(18s,max=2s)") {
+		t.Fatalf("slow_tools = %q", got)
+	}
+	if strings.Contains(got, "Edit") {
+		t.Fatalf("top=2 must drop Edit: %q", got)
+	}
+	if summarizeToolTiming(nil, 3) != "" {
+		t.Fatal("empty stats must render empty")
+	}
+}

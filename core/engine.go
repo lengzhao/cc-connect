@@ -4993,6 +4993,79 @@ func queueStageWait(receivedAt, turnStart time.Time) time.Duration {
 	return turnStart.Sub(receivedAt)
 }
 
+// openToolCall is a tool invocation awaiting its result event.
+type openToolCall struct {
+	name  string
+	start time.Time
+}
+
+// toolTimeStat aggregates wall-clock time for one tool name within a turn.
+type toolTimeStat struct {
+	count int
+	total time.Duration
+	max   time.Duration
+}
+
+func (s *toolTimeStat) record(d time.Duration) {
+	s.count++
+	s.total += d
+	if d > s.max {
+		s.max = d
+	}
+}
+
+// closeToolTiming pairs a tool result with the oldest open call, accumulating
+// wall-clock time. Returns the elapsed duration and ok=false when no matching
+// open call exists (result without a preceding use, or already exhausted).
+func closeToolTiming(openTools *[]openToolCall, stats map[string]*toolTimeStat, name string, now time.Time) (time.Duration, bool) {
+	if len(*openTools) == 0 {
+		return 0, false
+	}
+	call := (*openTools)[0]
+	*openTools = (*openTools)[1:]
+	d := now.Sub(call.start)
+	if d < 0 {
+		d = 0
+	}
+	st := stats[call.name]
+	if st == nil {
+		st = &toolTimeStat{}
+		stats[call.name] = st
+	}
+	st.record(d)
+	return d, true
+}
+
+// summarizeToolTiming renders the slowest tools as a compact attribution
+// string, e.g. "Bashx12(3m2s,max=41s) Grep x20(18s)". Returns "" when no tool
+// time was recorded.
+func summarizeToolTiming(stats map[string]*toolTimeStat, top int) string {
+	type row struct {
+		name string
+		stat *toolTimeStat
+	}
+	rows := make([]row, 0, len(stats))
+	for name, st := range stats {
+		rows = append(rows, row{name, st})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].stat.total > rows[j].stat.total })
+	if top > 0 && len(rows) > top {
+		rows = rows[:top]
+	}
+	var b strings.Builder
+	for i, r := range rows {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%sx%d(%s", r.name, r.stat.count, r.stat.total)
+		if r.stat.count > 1 {
+			fmt.Fprintf(&b, ",max=%s", r.stat.max)
+		}
+		b.WriteByte(')')
+	}
+	return b.String()
+}
+
 func (e *Engine) processInteractiveEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, msgID string, turnStart time.Time, stopTypingFn func(), sendDone <-chan error, replyCtx any, stages turnStages, skipHistoryOpt ...bool) {
 	skipHistory := len(skipHistoryOpt) > 0 && skipHistoryOpt[0]
 	if msgID != "" {
@@ -5010,6 +5083,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 	firstEventElapsed := time.Duration(0)
 	stageQueueWait := queueStageWait(stages.receivedAt, turnStart)
 	stageHookElapsed := stages.hookElapsed
+	// Per-tool wall-clock timing: openTools pairs EventToolUse with the next
+	// EventToolResult (FIFO — CLI tools run sequentially; the events carry no
+	// call ID). toolTimeTotal feeds the model-vs-tool split in the turn summary.
+	var openTools []openToolCall
+	toolTimeTotal := time.Duration(0)
+	toolStats := map[string]*toolTimeStat{}
 	var toolSteps []ToolStep
 	var lastRichCardUpdate time.Time
 	var lastRichCardLen int
@@ -5342,6 +5421,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 		case EventToolUse:
 			toolCount++
+			openTools = append(openTools, openToolCall{name: event.ToolName, start: time.Now()})
 			if hasRichCard {
 				// When tool messages are suppressed, skip card updates on tool events.
 				if !e.display.ToolMessages {
@@ -5462,6 +5542,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 
 		case EventToolResult:
+			if d, ok := closeToolTiming(&openTools, toolStats, event.ToolName, time.Now()); ok {
+				toolTimeTotal += d
+			}
 			if e.display.ToolMessages {
 				result := strings.TrimSpace(event.ToolResult)
 				if result == "" {
@@ -5901,6 +5984,16 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			fullResponse = cleanResponse
 
 			turnDuration := time.Since(turnStart)
+			toolWall := toolTimeTotal
+			for _, call := range openTools {
+				// Results never arrived; keep their window out of model time.
+				toolWall += time.Since(call.start)
+			}
+			openTools = nil
+			modelTime := turnDuration - firstEventElapsed - toolWall
+			if modelTime < 0 {
+				modelTime = 0
+			}
 			slog.Info("turn complete",
 				"session", session.ID,
 				"agent_session", session.GetAgentSessionID(),
@@ -5911,6 +6004,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				"queue_wait_ms", stageQueueWait.Milliseconds(),
 				"hook_ms", stageHookElapsed.Milliseconds(),
 				"first_event_ms", firstEventElapsed.Milliseconds(),
+				"tool_time_ms", toolWall.Milliseconds(),
+				"model_ms", modelTime.Milliseconds(),
+				"slow_tools", summarizeToolTiming(toolStats, 3),
 				"input_tokens", event.InputTokens,
 				"output_tokens", event.OutputTokens,
 				"silent", isSilent,
@@ -6211,6 +6307,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				waitStart = time.Now()
 				stageQueueWait = queueStageWait(queued.receivedAt, turnStart)
 				stageHookElapsed = 0
+				openTools = nil
+				toolTimeTotal = 0
+				toolStats = map[string]*toolTimeStat{}
 				// Reassign the local replyCtx parameter to the queued message's
 				// trigger context. state.replyCtx was updated above, but the
 				// function-scope replyCtx is what gets passed to p.Send / p.Reply
@@ -6301,6 +6400,15 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			state.mu.Lock()
 			state.eventsNeedResync = true
 			state.mu.Unlock()
+			toolWall := toolTimeTotal
+			for _, call := range openTools {
+				toolWall += time.Since(call.start)
+			}
+			openTools = nil
+			modelTime := time.Since(turnStart) - firstEventElapsed - toolWall
+			if modelTime < 0 {
+				modelTime = 0
+			}
 			slog.Warn("turn failed",
 				"session", session.ID,
 				"msg_id", msgID,
@@ -6308,6 +6416,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				"queue_wait_ms", stageQueueWait.Milliseconds(),
 				"hook_ms", stageHookElapsed.Milliseconds(),
 				"first_event_ms", firstEventElapsed.Milliseconds(),
+				"tool_time_ms", toolWall.Milliseconds(),
+				"model_ms", modelTime.Milliseconds(),
+				"slow_tools", summarizeToolTiming(toolStats, 3),
 				"tools", toolCount,
 				"error", event.Error,
 			)
