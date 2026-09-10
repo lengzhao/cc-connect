@@ -53,6 +53,7 @@ type Agent struct {
 	activeIdx        int // -1 = no provider set
 	sessionEnv       []string
 	routerURL        string   // Claude Code Router URL (e.g., "http://127.0.0.1:3456")
+	includePartial   bool     // stream thinking deltas via --include-partial-messages (default on; opt out with include_partial_messages=false)
 	routerAPIKey     string   // Claude Code Router API key (optional)
 	systemPrompt     string   // Custom system prompt to pass to Claude CLI
 	pluginDirs       []string // Plugin directories to load via --plugin-dir (repeatable)
@@ -206,6 +207,14 @@ func New(opts map[string]any) (core.Agent, error) {
 	routerURL, _ := opts["router_url"].(string)
 	routerAPIKey, _ := opts["router_api_key"].(string)
 
+	// Stream thinking deltas while the model generates (default on). The CLI
+	// emits raw stream_event deltas; the session adapter re-emits them as
+	// replace-semantics thinking events at a throttled rate.
+	includePartial := true
+	if v, ok := opts["include_partial_messages"].(bool); ok {
+		includePartial = v
+	}
+
 	// run_as_user: optional OS-user isolation. Injected into opts from
 	// the project-level config field by cmd/cc-connect/main.go.
 	spawnOpts := core.SpawnOptions{}
@@ -270,6 +279,7 @@ func New(opts map[string]any) (core.Agent, error) {
 		configEnv:        configEnv,
 		activeIdx:        -1,
 		routerURL:        routerURL,
+		includePartial:   includePartial,
 		routerAPIKey:     routerAPIKey,
 		spawnOpts:        spawnOpts,
 		ccDataDir:        ccDataDir,
@@ -588,7 +598,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	disableVerbose := a.routerURL != ""
 	a.mu.Unlock()
 
-	return newClaudeSession(ctx, workDir, a.cmd, a.cliExtraArgs, a.cmdArgsFlag, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt, appendSystemPromptFiles, tools, disTools, pluginDirs, extraEnv, platformPrompt, disableVerbose, a.spawnOpts, maxTok, a.ccDataDir)
+	return newClaudeSession(ctx, workDir, a.cmd, a.cliExtraArgs, a.cmdArgsFlag, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt, appendSystemPromptFiles, tools, disTools, pluginDirs, extraEnv, platformPrompt, disableVerbose, a.includePartial, a.spawnOpts, maxTok, a.ccDataDir)
 }
 
 func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, error) {

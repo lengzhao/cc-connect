@@ -875,3 +875,74 @@ func TestHandleResultNoUsageWithoutAssistantStaysZero(t *testing.T) {
 		t.Fatalf("usage = %d/%d/%d/%d, want all zero", evt.InputTokens, evt.OutputTokens, evt.CacheReadInputTokens, evt.CacheCreationInputTokens)
 	}
 }
+
+// Streaming thinking deltas must surface as replace-semantics EventThinking
+// with the accumulated text, throttled to one event per window, and reset on
+// each new thinking block.
+func TestHandleStreamEventStreamsThinkingDeltas(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cs := &claudeSession{
+		events: make(chan core.Event, 8),
+		ctx:    ctx,
+	}
+	cs.sessionID.Store("test-session")
+	cs.alive.Store(true)
+
+	streamEvent := func(index int, evType string, delta map[string]any, block map[string]any) {
+		ev := map[string]any{"type": evType, "index": float64(index)}
+		if delta != nil {
+			ev["delta"] = delta
+		}
+		if block != nil {
+			ev["content_block"] = block
+		}
+		cs.handleStreamEvent(map[string]any{"type": "stream_event", "event": ev})
+	}
+
+	// First delta on a fresh throttle window emits immediately.
+	streamEvent(0, "content_block_start", nil, map[string]any{"type": "thinking"})
+	streamEvent(0, "content_block_delta", map[string]any{"type": "thinking_delta", "thinking": "思考一半"}, nil)
+
+	evt := <-cs.events
+	if evt.Type != core.EventThinking || evt.Content != "思考一半" {
+		t.Fatalf("first delta = %v %q, want thinking \"思考一半\"", evt.Type, evt.Content)
+	}
+
+	// Second delta inside the throttle window is held back (no event yet).
+	streamEvent(0, "content_block_delta", map[string]any{"type": "thinking_delta", "thinking": "，后半段"}, nil)
+	select {
+	case evt := <-cs.events:
+		t.Fatalf("throttled delta leaked: %+v", evt)
+	default:
+	}
+
+	// Block stop flushes the accumulated tail.
+	streamEvent(0, "content_block_stop", nil, nil)
+	evt = <-cs.events
+	if evt.Type != core.EventThinking || evt.Content != "思考一半，后半段" {
+		t.Fatalf("stop flush = %v %q, want full accumulated thinking", evt.Type, evt.Content)
+	}
+
+	// A new thinking block resets the accumulator. The throttle window is
+	// advanced past first so the delta after the reset emits immediately.
+	cs.streamMu.Lock()
+	cs.lastStreamEmit = time.Time{}
+	cs.streamMu.Unlock()
+	streamEvent(1, "content_block_start", nil, map[string]any{"type": "thinking"})
+	streamEvent(1, "content_block_delta", map[string]any{"type": "thinking_delta", "thinking": "新的块"}, nil)
+	evt = <-cs.events
+	if evt.Content != "新的块" {
+		t.Fatalf("after reset = %q, want \"新的块\"", evt.Content)
+	}
+
+	// Text deltas are ignored: no events, no accumulation into thinking.
+	streamEvent(2, "content_block_start", nil, map[string]any{"type": "text"})
+	streamEvent(2, "content_block_delta", map[string]any{"type": "text_delta", "text": "visible text"}, nil)
+	select {
+	case evt := <-cs.events:
+		t.Fatalf("text delta leaked into thinking stream: %+v", evt)
+	default:
+	}
+}

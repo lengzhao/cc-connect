@@ -44,6 +44,14 @@ type claudeSession struct {
 	done            chan struct{}
 	alive           atomic.Bool
 
+	// Streaming thinking accumulator (--include-partial-messages): deltas
+	// append into streamThinking and are re-emitted as replace-semantics
+	// EventThinking at most once per throttle window.
+	streamMu       sync.Mutex
+	streamThinking strings.Builder
+	lastStreamEmit time.Time
+	blockTypes     map[int]string // content_block index -> block type
+
 	// activeModel stores the model id reported by the CLI's init event (e.g.
 	// "claude-opus-4-7[1m]"). It may be empty if the init event hasn't
 	// carried a model field yet; callers should fall back to the Agent's
@@ -289,7 +297,7 @@ func expandRuntimePromptFilePath(configuredPath string) (string, error) {
 	return filepath.Clean(configuredPath), nil
 }
 
-func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cmdArgsFlag string, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt string, appendSystemPromptFiles, allowedTools, disallowedTools []string, pluginDirs []string, extraEnv []string, platformPrompt string, disableVerbose bool, spawnOpts core.SpawnOptions, maxContextTokens int, ccDataDir string) (*claudeSession, error) {
+func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs []string, cmdArgsFlag string, model, effort, sessionID, mode, systemPrompt, appendSystemPrompt string, appendSystemPromptFiles, allowedTools, disallowedTools []string, pluginDirs []string, extraEnv []string, platformPrompt string, disableVerbose bool, includePartialMessages bool, spawnOpts core.SpawnOptions, maxContextTokens int, ccDataDir string) (*claudeSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	// Claude Code rejects bypassPermissions when running as root.
@@ -313,6 +321,14 @@ func newClaudeSession(ctx context.Context, workDir, cliBin string, cliExtraArgs 
 	}
 	if !disableVerbose {
 		innerArgs = append(innerArgs, "--verbose")
+	}
+	// Stream thinking/text deltas as they are generated instead of block-at-
+	// a-time. The adapter consumes stream_event thinking deltas and re-emits
+	// them as replace-semantics EventThinking, so downstream consumers are
+	// unchanged; text deltas are intentionally ignored (the complete
+	// assistant message still feeds final assembly).
+	if includePartialMessages {
+		innerArgs = append(innerArgs, "--include-partial-messages")
 	}
 
 	if mode != "" && mode != "default" {
@@ -654,6 +670,8 @@ func (cs *claudeSession) handleReadLoopLine(line string) {
 		cs.handleSystem(raw)
 	case "assistant":
 		cs.handleAssistant(raw)
+	case "stream_event":
+		cs.handleStreamEvent(raw)
 	case "user":
 		cs.handleUser(raw)
 	case "result":
@@ -725,6 +743,13 @@ func parseClaudeUsage(usage map[string]any) (input, output, cacheCreation, cache
 }
 
 func (cs *claudeSession) handleAssistant(raw map[string]any) {
+	// The complete assistant message supersedes any streamed partials for
+	// this block; reset the accumulator so the next thinking block starts
+	// from an empty buffer.
+	cs.streamMu.Lock()
+	cs.streamThinking.Reset()
+	cs.streamMu.Unlock()
+
 	msg, ok := raw["message"].(map[string]any)
 	if !ok {
 		return
@@ -951,6 +976,100 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 	case cs.events <- evt:
 	case <-cs.ctx.Done():
 		return
+	}
+}
+
+// streamThinkingThrottle bounds how often streamed thinking deltas are
+// re-emitted downstream. Downstream consumers treat EventThinking as
+// replace-semantics (full text so far), so throttling only affects
+// latency of the visible progress, never correctness.
+const streamThinkingThrottle = 300 * time.Millisecond
+
+// handleStreamEvent consumes --include-partial-messages raw provider
+// streaming events. Only thinking deltas are surfaced today: thinking is
+// the long silent phase before the first visible output, and replace
+// semantics keep the existing block-level consumers unchanged. Text
+// deltas are deliberately ignored -- the complete assistant message still
+// feeds final text assembly, and streaming it would duplicate content.
+func (cs *claudeSession) handleStreamEvent(raw map[string]any) {
+	ev, _ := raw["event"].(map[string]any)
+	if ev == nil {
+		return
+	}
+	switch ev["type"] {
+	case "content_block_start":
+		cs.streamMu.Lock()
+		if cs.blockTypes == nil {
+			cs.blockTypes = map[int]string{}
+		}
+		index := 0
+		if v, ok := ev["index"].(float64); ok {
+			index = int(v)
+		}
+		blockType := ""
+		if cb, ok := ev["content_block"].(map[string]any); ok {
+			blockType, _ = cb["type"].(string)
+		}
+		cs.blockTypes[index] = blockType
+		if blockType == "thinking" {
+			cs.streamThinking.Reset()
+		}
+		cs.streamMu.Unlock()
+	case "content_block_delta":
+		cs.streamMu.Lock()
+		index := 0
+		if v, ok := ev["index"].(float64); ok {
+			index = int(v)
+		}
+		if cs.blockTypes[index] != "thinking" {
+			cs.streamMu.Unlock()
+			return
+		}
+		delta, _ := ev["delta"].(map[string]any)
+		if delta == nil || delta["type"] != "thinking_delta" {
+			cs.streamMu.Unlock()
+			return
+		}
+		chunk, _ := delta["thinking"].(string)
+		if chunk != "" {
+			cs.streamThinking.WriteString(chunk)
+		}
+		accumulated := cs.streamThinking.String()
+		due := time.Since(cs.lastStreamEmit) >= streamThinkingThrottle
+		if due {
+			cs.lastStreamEmit = time.Now()
+		}
+		cs.streamMu.Unlock()
+		if !due || accumulated == "" {
+			return
+		}
+		cs.emitStreamingThinking(accumulated)
+	case "content_block_stop":
+		cs.streamMu.Lock()
+		index := 0
+		if v, ok := ev["index"].(float64); ok {
+			index = int(v)
+		}
+		isThinking := cs.blockTypes[index] == "thinking"
+		cs.streamMu.Unlock()
+		if !isThinking {
+			return
+		}
+		cs.streamMu.Lock()
+		accumulated := cs.streamThinking.String()
+		cs.lastStreamEmit = time.Now()
+		cs.streamMu.Unlock()
+		if accumulated != "" {
+			cs.emitStreamingThinking(accumulated)
+		}
+	}
+}
+
+func (cs *claudeSession) emitStreamingThinking(text string) {
+	evt := core.Event{Type: core.EventThinking, Content: text}
+	select {
+	case cs.events <- evt:
+	case <-cs.ctx.Done():
 	}
 }
 
