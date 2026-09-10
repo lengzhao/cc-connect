@@ -66,6 +66,9 @@ func (e *Engine) GetBridgePublishedCommands() []bridgePublishedCommand {
 		if len(c.names) == 0 || disabledCmds[c.id] {
 			continue
 		}
+		if c.id == "timer" && !TimerFeatureEnabled() {
+			continue
+		}
 		if seen[c.id] {
 			continue
 		}

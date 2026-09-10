@@ -147,6 +147,49 @@ func TestParseUserQuestions_MultiSelect(t *testing.T) {
 	}
 }
 
+func TestNormalizeEffort(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"none", "none"},
+		{"NONE", "none"},
+		{"off", "none"},
+		{"low", "low"},
+		{"high", "high"},
+		{"", ""},
+		{"unknown", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := normalizeEffort(tt.input); got != tt.want {
+				t.Fatalf("normalizeEffort(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveReasoningEffort(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured string
+		model      string
+		want       string
+	}{
+		{name: "explicit none", configured: "none", model: "gpt-5.6-terra", want: "none"},
+		{name: "explicit high", configured: "high", model: "gpt-5.6-terra", want: "high"},
+		{name: "terra default", configured: "", model: "gpt-5.6-terra", want: "none"},
+		{name: "sonnet unset", configured: "", model: "claude-sonnet-5", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveReasoningEffort(tt.configured, tt.model); got != tt.want {
+				t.Fatalf("resolveReasoningEffort(%q, %q) = %q, want %q", tt.configured, tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizePermissionMode(t *testing.T) {
 	tests := []struct {
 		input string

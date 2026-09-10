@@ -1236,7 +1236,7 @@ func (e *Engine) SetAdminFrom(adminFrom string) {
 	shellDisabled := e.disabledCmds["shell"]
 	e.userRolesMu.Unlock()
 	if af == "" && !shellDisabled {
-		slog.Warn("admin_from is not set — privileged commands (/shell, /show, /dir, /restart, /upgrade) are blocked. "+
+		slog.Warn("admin_from is not set — privileged commands (/shell, /send, /show, /dir, /restart, /upgrade) are blocked. "+
 			"Set admin_from in config to enable them, or use disabled_commands to hide them.",
 			"project", e.name)
 	}
@@ -1245,6 +1245,7 @@ func (e *Engine) SetAdminFrom(adminFrom string) {
 // privilegedCommands are commands that require admin_from authorization.
 var privilegedCommands = map[string]bool{
 	"shell":   true,
+	"send":    true,
 	"show":    true,
 	"dir":     true,
 	"restart": true,
@@ -6520,6 +6521,7 @@ var builtinCommands = []struct {
 	{[]string{"bind"}, "bind"},
 	{[]string{"search", "find"}, "search"},
 	{[]string{"shell", "sh", "exec", "run"}, "shell"},
+	{[]string{"send"}, "send"},
 	{[]string{"show"}, "show"},
 	{[]string{"dir", "cd", "chdir", "workdir"}, "dir"},
 	{[]string{"tts"}, "tts"},
@@ -6698,6 +6700,15 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		return true
 	}
 
+	if cmdID == "timer" && !TimerFeatureEnabled() {
+		slog.Info("audit: command_blocked",
+			"user_id", msg.UserID, "platform", msg.Platform,
+			"project", e.name, "command", cmdID, "reason", "feature_disabled")
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgTimerNotAvailable))
+		e.notifyProcessingEnd(p, msg.ReplyCtx, ProcessingEndEvent{Kind: ProcessingEndCommand})
+		return true
+	}
+
 	if cmdID != "" && privilegedCommands[cmdID] && !e.isAdmin(msg.UserID) {
 		slog.Info("audit: command_blocked",
 			"user_id", msg.UserID, "platform", msg.Platform,
@@ -6789,6 +6800,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdSearch(p, msg, args)
 	case "shell":
 		e.cmdShell(p, msg, raw)
+	case "send":
+		e.cmdSend(p, msg, args)
 	case "diff":
 		e.cmdDiff(p, msg, raw)
 	case "show":
@@ -8251,6 +8264,42 @@ func updaterFor(p Platform) MessageUpdater {
 	return p.(MessageUpdater)
 }
 
+// outboundSessionKeyForChat builds a session key for proactive outbound delivery
+// to a chat/channel on the same platform as the caller. chatID is the
+// platform-native group/chat identifier (e.g. Feishu oc_xxx).
+func outboundSessionKeyForChat(platform, chatID, userID string) string {
+	platform = strings.TrimSpace(platform)
+	chatID = strings.TrimSpace(chatID)
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return platform + ":" + chatID
+	}
+	return platform + ":" + chatID + ":" + userID
+}
+
+func (e *Engine) cmdSend(p Platform, msg *Message, args []string) {
+	if len(args) < 2 {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgSendUsage))
+		return
+	}
+	chatID := strings.TrimSpace(args[0])
+	body := strings.TrimSpace(strings.Join(args[1:], " "))
+	if chatID == "" || body == "" {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgSendUsage))
+		return
+	}
+
+	sessionKey := outboundSessionKeyForChat(msg.Platform, chatID, msg.UserID)
+	// Deliver the body literally: no markdown/card rendering on the target platform.
+	if err := e.SendToSessionWithOptions(sessionKey, body, nil, nil, SendOptions{PlainText: true}); err != nil {
+		slog.Error("send command: outbound delivery failed",
+			"session_key", sessionKey, "user", msg.UserID, "error", err)
+		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgSendFailed, err.Error()))
+		return
+	}
+	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgSendOK))
+}
+
 func (e *Engine) cmdShell(p Platform, msg *Message, raw string) {
 	// Strip the command prefix ("/shell ", "/sh ", "/exec ", "/run ")
 	shellCmd := raw
@@ -9465,9 +9514,17 @@ func langDisplayName(lang Language) string {
 	}
 }
 
+func (e *Engine) helpText() string {
+	text := e.i18n.T(MsgHelp)
+	if !TimerFeatureEnabled() {
+		text = strings.Replace(text, e.i18n.T(MsgHelpTimerLine), "", 1)
+	}
+	return text
+}
+
 func (e *Engine) cmdHelp(p Platform, msg *Message, args []string) {
 	if !supportsCards(p) {
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgHelp))
+		e.reply(p, msg.ReplyCtx, e.helpText())
 		return
 	}
 	groupKey := defaultHelpGroup
@@ -9547,6 +9604,7 @@ func helpCardGroups() []helpCardGroup {
 			titleKey: MsgHelpToolsSection,
 			items: []helpCardItem{
 				{command: "/shell", action: "cmd:/shell"},
+				{command: "/send", action: "cmd:/send"},
 				{command: "/show", action: "cmd:/show"},
 				{command: "/cron", action: "nav:/cron"},
 				{command: "/timer", action: "nav:/timer"},
@@ -9637,6 +9695,9 @@ func (e *Engine) renderHelpGroupCard(groupKey string) *Card {
 		cb.ButtonsEqual(row...)
 	}
 	for _, item := range current.items {
+		if item.command == "/timer" && !TimerFeatureEnabled() {
+			continue
+		}
 		cb.ListItem(commandText(item.command), "▶", item.action)
 	}
 	if current.key == defaultHelpGroup {
@@ -9712,6 +9773,9 @@ func (e *Engine) GetAllCommands() []BotCommandInfo {
 
 		// Skip disabled commands
 		if disabledCmds[c.id] {
+			continue
+		}
+		if c.id == "timer" && !TimerFeatureEnabled() {
 			continue
 		}
 
@@ -11212,15 +11276,30 @@ func (e *Engine) SendToSession(sessionKey, message string) error {
 	return e.SendToSessionWithAttachments(sessionKey, message, nil, nil, nil, false)
 }
 
+func sendPlatformMessage(ctx context.Context, p Platform, replyCtx any, message string, opts SendOptions) error {
+	if opts.PlainText {
+		if sender, ok := p.(PlainTextSender); ok {
+			return sender.SendPlain(ctx, replyCtx, message)
+		}
+	}
+	if len(opts.AtUsers) > 0 || opts.AtAll {
+		if atSender, ok := p.(AtMentionSender); ok {
+			return atSender.ReplyWithAt(ctx, replyCtx, message, opts.AtUsers, opts.AtAll)
+		}
+	}
+	return p.Send(ctx, replyCtx, message)
+}
+
 // SendOptions controls optional behavior for external send callers.
 type SendOptions struct {
-	WorkDir string
-	AtUsers []string
-	AtAll   bool
+	WorkDir   string
+	AtUsers   []string
+	AtAll     bool
+	PlainText bool // deliver message literally, without markdown rendering
 }
 
 func (e *Engine) SendToSessionWithAttachments(sessionKey, message string, images []ImageAttachment, files []FileAttachment, atUsers []string, atAll bool) error {
-	return e.SendToSessionWithOptions(sessionKey, message, images, files, SendOptions{AtUsers: atUsers, AtAll: atAll})
+	return e.SendToSessionWithOptions(sessionKey, message, images, files, SendOptions{AtUsers: atUsers, AtAll: atAll, PlainText: true})
 }
 
 func (e *Engine) SendToSessionWithOptions(sessionKey, message string, images []ImageAttachment, files []FileAttachment, opts SendOptions) error {
@@ -11268,21 +11347,8 @@ func (e *Engine) SendToSessionWithOptions(sessionKey, message string, images []I
 		if err := e.waitOutgoing(p); err != nil {
 			return err
 		}
-		// Use AtMentionSender when @users specified and platform supports it
-		if len(opts.AtUsers) > 0 || opts.AtAll {
-			if atSender, ok := p.(AtMentionSender); ok {
-				if err := atSender.ReplyWithAt(e.ctx, replyCtx, message, opts.AtUsers, opts.AtAll); err != nil {
-					return err
-				}
-			} else {
-				if err := p.Send(e.ctx, replyCtx, message); err != nil {
-					return err
-				}
-			}
-		} else {
-			if err := p.Send(e.ctx, replyCtx, message); err != nil {
-				return err
-			}
+		if err := sendPlatformMessage(e.ctx, p, replyCtx, message, opts); err != nil {
+			return err
 		}
 		if state != nil {
 			state.mu.Lock()
@@ -11365,18 +11431,8 @@ func (e *Engine) SendToSessionInWorkDir(sessionKey, message string, images []Ima
 		if err := e.waitOutgoing(target.platform); err != nil {
 			return err
 		}
-		if len(atUsers) > 0 || atAll {
-			if atSender, ok := target.platform.(AtMentionSender); ok {
-				if err := atSender.ReplyWithAt(e.ctx, target.replyCtx, message, atUsers, atAll); err != nil {
-					return err
-				}
-			} else if err := target.platform.Send(e.ctx, target.replyCtx, message); err != nil {
-				return err
-			}
-		} else {
-			if err := target.platform.Send(e.ctx, target.replyCtx, message); err != nil {
-				return err
-			}
+		if err := sendPlatformMessage(e.ctx, target.platform, target.replyCtx, message, SendOptions{AtUsers: atUsers, AtAll: atAll, PlainText: true}); err != nil {
+			return err
 		}
 		if target.state != nil {
 			target.state.mu.Lock()
@@ -12257,6 +12313,9 @@ func (e *Engine) handleCardNav(action string, sessionKey string) *Card {
 	case "/cron":
 		return e.renderCronCard(sessionKey, extractUserID(sessionKey))
 	case "/timer":
+		if !TimerFeatureEnabled() {
+			return e.simpleCard(e.i18n.T(MsgCardTitleTimer), "blue", e.i18n.T(MsgTimerNotAvailable))
+		}
 		return e.renderTimerCard(sessionKey, extractUserID(sessionKey))
 	case "/heartbeat":
 		return e.renderHeartbeatCard()
@@ -13751,7 +13810,7 @@ func (e *Engine) renderCronCard(sessionKey string, userID string) *Card {
 
 	jobs := e.cronScheduler.Store().ListBySessionKey(sessionKey)
 	if len(jobs) == 0 {
-		return e.simpleCard(e.i18n.T(MsgCardTitleCron), "orange", e.i18n.T(MsgCronEmpty))
+		return e.simpleCard(e.i18n.T(MsgCardTitleCron), "orange", e.cronEmptyText())
 	}
 
 	lang := e.i18n.CurrentLang()
@@ -14264,7 +14323,7 @@ func (e *Engine) cmdCronAddExec(p Platform, msg *Message, args []string) {
 func (e *Engine) cmdCronList(p Platform, msg *Message) {
 	jobs := e.cronScheduler.Store().ListBySessionKey(msg.SessionKey)
 	if len(jobs) == 0 {
-		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronEmpty))
+		e.reply(p, msg.ReplyCtx, e.cronEmptyText())
 		return
 	}
 
@@ -14430,6 +14489,13 @@ func (e *Engine) cmdCronSetup(p Platform, msg *Message) {
 	case setupOK:
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgCronSetupOK), baseName))
 	}
+}
+
+func (e *Engine) cronEmptyText() string {
+	if TimerFeatureEnabled() {
+		return e.i18n.T(MsgCronEmpty)
+	}
+	return e.i18n.T(MsgCronEmptyNoTimer)
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -14898,8 +14964,9 @@ func (e *Engine) executeShellCommand(p Platform, msg *Message, cmd *CustomComman
 		"work_dir", workDir,
 	)
 
-	// Expand placeholders in exec command
-	execCmd := ExpandPrompt(cmd.Exec, args)
+	// Expand placeholders in exec command. Values are shell-quoted so
+	// multi-line payloads survive sh -c parsing.
+	execCmd := ExpandExecPrompt(cmd.Exec, args)
 
 	defer e.notifyProcessingEnd(p, msg.ReplyCtx, ProcessingEndEvent{Kind: ProcessingEndCommand})
 	_ = e.runShellWithProgressEnv(p, msg.ReplyCtx, execCmd, workDir, 60*time.Second, 4000, extraEnv)

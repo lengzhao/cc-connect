@@ -1126,11 +1126,17 @@ func TestEngineSendToSessionWithAttachments_MultiWorkspaceRawSessionKey(t *testi
 type stubProactiveSendPlatform struct {
 	stubMediaPlatform
 	reconstructKey string
+	usedPlainSend  bool
 }
 
 func (p *stubProactiveSendPlatform) ReconstructReplyCtx(sessionKey string) (any, error) {
 	p.reconstructKey = sessionKey
 	return "proactive-rctx", nil
+}
+
+func (p *stubProactiveSendPlatform) SendPlain(ctx context.Context, rctx any, content string) error {
+	p.usedPlainSend = true
+	return p.Send(ctx, rctx, content)
 }
 
 func TestEngineSendToSessionWithAttachments_WorkspacePrefixedSessionKey(t *testing.T) {
@@ -1149,6 +1155,110 @@ func TestEngineSendToSessionWithAttachments_WorkspacePrefixedSessionKey(t *testi
 	}
 	if got := p.getSent(); len(got) != 1 || got[0] != "delivery ready" {
 		t.Fatalf("sent text = %#v, want one message", got)
+	}
+}
+
+func TestEngineCmdSend_DeliversMultilineToTargetChat(t *testing.T) {
+	p := &stubProactiveSendPlatform{
+		stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}},
+	}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("admin1")
+
+	wantBody := "message1\nmessage2\nmessage3"
+	msg := &Message{
+		Platform:   "feishu",
+		UserID:     "admin1",
+		SessionKey: "feishu:source:admin1",
+		ReplyCtx:   "reply-ctx",
+	}
+	raw := "/send oc_target message1\nmessage2\nmessage3"
+
+	if !e.handleCommand(p, msg, raw) {
+		t.Fatal("handleCommand returned false for /send")
+	}
+	if p.reconstructKey != "feishu:oc_target:admin1" {
+		t.Fatalf("ReconstructReplyCtx key = %q, want feishu:oc_target:admin1", p.reconstructKey)
+	}
+	sent := p.getSent()
+	if len(sent) != 2 {
+		t.Fatalf("sent = %#v, want outbound + ack", sent)
+	}
+	if sent[0] != wantBody {
+		t.Fatalf("outbound body = %q, want %q", sent[0], wantBody)
+	}
+	if !strings.Contains(sent[1], "sent") {
+		t.Fatalf("ack = %q, want success message", sent[1])
+	}
+}
+
+func TestEngineCmdSend_UsesPlainTextDelivery(t *testing.T) {
+	p := &stubProactiveSendPlatform{
+		stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}},
+	}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("admin1")
+
+	msg := &Message{
+		Platform:   "feishu",
+		UserID:     "admin1",
+		SessionKey: "feishu:source:admin1",
+		ReplyCtx:   "reply-ctx",
+	}
+	if !e.handleCommand(p, msg, "/send oc_target - item one\n- item two") {
+		t.Fatal("handleCommand returned false for /send")
+	}
+	if !p.usedPlainSend {
+		t.Fatal("cmdSend should deliver via PlainTextSender")
+	}
+}
+
+func TestEngineCmdSend_RequiresAdmin(t *testing.T) {
+	p := &stubProactiveSendPlatform{
+		stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}},
+	}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("admin1")
+
+	msg := &Message{
+		Platform: "feishu",
+		UserID:   "user2",
+		ReplyCtx: "reply-ctx",
+	}
+	e.handleCommand(p, msg, "/send oc_target hello")
+
+	sent := p.getSent()
+	if len(sent) != 1 || !strings.Contains(sent[0], "admin") {
+		t.Fatalf("non-admin should be blocked, got: %#v", sent)
+	}
+}
+
+func TestEngineCmdSend_UsageWhenTooFewArgs(t *testing.T) {
+	p := &stubProactiveSendPlatform{
+		stubMediaPlatform: stubMediaPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}},
+	}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	e.SetAdminFrom("admin1")
+
+	msg := &Message{
+		Platform: "feishu",
+		UserID:   "admin1",
+		ReplyCtx: "reply-ctx",
+	}
+	e.handleCommand(p, msg, "/send oc_target")
+
+	sent := p.getSent()
+	if len(sent) != 1 || !strings.Contains(sent[0], "/send") {
+		t.Fatalf("expected usage reply, got: %#v", sent)
+	}
+}
+
+func TestOutboundSessionKeyForChat(t *testing.T) {
+	if got := outboundSessionKeyForChat("feishu", "oc_1", "u1"); got != "feishu:oc_1:u1" {
+		t.Fatalf("got %q", got)
+	}
+	if got := outboundSessionKeyForChat("feishu", "oc_1", ""); got != "feishu:oc_1" {
+		t.Fatalf("got %q", got)
 	}
 }
 
@@ -4146,7 +4256,7 @@ func TestCmdHelp_UsesLegacyTextOnPlatformWithoutCardSupport(t *testing.T) {
 	if len(p.sent) != 1 {
 		t.Fatalf("sent messages = %d, want 1", len(p.sent))
 	}
-	if got := p.sent[0]; got != e.i18n.T(MsgHelp) {
+	if got := p.sent[0]; got != e.helpText() {
 		t.Fatalf("help text = %q, want legacy help text", got)
 	}
 	if strings.Contains(p.sent[0], "cc-connect 帮助") {
@@ -4154,6 +4264,27 @@ func TestCmdHelp_UsesLegacyTextOnPlatformWithoutCardSupport(t *testing.T) {
 	}
 	if !strings.Contains(p.sent[0], "/cron [add|list|exec|del|enable|disable]") {
 		t.Fatalf("help text = %q, want explicit cron exec usage", p.sent[0])
+	}
+}
+
+func TestCmdHelp_OmitsTimerWhenFeatureDisabled(t *testing.T) {
+	SetTimerFeatureEnabled(false)
+	defer SetTimerFeatureEnabled(true)
+
+	p := &stubPlatformEngine{n: "plain"}
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	msg := &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}
+
+	e.cmdHelp(p, msg, nil)
+
+	if len(p.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(p.sent))
+	}
+	if strings.Contains(p.sent[0], "/timer") {
+		t.Fatalf("help text should not mention /timer when feature disabled: %q", p.sent[0])
+	}
+	if !strings.Contains(p.sent[0], "/cron") {
+		t.Fatalf("help text should still mention /cron: %q", p.sent[0])
 	}
 }
 

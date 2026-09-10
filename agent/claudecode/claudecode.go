@@ -314,6 +314,8 @@ func normalizeEffort(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "":
 		return ""
+	case "none", "off", "disabled":
+		return "none"
 	case "low":
 		return "low"
 	case "medium", "med":
@@ -325,6 +327,25 @@ func normalizeEffort(raw string) string {
 	default:
 		return ""
 	}
+}
+
+// modelRequiresNoneReasoningEffort reports models that cannot combine
+// reasoning_effort with function tools on ChatAI /v1/chat/completions.
+func modelRequiresNoneReasoningEffort(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(m, "gpt-5.6-terra")
+}
+
+// resolveReasoningEffort returns the configured effort when set; otherwise
+// defaults to "none" for models that require it so MCP/function tools work.
+func resolveReasoningEffort(configured, model string) string {
+	if configured != "" {
+		return configured
+	}
+	if modelRequiresNoneReasoningEffort(model) {
+		return "none"
+	}
+	return ""
 }
 
 // normalizePermissionMode maps user-friendly aliases to Claude CLI values.
@@ -390,7 +411,7 @@ func (a *Agent) GetReasoningEffort() string {
 }
 
 func (a *Agent) AvailableReasoningEfforts() []string {
-	return []string{"low", "medium", "high", "max"}
+	return []string{"none", "low", "medium", "high", "max"}
 }
 
 func (a *Agent) configuredModels() []core.ModelOption {
@@ -537,7 +558,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	copy(disTools, a.disallowedTools)
 	maxTok := a.maxContextTokens
 	model := a.model
-	effort := a.reasoningEffort
+	effort := resolveReasoningEffort(a.reasoningEffort, model)
 	workDir := a.workDir
 	mode := a.mode
 	pluginDirs := make([]string, len(a.pluginDirs))
@@ -1137,12 +1158,16 @@ func (a *Agent) ContextResources() ([]core.ContextResource, error) {
 		}
 	}
 
-	absWorkDir, err := filepath.Abs(workDir)
+	sharedFilesRoot := strings.TrimSpace(os.Getenv("AGENT_WORK_DIR"))
+	if sharedFilesRoot == "" {
+		sharedFilesRoot = workDir
+	}
+	absSharedFilesRoot, err := filepath.Abs(sharedFilesRoot)
 	if err != nil {
 		return nil, err
 	}
 	for _, kind := range []string{"memory", "knowledge"} {
-		root := filepath.Join(absWorkDir, "files", kind)
+		root := filepath.Join(absSharedFilesRoot, "files", kind)
 		walkErr := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if errors.Is(walkErr, os.ErrNotExist) {
 				return nil
@@ -1156,7 +1181,7 @@ func (a *Agent) ContextResources() ([]core.ContextResource, error) {
 			if !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
 				return nil
 			}
-			rel, err := filepath.Rel(absWorkDir, path)
+			rel, err := filepath.Rel(absSharedFilesRoot, path)
 			if err != nil {
 				return err
 			}

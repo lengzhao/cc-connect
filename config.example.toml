@@ -335,6 +335,18 @@ level = "info" # debug, info, warn, error
 #                            # 定时任务默认会话模式："reuse"（复用活跃会话）或 "new_per_run"（每次新建会话）
 
 # =============================================================================
+# One-Shot Timers / 一次性定时器
+# =============================================================================
+# Controls one-shot timer jobs (delay reminders, fire once then archive).
+# 控制一次性定时器（延迟提醒，触发后自动归档）。
+#
+# [timer]
+# enabled = true             # Enable /timer and cc-connect timer (default: true)
+#                            # 启用 /timer 与 cc-connect timer（默认 true）
+# enabled = false            # Hide from agents and disable user commands/API
+#                            # 对 agent 隐藏，并禁用用户命令与 API
+
+# =============================================================================
 # Webhook / 外部 Webhook 端点
 # =============================================================================
 # Exposes an HTTP endpoint for external systems (git hooks, CI/CD, file watchers)
@@ -764,8 +776,8 @@ name = "my-backend"
 # shell = "/bin/fish"                        # Per-project shell override / 项目级 shell 覆盖
 # shell_profile = "source ~/.config/fish/config.fish"  # Per-project shell profile / 项目级 shell profile
 #
-# admin_from controls who can run privileged commands (/dir, /shell, /restart, /upgrade, /commands addexec, /cron addexec).
-# admin_from 控制谁可以执行特权命令（/dir, /shell, /restart, /upgrade, /commands addexec, /cron addexec）。
+# admin_from controls who can run privileged commands (/dir, /shell, /send, /restart, /upgrade, /commands addexec, /cron addexec).
+# admin_from 控制谁可以执行特权命令（/dir, /shell, /send, /restart, /upgrade, /commands addexec, /cron addexec）。
 #
 # admin_from must be defined at the [[projects]] level.
 # Do NOT put it under [projects.platforms.options], or it will be ignored.
@@ -869,7 +881,8 @@ mode = "default" # "default" | "acceptEdits" (edit) | "plan" | "auto" | "bypassP
 
 # Optional: set reasoning effort level (passed to claude --effort)
 # 可选：设置推理强度等级（传递给 claude --effort）
-# reasoning_effort = "high"  # "low" | "medium" | "high" | "max"
+# gpt-5.6-terra + MCP/function tools on ChatAI /v1/chat/completions requires "none".
+# reasoning_effort = "none"  # "none" | "low" | "medium" | "high" | "max"
 
 # In default/acceptEdits mode, you can pre-approve specific tools:
 # 在 default/acceptEdits 模式下，可预授权特定工具：
