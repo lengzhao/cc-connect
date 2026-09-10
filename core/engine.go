@@ -67,10 +67,15 @@ const (
 // Slow-operation thresholds. Operations exceeding these durations produce a
 // slog.Warn so operators can quickly pinpoint bottlenecks.
 const (
-	slowPlatformSend    = 2 * time.Second  // platform Reply / Send
-	slowAgentStart      = 5 * time.Second  // agent.StartSession
-	slowAgentClose      = 3 * time.Second  // agentSession.Close
-	slowAgentSend       = 30 * time.Second // agentSession.Send
+	slowPlatformSend = 2 * time.Second // platform Reply / Send
+	slowAgentStart   = 5 * time.Second // agent.StartSession
+	slowAgentClose   = 3 * time.Second // agentSession.Close
+	// slowAgentSend is a tail tripwire, not a slow-turn definition: every turn
+	// already logs its full stage decomposition in "turn complete". Production
+	// turn durations (84-turn sample): p50=41s p90=212s p95=335s — a threshold
+	// below the median fires on half of all turns and trains alert fatigue.
+	// 5min keeps the fire rate at the ~6% tail.
+	slowAgentSend       = 5 * time.Minute  // agentSession.Send
 	slowAgentFirstEvent = 15 * time.Second // time from send to first agent event
 )
 
