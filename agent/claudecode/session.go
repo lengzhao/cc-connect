@@ -915,6 +915,28 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 		cs.usageMu.Unlock()
 	}
 
+	// Some turns' result events arrive without a usage block (observed on
+	// ~28% of production turns, clustered per CLI process -- model/API-route
+	// dependent, a few sessions never report while most always do). The last
+	// assistant event's usage is a faithful snapshot of the final call's
+	// context (input + cache), so fall back to it rather than reporting a
+	// blind zero. Output has no reliable per-turn source on this path and
+	// stays 0. Compaction pseudo-results are excluded: they are mid-turn and
+	// never feed the turn summary.
+	if !isCompaction && inputTokens == 0 && outputTokens == 0 && cacheCreationTokens == 0 && cacheReadTokens == 0 {
+		slog.Warn("claudeSession: result event without usage; falling back to last assistant usage",
+			"subtype", resultSubtype(raw),
+			"session", cs.CurrentSessionID(),
+			"model", cs.GetModel())
+		cs.usageMu.Lock()
+		if cs.lastUsage != nil && cs.lastUsage.UsedTokens > 0 {
+			inputTokens = cs.lastUsage.InputTokens
+			cacheCreationTokens = cs.lastUsage.CacheCreationInputTokens
+			cacheReadTokens = cs.lastUsage.CachedInputTokens
+		}
+		cs.usageMu.Unlock()
+	}
+
 	evt := core.Event{
 		Type:                     core.EventResult,
 		Content:                  content,

@@ -657,9 +657,9 @@ func makeFiller(n int) string {
 // assistant text reaches the user.
 //
 // Cases covered:
-//  - string content (plain text result)
-//  - array content (Anthropic SDK multi-block: [{type:"text", text:"..."}])
-//  - is_error=true (exit code 1, success=false)
+//   - string content (plain text result)
+//   - array content (Anthropic SDK multi-block: [{type:"text", text:"..."}])
+//   - is_error=true (exit code 1, success=false)
 func TestHandleUserEmitsToolResult(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -675,10 +675,10 @@ func TestHandleUserEmitsToolResult(t *testing.T) {
 				"message": map[string]any{
 					"content": []any{
 						map[string]any{
-							"type":          "tool_result",
-							"tool_use_id":   "toolu_abc",
-							"is_error":      false,
-							"content":       "command output here",
+							"type":        "tool_result",
+							"tool_use_id": "toolu_abc",
+							"is_error":    false,
+							"content":     "command output here",
 						},
 					},
 				},
@@ -799,5 +799,79 @@ func TestHelperProcess(t *testing.T) {
 		os.Exit(0)
 	default:
 		os.Exit(2)
+	}
+}
+
+// Regression: some turns' result events arrive without a usage block
+// (~28% of production turns in one window, clustered per CLI process).
+// The engine's turn summary then logged blind zeros. The last assistant
+// event's usage is a faithful snapshot of the final call's context, so
+// handleResult must fall back to it for input/cache; output has no
+// per-turn source on this path and stays 0.
+func TestHandleResultEmptyUsageFallsBackToLastAssistantUsage(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cs := &claudeSession{
+		events: make(chan core.Event, 8),
+		ctx:    ctx,
+	}
+	cs.sessionID.Store("test-session")
+	cs.alive.Store(true)
+
+	cs.handleAssistant(map[string]any{
+		"type": "assistant",
+		"message": map[string]any{
+			"content": []any{},
+			"usage": map[string]any{
+				"input_tokens":                float64(40000),
+				"output_tokens":               float64(1), // placeholder
+				"cache_creation_input_tokens": float64(5000),
+				"cache_read_input_tokens":     float64(80000),
+			},
+		},
+	})
+
+	cs.handleResult(map[string]any{
+		"type":   "result",
+		"result": "done",
+	})
+
+	evt := <-cs.events
+	if evt.InputTokens != 40000 {
+		t.Errorf("InputTokens = %d, want 40000 (fallback from last assistant)", evt.InputTokens)
+	}
+	if evt.CacheReadInputTokens != 80000 {
+		t.Errorf("CacheReadInputTokens = %d, want 80000", evt.CacheReadInputTokens)
+	}
+	if evt.CacheCreationInputTokens != 5000 {
+		t.Errorf("CacheCreationInputTokens = %d, want 5000", evt.CacheCreationInputTokens)
+	}
+	if evt.OutputTokens != 0 {
+		t.Errorf("OutputTokens = %d, want 0 (no reliable source on the fallback path)", evt.OutputTokens)
+	}
+}
+
+// A result without usage on a session that never saw an assistant event
+// must stay zero rather than inventing numbers.
+func TestHandleResultNoUsageWithoutAssistantStaysZero(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cs := &claudeSession{
+		events: make(chan core.Event, 8),
+		ctx:    ctx,
+	}
+	cs.sessionID.Store("test-session")
+	cs.alive.Store(true)
+
+	cs.handleResult(map[string]any{
+		"type":   "result",
+		"result": "done",
+	})
+
+	evt := <-cs.events
+	if evt.InputTokens != 0 || evt.OutputTokens != 0 || evt.CacheReadInputTokens != 0 || evt.CacheCreationInputTokens != 0 {
+		t.Fatalf("usage = %d/%d/%d/%d, want all zero", evt.InputTokens, evt.OutputTokens, evt.CacheReadInputTokens, evt.CacheCreationInputTokens)
 	}
 }
