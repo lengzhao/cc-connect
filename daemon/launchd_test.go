@@ -70,6 +70,19 @@ func TestLaunchdStatusUsesUserDomainWhenGUIDomainUnavailable(t *testing.T) {
 	orig := runLaunchctl
 	t.Cleanup(func() { runLaunchctl = orig })
 
+	// Hermetic HOME: Status() early-returns unless the plist exists, and
+	// whether the real service is installed must not affect the test.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	plistDir := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(plistDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plist := filepath.Join(plistDir, launchdLabel+".plist")
+	if err := os.WriteFile(plist, []byte("<plist/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	guiDomain := launchdGUIDomain()
 	userDomain := launchdUserDomain()
 	guiTarget := launchdTarget(guiDomain)

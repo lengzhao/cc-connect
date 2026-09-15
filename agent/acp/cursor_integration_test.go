@@ -17,6 +17,9 @@ func TestCursorCLI_ACPHandshake(t *testing.T) {
 	if os.Getenv("CI") != "" {
 		t.Skip("skipping real Cursor CLI ACP handshake in CI (requires local agent and login)")
 	}
+	if os.Getenv("SKIP_REAL_AGENT_CLI") != "" {
+		t.Skip("skipping real Cursor CLI ACP handshake (SKIP_REAL_AGENT_CLI is set)")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skip("home dir:", err)

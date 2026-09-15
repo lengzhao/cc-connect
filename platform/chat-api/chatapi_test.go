@@ -144,11 +144,11 @@ func TestMessagesHTTPReturnsUserIdentity(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+s.ID+"/messages?limit=10", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 	var resp struct {
 		OK   bool `json:"ok"`
@@ -156,7 +156,7 @@ func TestMessagesHTTPReturnsUserIdentity(t *testing.T) {
 			Messages []map[string]any `json:"messages"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(resp.Data.Messages) != 4 {
@@ -204,11 +204,11 @@ func TestChatMessagesPassesChannelKeyToHandler(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", "team-alpha/backend")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code(), rec.Body().String())
 	}
 	if gotChannel != "team-alpha/backend" {
 		t.Fatalf("ChannelKey = %q, want team-alpha/backend", gotChannel)
@@ -235,11 +235,11 @@ func TestChatMessagesRejectsInvalidChannel(t *testing.T) {
 		req.Header.Set("X-Chat-API-Channel", channel)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "text/event-stream")
-		rec := httptest.NewRecorder()
+		rec := newSafeResponseRecorder()
 		p.routes().ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("channel %q status = %d, want 400", channel, rec.Code)
+		if rec.Code() != http.StatusBadRequest {
+			t.Fatalf("channel %q status = %d, want 400", channel, rec.Code())
 		}
 	}
 }
@@ -267,11 +267,11 @@ func TestChatMessagesPassesUserNameToHandler(t *testing.T) {
 	req.Header.Set("X-Chat-API-User-Name", "Alice")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code(), rec.Body().String())
 	}
 	if gotID != "user_001" || gotName != "Alice" {
 		t.Fatalf("handler user = (%q, %q), want (user_001, Alice)", gotID, gotName)
@@ -300,12 +300,12 @@ func TestChatMessagesStampsUserMessageTime(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	after := time.Now().UnixMilli()
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code(), rec.Body().String())
 	}
 	if gotTimeMs < before || gotTimeMs > after {
 		t.Fatalf("handler UserMessageTimeMs = %d, want request receipt time within [%d, %d]", gotTimeMs, before, after)
@@ -334,10 +334,10 @@ func TestSharedChannelGuestCanPostAndRead(t *testing.T) {
 	req.Header.Set("X-Chat-API-User-Name", "Bob")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("guest post status = %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("guest post status = %d body=%s", rec.Code(), rec.Body().String())
 	}
 	wantKey := engineSessionKey(testChannel, ownerSession.ID)
 	if guestSessionKey != wantKey {
@@ -346,24 +346,24 @@ func TestSharedChannelGuestCanPostAndRead(t *testing.T) {
 
 	listReq := httptest.NewRequest(http.MethodGet, "/v1/conversations?limit=10", nil)
 	setChatReadHeaders(listReq, "secret")
-	listRec := httptest.NewRecorder()
+	listRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(listRec, listReq)
 	var listResp struct {
 		Data struct {
 			Conversations []conversationView `json:"conversations"`
 		} `json:"data"`
 	}
-	_ = json.Unmarshal(listRec.Body.Bytes(), &listResp)
+	_ = json.Unmarshal(listRec.Body().Bytes(), &listResp)
 	if len(listResp.Data.Conversations) != 1 {
 		t.Fatalf("channel list should include shared conversation, got %+v", listResp.Data.Conversations)
 	}
 
 	msgReq := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+ownerSession.ID+"/messages?limit=10", nil)
 	setChatReadHeaders(msgReq, "secret")
-	msgRec := httptest.NewRecorder()
+	msgRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(msgRec, msgReq)
-	if msgRec.Code != http.StatusOK {
-		t.Fatalf("guest read status = %d body=%s", msgRec.Code, msgRec.Body.String())
+	if msgRec.Code() != http.StatusOK {
+		t.Fatalf("guest read status = %d body=%s", msgRec.Code(), msgRec.Body().String())
 	}
 }
 
@@ -378,10 +378,10 @@ func TestPatchConversationWrongChannelNotFound(t *testing.T) {
 	req.Header.Set("X-Chat-API-User", "user_b")
 	req.Header.Set("X-Chat-API-Channel", "other-channel")
 	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("wrong channel patch status = %d, want 404", rec.Code)
+	if rec.Code() != http.StatusNotFound {
+		t.Fatalf("wrong channel patch status = %d, want 404", rec.Code())
 	}
 	if s.GetName() != "team chat" {
 		t.Fatalf("name changed to %q", s.GetName())
@@ -434,11 +434,11 @@ func TestListConversationsHTTP(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/conversations?limit=10", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 	var resp struct {
 		OK   bool `json:"ok"`
@@ -446,7 +446,7 @@ func TestListConversationsHTTP(t *testing.T) {
 			Conversations []conversationView `json:"conversations"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if !resp.OK || len(resp.Data.Conversations) != 1 {
@@ -481,13 +481,13 @@ func TestChatMessagesSSEStreaming(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code(), rec.Body().String())
 	}
-	events := parseSSE(rec.Body.String())
+	events := parseSSE(rec.Body().String())
 	if !hasEvent(events, "message") || !hasEvent(events, "text_delta") || !hasEvent(events, "message_end") {
 		t.Fatalf("events = %#v", events)
 	}
@@ -513,7 +513,7 @@ func TestChatMessagesImplicitCreate(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
 	sessions := sm.ListSessions(testChannelSessionKey())
@@ -564,10 +564,10 @@ func TestChatMessagesHistoryReadableByConversationID(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("post status = %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("post status = %d body=%s", rec.Code(), rec.Body().String())
 	}
 	if engineKey == "" {
 		t.Fatal("handler never received session key")
@@ -579,17 +579,17 @@ func TestChatMessagesHistoryReadableByConversationID(t *testing.T) {
 
 	msgReq := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+conversationID+"/messages?limit=10", nil)
 	setChatReadHeaders(msgReq, "secret")
-	msgRec := httptest.NewRecorder()
+	msgRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(msgRec, msgReq)
-	if msgRec.Code != http.StatusOK {
-		t.Fatalf("messages status = %d body=%s", msgRec.Code, msgRec.Body.String())
+	if msgRec.Code() != http.StatusOK {
+		t.Fatalf("messages status = %d body=%s", msgRec.Code(), msgRec.Body().String())
 	}
 	var resp struct {
 		Data struct {
 			Messages []map[string]any `json:"messages"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(msgRec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(msgRec.Body().Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(resp.Data.Messages) != 2 {
@@ -630,10 +630,10 @@ func TestChatMessagesQueuedReply(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	events := parseSSE(rec.Body.String())
+	events := parseSSE(rec.Body().String())
 	if !hasEvent(events, "message_queued") {
 		t.Fatalf("events = %#v", events)
 	}
@@ -654,11 +654,11 @@ func TestChatMessagesRejectBusy(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409", rec.Code)
+	if rec.Code() != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code())
 	}
 }
 
@@ -670,10 +670,10 @@ func TestDeleteConversationNotAllowed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/v1/conversations/"+s.ID, nil)
 	setChatReadHeaders(req, "secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want 405", rec.Code)
+	if rec.Code() != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code())
 	}
 	if sm.FindByID(s.ID) == nil {
 		t.Fatal("session deleted unexpectedly")
@@ -691,11 +691,11 @@ func TestPatchConversation(t *testing.T) {
 	req.Header.Set("X-Chat-API-User", "user_001")
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code(), rec.Body().String())
 	}
 	if s.GetName() != "renamed" {
 		t.Fatalf("name = %q", s.GetName())
@@ -729,7 +729,7 @@ func TestCancelRunEndpoint(t *testing.T) {
 	req.Header.Set("Accept", "text/event-stream")
 
 	go func() {
-		rec := httptest.NewRecorder()
+		rec := newSafeResponseRecorder()
 		p.routes().ServeHTTP(rec, req)
 	}()
 
@@ -755,10 +755,10 @@ func TestCancelRunEndpoint(t *testing.T) {
 	cancelReq.Header.Set("Authorization", "Bearer secret")
 	cancelReq.Header.Set("X-Chat-API-User", "user_001")
 	cancelReq.Header.Set("X-Chat-API-Channel", testChannel)
-	cancelRec := httptest.NewRecorder()
+	cancelRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(cancelRec, cancelReq)
-	if cancelRec.Code != http.StatusOK {
-		t.Fatalf("cancel status = %d body=%s", cancelRec.Code, cancelRec.Body.String())
+	if cancelRec.Code() != http.StatusOK {
+		t.Fatalf("cancel status = %d body=%s", cancelRec.Code(), cancelRec.Body().String())
 	}
 	if p.pending.get(runID) != nil {
 		t.Fatal("run still active after cancel")
@@ -791,7 +791,7 @@ func TestDisconnectDoesNotRemoveRun(t *testing.T) {
 
 	var runID string
 	go func() {
-		rec := httptest.NewRecorder()
+		rec := newSafeResponseRecorder()
 		p.routes().ServeHTTP(rec, req)
 	}()
 

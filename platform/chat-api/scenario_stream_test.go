@@ -46,7 +46,7 @@ func TestScenarioClarificationReplacesProgress(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 
 	httpDone := make(chan struct{})
 	go func() {
@@ -56,9 +56,9 @@ func TestScenarioClarificationReplacesProgress(t *testing.T) {
 
 	<-updated
 	deadline := time.Now().Add(2 * time.Second)
-	for !strings.Contains(rec.Body.String(), progress) {
+	for !strings.Contains(rec.Body().String(), progress) {
 		if time.Now().After(deadline) {
-			t.Fatalf("progress never flushed: %s", rec.Body.String())
+			t.Fatalf("progress never flushed: %s", rec.Body().String())
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -66,7 +66,7 @@ func TestScenarioClarificationReplacesProgress(t *testing.T) {
 	<-done
 	<-httpDone
 
-	out := rec.Body.String()
+	out := rec.Body().String()
 	if !strings.Contains(out, `"replace":true`) {
 		t.Fatalf("expected replace frame: %s", out)
 	}
@@ -116,11 +116,11 @@ func TestScenarioGridStrategyPreservesDividers(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	<-done
 
-	out := rec.Body.String()
+	out := rec.Body().String()
 	joined := collectTextDeltas(out)
 	if strings.Count(joined, "\n---\n") < 3 {
 		t.Fatalf("expected >=3 markdown dividers preserved, got %q from %s", joined, out)
@@ -166,11 +166,11 @@ func TestScenarioIncrementalAnswerIsAppendOnly(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	<-done
 
-	out := rec.Body.String()
+	out := rec.Body().String()
 	if strings.Contains(out, `"replace":true`) {
 		t.Fatalf("incremental path must not emit replace: %s", out)
 	}

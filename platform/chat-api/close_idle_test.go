@@ -32,11 +32,11 @@ func TestCloseIdleAgentSessions_OK(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "ops_user")
 	req.Header.Set("X-Chat-API-Channel", testChannel)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 	var resp struct {
 		OK   bool `json:"ok"`
@@ -47,11 +47,11 @@ func TestCloseIdleAgentSessions_OK(t *testing.T) {
 			SkippedSessionKeys []string `json:"skipped_session_keys"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
 	if !resp.OK {
-		t.Fatalf("ok = false, body = %s", rec.Body.String())
+		t.Fatalf("ok = false, body = %s", rec.Body().String())
 	}
 	if resp.Data.Closed != 2 || resp.Data.Skipped != 1 {
 		t.Fatalf("closed/skipped = %d/%d, want 2/1", resp.Data.Closed, resp.Data.Skipped)
@@ -69,17 +69,17 @@ func TestCloseIdleAgentSessions_Unbound_503(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent-sessions/close-idle", nil)
 	req.Header.Set("Authorization", "Bearer secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503, body = %s", rec.Code(), rec.Body().String())
 	}
 	var resp struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
 	if resp.OK {
@@ -93,11 +93,11 @@ func TestCloseIdleAgentSessions_MethodNotAllowed(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/agent-sessions/close-idle", nil)
 	req.Header.Set("Authorization", "Bearer secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want 405, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405, body = %s", rec.Code(), rec.Body().String())
 	}
 }
 
@@ -113,19 +113,19 @@ func TestCloseIdleAgentSessions_NoChannelRequired(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent-sessions/close-idle", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	// Intentionally omit X-Chat-API-Channel and X-Chat-API-User.
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 without channel header, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d, want 200 without channel header, body = %s", rec.Code(), rec.Body().String())
 	}
 	var resp struct {
 		OK bool `json:"ok"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
 	if !resp.OK {
-		t.Fatalf("ok = false, body = %s", rec.Body.String())
+		t.Fatalf("ok = false, body = %s", rec.Body().String())
 	}
 }

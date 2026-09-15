@@ -452,7 +452,15 @@ type resultAgentSession struct {
 	events      chan Event
 	result      string
 	sendOnce    sync.Once
+	mu          sync.Mutex
 	sentPrompts []string
+}
+
+// promptsSnapshot returns a copy of sentPrompts safe for concurrent reads.
+func (s *resultAgentSession) promptsSnapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.sentPrompts...)
 }
 
 func newResultAgentSession(result string) *resultAgentSession {
@@ -463,7 +471,9 @@ func newResultAgentSession(result string) *resultAgentSession {
 }
 
 func (s *resultAgentSession) Send(prompt string, _ []ImageAttachment, _ []FileAttachment) error {
+	s.mu.Lock()
 	s.sentPrompts = append(s.sentPrompts, prompt)
+	s.mu.Unlock()
 	s.sendOnce.Do(func() {
 		s.events <- Event{Type: EventResult, Content: s.result, Done: true}
 	})
@@ -11387,8 +11397,9 @@ func TestHandleMessageBusyRecalledCurrentStopsAndProcessesNewMessage(t *testing.
 	if len(checked) == 0 || checked[0] != "old-reply-ctx" {
 		t.Fatalf("checked reply contexts = %v, want old-reply-ctx first", checked)
 	}
-	if len(newAgentSession.sentPrompts) != 1 || !strings.Contains(newAgentSession.sentPrompts[0], "please handle this") {
-		t.Fatalf("new session prompts = %#v, want new message prompt", newAgentSession.sentPrompts)
+	sentPrompts := newAgentSession.promptsSnapshot()
+	if len(sentPrompts) != 1 || !strings.Contains(sentPrompts[0], "please handle this") {
+		t.Fatalf("new session prompts = %#v, want new message prompt", sentPrompts)
 	}
 }
 
@@ -11790,9 +11801,10 @@ func TestSkipPromptMeta_BypassesAllInjection(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(agentSession.sentPrompts) > 0 {
-			if agentSession.sentPrompts[0] != "raw query only" {
-				t.Fatalf("agent prompt = %q, want raw content without [cc-connect ...]", agentSession.sentPrompts[0])
+		sentPrompts := agentSession.promptsSnapshot()
+		if len(sentPrompts) > 0 {
+			if sentPrompts[0] != "raw query only" {
+				t.Fatalf("agent prompt = %q, want raw content without [cc-connect ...]", sentPrompts[0])
 			}
 			return
 		}
@@ -14456,14 +14468,15 @@ func TestExecuteCronJob_InjectStoredUserIdentity(t *testing.T) {
 	if cronHook.UserID != "alice" || cronHook.UserName != "Alice" || cronHook.UserEmail != "alice@example.com" {
 		t.Fatalf("cron hook user = (%q, %q, %q)", cronHook.UserID, cronHook.UserName, cronHook.UserEmail)
 	}
-	if len(agentSession.sentPrompts) != 1 {
-		t.Fatalf("sentPrompts = %#v, want 1", agentSession.sentPrompts)
+	sentPrompts := agentSession.promptsSnapshot()
+	if len(sentPrompts) != 1 {
+		t.Fatalf("sentPrompts = %#v, want 1", sentPrompts)
 	}
-	if !strings.Contains(agentSession.sentPrompts[0], "sender_id=alice") {
-		t.Fatalf("prompt = %q, want sender_id=alice", agentSession.sentPrompts[0])
+	if !strings.Contains(sentPrompts[0], "sender_id=alice") {
+		t.Fatalf("prompt = %q, want sender_id=alice", sentPrompts[0])
 	}
-	if !strings.Contains(agentSession.sentPrompts[0], `sender_name="Alice"`) {
-		t.Fatalf("prompt = %q, want sender_name=Alice", agentSession.sentPrompts[0])
+	if !strings.Contains(sentPrompts[0], `sender_name="Alice"`) {
+		t.Fatalf("prompt = %q, want sender_name=Alice", sentPrompts[0])
 	}
 }
 
@@ -14557,14 +14570,15 @@ func TestExecuteTimerJob_InjectStoredUserIdentity(t *testing.T) {
 	if timerHook.UserID != "alice" || timerHook.UserName != "Alice" || timerHook.UserEmail != "alice@example.com" {
 		t.Fatalf("timer hook user = (%q, %q, %q)", timerHook.UserID, timerHook.UserName, timerHook.UserEmail)
 	}
-	if len(agentSession.sentPrompts) != 1 {
-		t.Fatalf("sentPrompts = %#v, want 1", agentSession.sentPrompts)
+	sentPrompts := agentSession.promptsSnapshot()
+	if len(sentPrompts) != 1 {
+		t.Fatalf("sentPrompts = %#v, want 1", sentPrompts)
 	}
-	if !strings.Contains(agentSession.sentPrompts[0], "sender_id=alice") {
-		t.Fatalf("prompt = %q, want sender_id=alice", agentSession.sentPrompts[0])
+	if !strings.Contains(sentPrompts[0], "sender_id=alice") {
+		t.Fatalf("prompt = %q, want sender_id=alice", sentPrompts[0])
 	}
-	if strings.Contains(agentSession.sentPrompts[0], "sender_id=cron") {
-		t.Fatalf("prompt must not contain sender_id=cron: %q", agentSession.sentPrompts[0])
+	if strings.Contains(sentPrompts[0], "sender_id=cron") {
+		t.Fatalf("prompt must not contain sender_id=cron: %q", sentPrompts[0])
 	}
 }
 
@@ -14711,10 +14725,11 @@ func TestExecuteCronJob_ExpandsSlashSkillPrompt(t *testing.T) {
 				t.Fatalf("ExecuteCronJob() error = %v", err)
 			}
 
-			if len(agentSession.sentPrompts) != 1 {
-				t.Fatalf("sentPrompts = %d, want 1: %#v", len(agentSession.sentPrompts), agentSession.sentPrompts)
+			sentPrompts := agentSession.promptsSnapshot()
+			if len(sentPrompts) != 1 {
+				t.Fatalf("sentPrompts = %d, want 1: %#v", len(sentPrompts), sentPrompts)
 			}
-			got := agentSession.sentPrompts[0]
+			got := sentPrompts[0]
 			for _, want := range tt.wantContains {
 				if !strings.Contains(got, want) {
 					t.Errorf("agent prompt does not contain %q\ngot: %s", want, got)
@@ -14823,18 +14838,27 @@ func (s *stubPlatformWithObserve) SendObservation(_ context.Context, _, _ string
 // (e.g. DingTalk with AI Card configured), so instant reply should be skipped.
 type stubStreamingCardPlatform struct {
 	stubPlatformEngine
+	mu          sync.Mutex
 	cardCreated bool
 	cardFail    bool // when true, CreateStreamingCard returns an error
 	lastCard    *stubStreamingCard
+}
+
+func (p *stubStreamingCardPlatform) cardSnapshot() (created bool, card *stubStreamingCard) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cardCreated, p.lastCard
 }
 
 func (p *stubStreamingCardPlatform) CreateStreamingCard(_ context.Context, _ any) (StreamingCard, error) {
 	if p.cardFail {
 		return nil, fmt.Errorf("stub: card_template_id not configured")
 	}
-	p.cardCreated = true
 	card := &stubStreamingCard{}
+	p.mu.Lock()
+	p.cardCreated = true
 	p.lastCard = card
+	p.mu.Unlock()
 	return card, nil
 }
 
@@ -14917,20 +14941,26 @@ func TestHandleMessage_EventErrorFinalizesStreamingCard(t *testing.T) {
 	e.handleMessage(p, msg)
 
 	deadline := time.After(2 * time.Second)
+	var card *stubStreamingCard
 	for {
-		if p.lastCard != nil && p.lastCard.finalizeCount() >= 1 {
+		card = func() *stubStreamingCard {
+			_, c := p.cardSnapshot()
+			return c
+		}()
+		if card != nil && card.finalizeCount() >= 1 {
 			break
 		}
 		select {
 		case <-deadline:
+			created, c := p.cardSnapshot()
 			t.Fatalf("timed out waiting for streamCard.Finalize on EventError; cardCreated=%v lastCard=%v sent=%v",
-				p.cardCreated, p.lastCard != nil, p.getSent())
+				created, c != nil, p.getSent())
 		default:
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
 
-	got := p.lastCard.finalizedContent()
+	got := card.finalizedContent()
 	if !strings.Contains(got, "permission denied") && !strings.Contains(got, "bash tool exited") {
 		t.Fatalf("Finalize content = %q, want agent error text", got)
 	}

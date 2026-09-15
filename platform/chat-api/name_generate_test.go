@@ -24,10 +24,10 @@ func TestGetConversationDetailWrongChannelNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/conversations/"+s.ID, nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-Channel", "other-channel")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", rec.Code(), rec.Body().String())
 	}
 }
 
@@ -45,16 +45,16 @@ func TestGetConversationDetailReturnsView(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
 	req.Header.Set("X-Chat-API-Channel", testChannel)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 	var resp struct {
 		OK   bool             `json:"ok"`
 		Data conversationView `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if resp.Data.ID != s.ID || resp.Data.Name != "my chat" {
@@ -84,10 +84,10 @@ func TestGenerateConversationNameAsync(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
 	req.Header.Set("X-Chat-API-Channel", testChannel)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -139,10 +139,10 @@ func TestGenerateConversationNameUsesDedicatedModel(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
 	req.Header.Set("X-Chat-API-Channel", testChannel)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && s.GetName() == "default" {
@@ -183,10 +183,10 @@ func TestGenerateConversationNameFallsBackToHeuristicWhenProviderFails(t *testin
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
 	req.Header.Set("X-Chat-API-Channel", testChannel)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -236,10 +236,10 @@ func TestGenerateConversationNameUsesClaudeMessagesAPI(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
 	req.Header.Set("X-Chat-API-Channel", testChannel)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 	select {
 	case <-requestReady:
@@ -267,17 +267,17 @@ func TestGenerateConversationNameSkipsWhenNamedUnlessForce(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "owner")
 	req.Header.Set("X-Chat-API-Channel", testChannel)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 	var resp struct {
 		Data struct {
 			Status string `json:"status"`
 		} `json:"data"`
 	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	_ = json.Unmarshal(rec.Body().Bytes(), &resp)
 	if resp.Data.Status != "skipped" {
 		t.Fatalf("status = %q, want skipped", resp.Data.Status)
 	}

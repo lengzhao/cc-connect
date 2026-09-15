@@ -113,7 +113,7 @@ jobs:
           cd npm
           npm pack --pack-destination ../dist
           cd ../dist
-          sha256sum *.tar.gz *.zip *.tgz > checksums.txt
+          sha256sum ./*.tar.gz ./*.zip ./*.tgz > checksums.txt
 
       - name: Publish GitHub Release
         env:

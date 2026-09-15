@@ -25,7 +25,7 @@ func TestTruncateForLog(t *testing.T) {
 }
 
 func TestRunStateThinkingAndAnswerDeltas(t *testing.T) {
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	sse, err := newSSEWriter(rec)
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
@@ -36,18 +36,18 @@ func TestRunStateThinkingAndAnswerDeltas(t *testing.T) {
 	if err := run.flushDelta(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	if !strings.Contains(rec.Body.String(), "event: thinking_delta") {
-		t.Fatalf("body = %s", rec.Body.String())
+	if !strings.Contains(rec.Body().String(), "event: thinking_delta") {
+		t.Fatalf("body = %s", rec.Body().String())
 	}
 
 	fullCard := streamThinkingHeader + "plan" + streamSectionBreak + streamSectionBreak + "hello"
 	thinking, answer := parseStreamingCardContent(fullCard)
 	run.setStreamContent(thinking, answer)
-	rec.Body.Reset()
+	rec.Body().Reset()
 	if err := run.flushDelta(); err != nil {
 		t.Fatalf("flush2: %v", err)
 	}
-	body := rec.Body.String()
+	body := rec.Body().String()
 	if !strings.Contains(body, "event: text_delta") {
 		t.Fatalf("expected text_delta, body = %s", body)
 	}
@@ -55,7 +55,7 @@ func TestRunStateThinkingAndAnswerDeltas(t *testing.T) {
 
 func TestEmitTerminalSSEFlushesPendingDelta(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{})
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	sse, err := newSSEWriter(rec)
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
@@ -64,7 +64,7 @@ func TestEmitTerminalSSEFlushesPendingDelta(t *testing.T) {
 	run.setStreamContent("", "pending tail")
 	// Do not flush manually — emitTerminalSSE must drain before message_end.
 	p.emitTerminalSSE(run, pendingResult{answer: "pending tail"})
-	body := rec.Body.String()
+	body := rec.Body().String()
 	if !strings.Contains(body, "event: text_delta") {
 		t.Fatalf("expected flushed text_delta, body = %s", body)
 	}
@@ -104,11 +104,11 @@ func TestFinalizeSyncsStreamBeforeFinish(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	<-done
 
-	out := rec.Body.String()
+	out := rec.Body().String()
 	if !strings.Contains(out, "event: thinking_delta") {
 		t.Fatalf("missing thinking_delta: %s", out)
 	}
@@ -136,10 +136,10 @@ func TestReplyFinishesPlainReplyWithoutStreamingCard(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", "chat-123")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	out := rec.Body.String()
+	out := rec.Body().String()
 	if !strings.Contains(out, "event: text_delta") || !strings.Contains(out, "workspace init hint") {
 		t.Fatalf("missing plain reply delta: %s", out)
 	}
@@ -153,7 +153,7 @@ func TestReplyFinishesPlainReplyWithoutStreamingCard(t *testing.T) {
 
 func TestMessageEndOmitsAnswerByDefault(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{})
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	sse, err := newSSEWriter(rec)
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
@@ -161,14 +161,14 @@ func TestMessageEndOmitsAnswerByDefault(t *testing.T) {
 	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", &Platform{}, sse, time.Time{})
 	run.setStreamContent("", "hello")
 	p.emitTerminalSSE(run, pendingResult{answer: "hello"})
-	if strings.Contains(rec.Body.String(), `"answer"`) {
-		t.Fatalf("answer should be omitted, body = %s", rec.Body.String())
+	if strings.Contains(rec.Body().String(), `"answer"`) {
+		t.Fatalf("answer should be omitted, body = %s", rec.Body().String())
 	}
 }
 
 func TestMessageEndIncludesAnswerWhenConfigured(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"include_answer_in_message_end": true})
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	sse, err := newSSEWriter(rec)
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
@@ -176,8 +176,8 @@ func TestMessageEndIncludesAnswerWhenConfigured(t *testing.T) {
 	run := newRunState("run1", "u", "", "sk", "s1", "s1:0", &Platform{}, sse, time.Time{})
 	run.setStreamContent("", "hello")
 	p.emitTerminalSSE(run, pendingResult{answer: "hello"})
-	if !strings.Contains(rec.Body.String(), `"answer":"hello"`) {
-		t.Fatalf("body = %s", rec.Body.String())
+	if !strings.Contains(rec.Body().String(), `"answer":"hello"`) {
+		t.Fatalf("body = %s", rec.Body().String())
 	}
 }
 
@@ -228,11 +228,11 @@ func TestToolCallAndResultSSENotInTextDelta(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	<-done
 
-	out := rec.Body.String()
+	out := rec.Body().String()
 	if !strings.Contains(out, "event: tool_call") {
 		t.Fatalf("missing tool_call: %s", out)
 	}
@@ -288,7 +288,7 @@ func collectTextDeltas(sseBody string) string {
 }
 
 func TestAnswerDeltaReplaceOnNonPrefixChange(t *testing.T) {
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	sse, err := newSSEWriter(rec)
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
@@ -304,7 +304,7 @@ func TestAnswerDeltaReplaceOnNonPrefixChange(t *testing.T) {
 		t.Fatalf("flush2: %v", err)
 	}
 
-	body := rec.Body.String()
+	body := rec.Body().String()
 	if !strings.Contains(body, `"replace":true`) {
 		t.Fatalf("expected replace frame, body = %s", body)
 	}
@@ -366,11 +366,11 @@ func TestUnknownSlashForwardKeepsRunOpenForAgentStream(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	<-done
 
-	out := rec.Body.String()
+	out := rec.Body().String()
 	if !strings.Contains(out, agentAnswer) {
 		t.Fatalf("missing agent response: %s", out)
 	}
@@ -406,11 +406,11 @@ func TestAsyncExecCommandReplyFinishesSSE(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	<-done
 
-	out := rec.Body.String()
+	out := rec.Body().String()
 	if !strings.Contains(out, "ok") {
 		t.Fatalf("missing exec output: %s", out)
 	}
@@ -440,11 +440,11 @@ func TestLongRunningExecProgressThenFinalFinishesSSE(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	<-done
 
-	out := rec.Body.String()
+	out := rec.Body().String()
 	if strings.Count(out, "event: message_end") != 1 {
 		t.Fatalf("expected exactly one message_end, got %d in %s", strings.Count(out, "event: message_end"), out)
 	}

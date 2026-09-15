@@ -10,10 +10,10 @@ import (
 func TestDebugUIDisabledByDefault(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	req := httptest.NewRequest(http.MethodGet, "/debug/", nil)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 when debug_ui disabled", rec.Code)
+	if rec.Code() != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 when debug_ui disabled", rec.Code())
 	}
 }
 
@@ -24,12 +24,12 @@ func TestDebugUIServesPage(t *testing.T) {
 		"path":     "/v1/",
 	})
 	req := httptest.NewRequest(http.MethodGet, "/debug/", nil)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code(), rec.Body().String())
 	}
-	body := rec.Body.String()
+	body := rec.Body().String()
 	html := body
 	if !strings.Contains(html, "chat-api") {
 		t.Fatalf("missing page title/content")
@@ -81,12 +81,12 @@ func TestDebugUIServesPage(t *testing.T) {
 	}
 
 	req2 := httptest.NewRequest(http.MethodGet, "/debug/config.json", nil)
-	rec2 := httptest.NewRecorder()
+	rec2 := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec2, req2)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("config status = %d", rec2.Code)
+	if rec2.Code() != http.StatusOK {
+		t.Fatalf("config status = %d", rec2.Code())
 	}
-	if !strings.Contains(rec2.Body.String(), `"api_path":"/v1/"`) {
-		t.Fatalf("config body = %s", rec2.Body.String())
+	if !strings.Contains(rec2.Body().String(), `"api_path":"/v1/"`) {
+		t.Fatalf("config body = %s", rec2.Body().String())
 	}
 }

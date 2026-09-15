@@ -14,6 +14,7 @@ import (
 	"github.com/chenhg5/cc-connect/core"
 )
 
+
 func TestPermissionRequestSSEAndRespond(t *testing.T) {
 	p := newTestPlatform(t, map[string]any{"token": "secret"})
 	bindTestSessions(t, p)
@@ -68,7 +69,7 @@ func TestPermissionRequestSSEAndRespond(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 
 	done := make(chan struct{})
 	go func() {
@@ -88,7 +89,7 @@ func TestPermissionRequestSSEAndRespond(t *testing.T) {
 	var events []sseEvent
 	var interactionID string
 	for time.Now().Before(deadline) {
-		events = parseSSE(rec.Body.String())
+		events = parseSSE(rec.Body().String())
 		for _, e := range events {
 			if e.Name != "permission_request" {
 				continue
@@ -109,7 +110,7 @@ func TestPermissionRequestSSEAndRespond(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if interactionID == "" {
-		t.Fatalf("missing permission_request event: %#v body=%s", events, rec.Body.String())
+		t.Fatalf("missing permission_request event: %#v body=%s", events, rec.Body().String())
 	}
 
 	respondBody := `{"decision":"allow"}`
@@ -118,10 +119,10 @@ func TestPermissionRequestSSEAndRespond(t *testing.T) {
 	respondReq.Header.Set("X-Chat-API-User", "user_001")
 	respondReq.Header.Set("X-Chat-API-Channel", testChannel)
 	respondReq.Header.Set("Content-Type", "application/json")
-	respondRec := httptest.NewRecorder()
+	respondRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(respondRec, respondReq)
-	if respondRec.Code != http.StatusOK {
-		t.Fatalf("respond status = %d body=%s", respondRec.Code, respondRec.Body.String())
+	if respondRec.Code() != http.StatusOK {
+		t.Fatalf("respond status = %d body=%s", respondRec.Code(), respondRec.Body().String())
 	}
 
 	deadline = time.Now().Add(2 * time.Second)
@@ -153,15 +154,15 @@ func TestPermissionRequestSSEAndRespond(t *testing.T) {
 	}
 
 	// Respond must not end the run early.
-	if hasEvent(parseSSE(rec.Body.String()), "message_end") {
+	if hasEvent(parseSSE(rec.Body().String()), "message_end") {
 		t.Fatal("message_end appeared before handler finished")
 	}
 
 	// Duplicate respond while run still active → 409
-	dupRec := httptest.NewRecorder()
+	dupRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(dupRec, respondReq)
-	if dupRec.Code != http.StatusConflict {
-		t.Fatalf("dup status = %d, want 409 body=%s", dupRec.Code, dupRec.Body.String())
+	if dupRec.Code() != http.StatusConflict {
+		t.Fatalf("dup status = %d, want 409 body=%s", dupRec.Code(), dupRec.Body().String())
 	}
 
 	close(release)
@@ -170,11 +171,11 @@ func TestPermissionRequestSSEAndRespond(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("SSE did not finish")
 	}
-	if !hasEvent(parseSSE(rec.Body.String()), "message_end") {
-		t.Fatalf("missing message_end: %s", rec.Body.String())
+	if !hasEvent(parseSSE(rec.Body().String()), "message_end") {
+		t.Fatalf("missing message_end: %s", rec.Body().String())
 	}
-	if !hasEvent(parseSSE(rec.Body.String()), "interaction_ack") {
-		t.Fatalf("missing interaction_ack after respond: %s", rec.Body.String())
+	if !hasEvent(parseSSE(rec.Body().String()), "interaction_ack") {
+		t.Fatalf("missing interaction_ack after respond: %s", rec.Body().String())
 	}
 }
 
@@ -230,7 +231,7 @@ func TestAskQuestionRequestSSEAndRespond(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 
 	done := make(chan struct{})
 	go func() {
@@ -246,7 +247,7 @@ func TestAskQuestionRequestSSEAndRespond(t *testing.T) {
 	}
 
 	interactionID := waitInteractionID(t, rec, "question_request")
-	events := parseSSE(rec.Body.String())
+	events := parseSSE(rec.Body().String())
 	if !hasEvent(events, "question_request") {
 		t.Fatalf("missing question_request: %#v", events)
 	}
@@ -260,10 +261,10 @@ func TestAskQuestionRequestSSEAndRespond(t *testing.T) {
 	respondReq.Header.Set("X-Chat-API-User", "user_001")
 	respondReq.Header.Set("X-Chat-API-Channel", testChannel)
 	respondReq.Header.Set("Content-Type", "application/json")
-	respondRec := httptest.NewRecorder()
+	respondRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(respondRec, respondReq)
-	if respondRec.Code != http.StatusOK {
-		t.Fatalf("respond status = %d body=%s", respondRec.Code, respondRec.Body.String())
+	if respondRec.Code() != http.StatusOK {
+		t.Fatalf("respond status = %d body=%s", respondRec.Code(), respondRec.Body().String())
 	}
 
 	select {
@@ -272,9 +273,9 @@ func TestAskQuestionRequestSSEAndRespond(t *testing.T) {
 		t.Fatal("SSE did not finish")
 	}
 
-	events = parseSSE(rec.Body.String())
+	events = parseSSE(rec.Body().String())
 	if !hasEvent(events, "message_end") {
-		t.Fatalf("missing message_end: %#v body=%s", events, rec.Body.String())
+		t.Fatalf("missing message_end: %#v body=%s", events, rec.Body().String())
 	}
 
 	mu.Lock()
@@ -337,7 +338,7 @@ func TestEmitInteractionPublicActionIDs(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	done := make(chan struct{})
 	go func() {
 		p.routes().ServeHTTP(rec, req)
@@ -351,7 +352,7 @@ func TestEmitInteractionPublicActionIDs(t *testing.T) {
 	_ = waitInteractionID(t, rec, "question_request")
 
 	var actions []any
-	for _, e := range parseSSE(rec.Body.String()) {
+	for _, e := range parseSSE(rec.Body().String()) {
 		if e.Name != "question_request" {
 			continue
 		}
@@ -462,7 +463,7 @@ func TestAskQuestionMultiSelectSSE(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	done := make(chan struct{})
 	go func() {
 		p.routes().ServeHTTP(rec, req)
@@ -476,7 +477,7 @@ func TestAskQuestionMultiSelectSSE(t *testing.T) {
 	ixID := waitInteractionID(t, rec, "question_request")
 	runID := ""
 	var multi any
-	for _, e := range parseSSE(rec.Body.String()) {
+	for _, e := range parseSSE(rec.Body().String()) {
 		if e.Name != "question_request" {
 			continue
 		}
@@ -501,10 +502,10 @@ func TestAskQuestionMultiSelectSSE(t *testing.T) {
 	respondReq.Header.Set("X-Chat-API-User", "user_001")
 	respondReq.Header.Set("X-Chat-API-Channel", testChannel)
 	respondReq.Header.Set("Content-Type", "application/json")
-	respondRec := httptest.NewRecorder()
+	respondRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(respondRec, respondReq)
-	if respondRec.Code != http.StatusOK {
-		t.Fatalf("respond status=%d body=%s", respondRec.Code, respondRec.Body.String())
+	if respondRec.Code() != http.StatusOK {
+		t.Fatalf("respond status=%d body=%s", respondRec.Code(), respondRec.Body().String())
 	}
 	close(release)
 	<-done
@@ -607,7 +608,7 @@ func TestInteractionRespondWrongUser(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	done := make(chan struct{})
 	go func() {
 		p.routes().ServeHTTP(rec, req)
@@ -622,10 +623,10 @@ func TestInteractionRespondWrongUser(t *testing.T) {
 	bad.Header.Set("X-Chat-API-User", "other_user")
 	bad.Header.Set("X-Chat-API-Channel", testChannel)
 	bad.Header.Set("Content-Type", "application/json")
-	badRec := httptest.NewRecorder()
+	badRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(badRec, bad)
-	if badRec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", badRec.Code)
+	if badRec.Code() != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", badRec.Code())
 	}
 
 	close(release)
@@ -718,7 +719,7 @@ func TestPermissionInteractionTimeoutAutoDeny(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
 	select {
@@ -738,7 +739,7 @@ func TestPermissionInteractionTimeoutAutoDeny(t *testing.T) {
 		mu.Unlock()
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("expected auto-deny permission message, got %#v body=%s", messages, rec.Body.String())
+	t.Fatalf("expected auto-deny permission message, got %#v body=%s", messages, rec.Body().String())
 found:
 	// Ensure deny was synthesized, not a plain user prompt containing the permission card text alone as query.
 	for _, m := range messages {
@@ -779,7 +780,7 @@ func TestQuestionInteractionTimeoutCancelsTurn(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	done := make(chan struct{})
 	go func() {
 		p.routes().ServeHTTP(rec, req)
@@ -793,7 +794,7 @@ func TestQuestionInteractionTimeoutCancelsTurn(t *testing.T) {
 	}
 
 	interactionID := waitInteractionID(t, rec, "question_request")
-	events := parseSSE(rec.Body.String())
+	events := parseSSE(rec.Body().String())
 	if !hasEvent(events, "question_request") {
 		t.Fatalf("missing question_request: %#v", events)
 	}
@@ -823,7 +824,7 @@ func TestQuestionInteractionTimeoutCancelsTurn(t *testing.T) {
 		t.Fatal("SSE did not finish after question timeout")
 	}
 
-	events = parseSSE(rec.Body.String())
+	events = parseSSE(rec.Body().String())
 	foundKind := false
 	for _, e := range events {
 		if e.Name != "error" {
@@ -847,23 +848,23 @@ func TestQuestionInteractionTimeoutCancelsTurn(t *testing.T) {
 	respondReq.Header.Set("X-Chat-API-User", "user_001")
 	respondReq.Header.Set("X-Chat-API-Channel", testChannel)
 	respondReq.Header.Set("Content-Type", "application/json")
-	respondRec := httptest.NewRecorder()
+	respondRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(respondRec, respondReq)
-	if respondRec.Code != http.StatusNotFound {
-		t.Fatalf("expired respond status = %d body=%s", respondRec.Code, respondRec.Body.String())
+	if respondRec.Code() != http.StatusNotFound {
+		t.Fatalf("expired respond status = %d body=%s", respondRec.Code(), respondRec.Body().String())
 	}
 }
 
-func waitInteractionID(t *testing.T, rec *httptest.ResponseRecorder, eventName string) string {
+func waitInteractionID(t *testing.T, rec *safeResponseRecorder, eventName string) string {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if id := waitInteractionIDFromBody(t, rec.Body.String(), eventName); id != "" {
+		if id := waitInteractionIDFromBody(t, rec.Body().String(), eventName); id != "" {
 			return id
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("missing %s in SSE: %s", eventName, rec.Body.String())
+	t.Fatalf("missing %s in SSE: %s", eventName, rec.Body().String())
 	return ""
 }
 
@@ -918,7 +919,7 @@ func TestSSEPingWhileWaitingPermission(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	done := make(chan struct{})
 	go func() {
 		p.routes().ServeHTTP(rec, req)
@@ -932,13 +933,13 @@ func TestSSEPingWhileWaitingPermission(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if hasEvent(parseSSE(rec.Body.String()), "ping") {
+		if hasEvent(parseSSE(rec.Body().String()), "ping") {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !hasEvent(parseSSE(rec.Body.String()), "ping") {
-		t.Fatalf("missing ping event: %s", rec.Body.String())
+	if !hasEvent(parseSSE(rec.Body().String()), "ping") {
+		t.Fatalf("missing ping event: %s", rec.Body().String())
 	}
 	close(release)
 	<-done
@@ -975,7 +976,7 @@ func TestInteractionSuperseded(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	done := make(chan struct{})
 	go func() {
 		p.routes().ServeHTTP(rec, req)
@@ -986,7 +987,7 @@ func TestInteractionSuperseded(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	var firstID, secondID string
 	for time.Now().Before(deadline) {
-		events := parseSSE(rec.Body.String())
+		events := parseSSE(rec.Body().String())
 		if !hasEvent(events, "interaction_superseded") {
 			time.Sleep(10 * time.Millisecond)
 			continue
@@ -1009,10 +1010,10 @@ func TestInteractionSuperseded(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if firstID == "" || secondID == "" || firstID == secondID {
-		t.Fatalf("expected two permission_request ids, body=%s", rec.Body.String())
+		t.Fatalf("expected two permission_request ids, body=%s", rec.Body().String())
 	}
-	if !hasEvent(parseSSE(rec.Body.String()), "interaction_superseded") {
-		t.Fatalf("missing interaction_superseded: %s", rec.Body.String())
+	if !hasEvent(parseSSE(rec.Body().String()), "interaction_superseded") {
+		t.Fatalf("missing interaction_superseded: %s", rec.Body().String())
 	}
 
 	oldReq := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/interactions/"+firstID+"/respond",
@@ -1021,10 +1022,10 @@ func TestInteractionSuperseded(t *testing.T) {
 	oldReq.Header.Set("X-Chat-API-User", "user_001")
 	oldReq.Header.Set("X-Chat-API-Channel", testChannel)
 	oldReq.Header.Set("Content-Type", "application/json")
-	oldRec := httptest.NewRecorder()
+	oldRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(oldRec, oldReq)
-	if oldRec.Code != http.StatusNotFound && oldRec.Code != http.StatusConflict {
-		t.Fatalf("old respond status=%d body=%s", oldRec.Code, oldRec.Body.String())
+	if oldRec.Code() != http.StatusNotFound && oldRec.Code() != http.StatusConflict {
+		t.Fatalf("old respond status=%d body=%s", oldRec.Code(), oldRec.Body().String())
 	}
 
 	newReq := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/interactions/"+secondID+"/respond",
@@ -1033,10 +1034,10 @@ func TestInteractionSuperseded(t *testing.T) {
 	newReq.Header.Set("X-Chat-API-User", "user_001")
 	newReq.Header.Set("X-Chat-API-Channel", testChannel)
 	newReq.Header.Set("Content-Type", "application/json")
-	newRec := httptest.NewRecorder()
+	newRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(newRec, newReq)
-	if newRec.Code != http.StatusOK {
-		t.Fatalf("new respond status=%d body=%s", newRec.Code, newRec.Body.String())
+	if newRec.Code() != http.StatusOK {
+		t.Fatalf("new respond status=%d body=%s", newRec.Code(), newRec.Body().String())
 	}
 	close(release)
 	<-done
@@ -1084,10 +1085,10 @@ func TestPlainCardDoesNotEmitQuestionRequest(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	events := parseSSE(rec.Body.String())
+	events := parseSSE(rec.Body().String())
 	if hasEvent(events, "question_request") || hasEvent(events, "permission_request") {
 		t.Fatalf("plain card should not emit interaction: %#v", events)
 	}

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -177,7 +176,7 @@ func TestComplete_LogsEndWhenAttached(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	sse, err := newSSEWriter(rec)
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)
@@ -211,7 +210,7 @@ func TestComplete_LogsLatencyStages(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	created := time.Now().Add(-2 * time.Second)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	sse, err := newSSEWriter(rec)
 	if err != nil {
 		t.Fatalf("newSSEWriter: %v", err)

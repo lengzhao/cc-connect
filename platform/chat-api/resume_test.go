@@ -42,7 +42,7 @@ func TestResumeReplaysLastTextDeltaAfterDisconnect(t *testing.T) {
 	req = req.WithContext(ctx)
 
 	go func() {
-		rec := httptest.NewRecorder()
+		rec := newSafeResponseRecorder()
 		p.routes().ServeHTTP(rec, req)
 	}()
 
@@ -78,12 +78,12 @@ func TestResumeReplaysLastTextDeltaAfterDisconnect(t *testing.T) {
 	resumeReq.Header.Set("X-Chat-API-Channel", testChannel)
 	resumeReq.Header.Set("Content-Type", "application/json")
 	resumeReq.Header.Set("Accept", "text/event-stream")
-	resumeRec := httptest.NewRecorder()
+	resumeRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(resumeRec, resumeReq)
 
-	events := parseSSE(resumeRec.Body.String())
+	events := parseSSE(resumeRec.Body().String())
 	if !hasEvent(events, "text_delta") {
-		t.Fatalf("missing text_delta on resume: %#v body=%s", events, resumeRec.Body.String())
+		t.Fatalf("missing text_delta on resume: %#v body=%s", events, resumeRec.Body().String())
 	}
 	foundReplace := false
 	for _, e := range events {
@@ -97,7 +97,7 @@ func TestResumeReplaysLastTextDeltaAfterDisconnect(t *testing.T) {
 		}
 	}
 	if !foundReplace {
-		t.Fatalf("resume text_delta missing replace snapshot: %s", resumeRec.Body.String())
+		t.Fatalf("resume text_delta missing replace snapshot: %s", resumeRec.Body().String())
 	}
 	if !hasEvent(events, "message_end") {
 		t.Fatalf("missing message_end: %#v", events)
@@ -127,7 +127,7 @@ func TestResumeReplaysLastQuestionRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
 	go func() {
-		p.routes().ServeHTTP(httptest.NewRecorder(), req)
+		p.routes().ServeHTTP(newSafeResponseRecorder(), req)
 	}()
 
 	runID := waitRunID(t, p)
@@ -153,13 +153,13 @@ func TestResumeReplaysLastQuestionRequest(t *testing.T) {
 	resumeReq.Header.Set("X-Chat-API-Channel", testChannel)
 	resumeReq.Header.Set("Content-Type", "application/json")
 	resumeReq.Header.Set("Accept", "text/event-stream")
-	resumeRec := httptest.NewRecorder()
+	resumeRec := newSafeResponseRecorder()
 	go func() {
 		p.routes().ServeHTTP(resumeRec, resumeReq)
 	}()
 	time.Sleep(50 * time.Millisecond)
-	if !hasEvent(parseSSE(resumeRec.Body.String()), "question_request") {
-		t.Fatalf("missing question_request replay: %s", resumeRec.Body.String())
+	if !hasEvent(parseSSE(resumeRec.Body().String()), "question_request") {
+		t.Fatalf("missing question_request replay: %s", resumeRec.Body().String())
 	}
 	close(release)
 }
@@ -197,7 +197,7 @@ func TestResumeOnlyKeepsLastRecoverableEvent(t *testing.T) {
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
 	go func() {
-		p.routes().ServeHTTP(httptest.NewRecorder(), req)
+		p.routes().ServeHTTP(newSafeResponseRecorder(), req)
 	}()
 
 	runID := waitRunID(t, p)
@@ -244,7 +244,7 @@ func TestResumeReplaysPingWhenIdleAfterDisconnect(t *testing.T) {
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
 	go func() {
-		p.routes().ServeHTTP(httptest.NewRecorder(), req)
+		p.routes().ServeHTTP(newSafeResponseRecorder(), req)
 	}()
 
 	runID := waitRunID(t, p)
@@ -268,13 +268,13 @@ func TestResumeReplaysPingWhenIdleAfterDisconnect(t *testing.T) {
 	resumeReq.Header.Set("X-Chat-API-Channel", testChannel)
 	resumeReq.Header.Set("Content-Type", "application/json")
 	resumeReq.Header.Set("Accept", "text/event-stream")
-	resumeRec := httptest.NewRecorder()
+	resumeRec := newSafeResponseRecorder()
 	go func() {
 		p.routes().ServeHTTP(resumeRec, resumeReq)
 	}()
 	time.Sleep(50 * time.Millisecond)
 
-	events := parseSSE(resumeRec.Body.String())
+	events := parseSSE(resumeRec.Body().String())
 	foundPing := false
 	for _, e := range events {
 		if e.Name != "ping" {
@@ -290,7 +290,7 @@ func TestResumeReplaysPingWhenIdleAfterDisconnect(t *testing.T) {
 		}
 	}
 	if !foundPing {
-		t.Fatalf("missing ping on resume: %#v body=%s", events, resumeRec.Body.String())
+		t.Fatalf("missing ping on resume: %#v body=%s", events, resumeRec.Body().String())
 	}
 	close(block)
 }
@@ -316,7 +316,7 @@ func TestResumeAfterFinishedDeliversRetainedAnswer(t *testing.T) {
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
 	go func() {
-		p.routes().ServeHTTP(httptest.NewRecorder(), req)
+		p.routes().ServeHTTP(newSafeResponseRecorder(), req)
 	}()
 
 	runID := waitRunID(t, p)
@@ -332,12 +332,12 @@ func TestResumeAfterFinishedDeliversRetainedAnswer(t *testing.T) {
 	resumeReq.Header.Set("X-Chat-API-Channel", testChannel)
 	resumeReq.Header.Set("Content-Type", "application/json")
 	resumeReq.Header.Set("Accept", "text/event-stream")
-	resumeRec := httptest.NewRecorder()
+	resumeRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(resumeRec, resumeReq)
-	if resumeRec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200", resumeRec.Code, resumeRec.Body.String())
+	if resumeRec.Code() != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", resumeRec.Code(), resumeRec.Body().String())
 	}
-	body := resumeRec.Body.String()
+	body := resumeRec.Body().String()
 	if !strings.Contains(body, "done offline") {
 		t.Fatalf("resume must deliver the retained answer, got: %s", body)
 	}
@@ -365,13 +365,13 @@ func TestResumeUnknownRunReturnsMessageEnd(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code(), rec.Body().String())
 	}
-	if !hasEvent(parseSSE(rec.Body.String()), "message_end") {
-		t.Fatalf("missing message_end: %s", rec.Body.String())
+	if !hasEvent(parseSSE(rec.Body().String()), "message_end") {
+		t.Fatalf("missing message_end: %s", rec.Body().String())
 	}
 }
 
@@ -394,7 +394,7 @@ func TestResumeWhileAttachedReturnsConflict(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	go func() {
-		p.routes().ServeHTTP(httptest.NewRecorder(), req)
+		p.routes().ServeHTTP(newSafeResponseRecorder(), req)
 	}()
 	runID := waitRunID(t, p)
 
@@ -405,10 +405,10 @@ func TestResumeWhileAttachedReturnsConflict(t *testing.T) {
 	resumeReq.Header.Set("X-Chat-API-Channel", testChannel)
 	resumeReq.Header.Set("Content-Type", "application/json")
 	resumeReq.Header.Set("Accept", "text/event-stream")
-	resumeRec := httptest.NewRecorder()
+	resumeRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(resumeRec, resumeReq)
-	if resumeRec.Code != http.StatusConflict {
-		t.Fatalf("status=%d body=%s, want 409", resumeRec.Code, resumeRec.Body.String())
+	if resumeRec.Code() != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", resumeRec.Code(), resumeRec.Body().String())
 	}
 	close(block)
 }
@@ -466,7 +466,7 @@ func TestResumeWakesWhenFinishAfterAttach(t *testing.T) {
 	req.Header.Set("Accept", "text/event-stream")
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
-	go func() { p.routes().ServeHTTP(httptest.NewRecorder(), req) }()
+	go func() { p.routes().ServeHTTP(newSafeResponseRecorder(), req) }()
 
 	runID := waitRunID(t, p)
 	cancel()
@@ -480,7 +480,7 @@ func TestResumeWakesWhenFinishAfterAttach(t *testing.T) {
 	resumeReq.Header.Set("X-Chat-API-Channel", testChannel)
 	resumeReq.Header.Set("Content-Type", "application/json")
 	resumeReq.Header.Set("Accept", "text/event-stream")
-	resumeRec := httptest.NewRecorder()
+	resumeRec := newSafeResponseRecorder()
 	done := make(chan struct{})
 	go func() {
 		p.routes().ServeHTTP(resumeRec, resumeReq)
@@ -494,8 +494,8 @@ func TestResumeWakesWhenFinishAfterAttach(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("resume SSE hung after detached finish; want message_end wake")
 	}
-	if !hasEvent(parseSSE(resumeRec.Body.String()), "message_end") {
-		t.Fatalf("missing message_end: %s", resumeRec.Body.String())
+	if !hasEvent(parseSSE(resumeRec.Body().String()), "message_end") {
+		t.Fatalf("missing message_end: %s", resumeRec.Body().String())
 	}
 	if p.pending.get(runID) != nil {
 		t.Fatal("run should be deleted after resume consumed terminal")
@@ -544,7 +544,7 @@ func TestDetachedQuestionNotOverwrittenByText(t *testing.T) {
 	req.Header.Set("Accept", "text/event-stream")
 	ctx, cancel := context.WithCancel(req.Context())
 	req = req.WithContext(ctx)
-	go func() { p.routes().ServeHTTP(httptest.NewRecorder(), req) }()
+	go func() { p.routes().ServeHTTP(newSafeResponseRecorder(), req) }()
 
 	runID := waitRunID(t, p)
 	cancel()

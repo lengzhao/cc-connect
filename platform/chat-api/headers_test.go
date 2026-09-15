@@ -108,10 +108,10 @@ func TestChatMessagesForwardHeadersStayOutOfAgentPrompt(t *testing.T) {
 	req.Header.Set("X-Tenant-Id", "acme")
 	req.Header.Set("X-Trace-Id", "trace-42")
 
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code(), rec.Body().String())
 	}
 
 	select {
@@ -146,7 +146,7 @@ func TestCORSIncludesForwardHeaders(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodOptions, "/v1/chat-messages", nil)
 	req.Header.Set("Origin", "https://app.example.com")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	allowed := rec.Header().Get("Access-Control-Allow-Headers")
 	if !strings.Contains(allowed, "X-Tenant-Id") || !strings.Contains(allowed, "X-Trace-Id") {

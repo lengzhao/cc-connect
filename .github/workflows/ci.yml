@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
   release:
     types: [published]
 
@@ -121,6 +121,8 @@ jobs:
 
       - name: Run tests
         run: go test ./... -v -race
+        env:
+          SKIP_REAL_AGENT_CLI: "1"
 
       - name: Run tests with coverage
         run: go test ./... -coverprofile=coverage.out -covermode=atomic

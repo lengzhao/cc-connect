@@ -57,14 +57,14 @@ func TestChatMessagesRequiresChannel(t *testing.T) {
 	req.Header.Set("X-Chat-API-User", "user_001")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body=%s, want 400", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s, want 400", rec.Code(), rec.Body().String())
 	}
-	if !strings.Contains(rec.Body.String(), "channel required") {
-		t.Fatalf("body = %s", rec.Body.String())
+	if !strings.Contains(rec.Body().String(), "channel required") {
+		t.Fatalf("body = %s", rec.Body().String())
 	}
 }
 
@@ -73,10 +73,10 @@ func TestResolveChannelRejectsEmpty(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat-messages", strings.NewReader(`{"query":"hi"}`))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-User", "user_001")
-	w := httptest.NewRecorder()
+	w := newSafeResponseRecorder()
 	got, ok := p.resolveChannel(w, req)
-	if ok || got != "" || w.Code != http.StatusBadRequest {
-		t.Fatalf("empty channel: got=%q ok=%v status=%d, want reject 400", got, ok, w.Code)
+	if ok || got != "" || w.Code() != http.StatusBadRequest {
+		t.Fatalf("empty channel: got=%q ok=%v status=%d, want reject 400", got, ok, w.Code())
 	}
 }
 
@@ -89,10 +89,10 @@ func TestResolveChannelRejectsInvalidNames(t *testing.T) {
 		req.Header.Set("X-Chat-API-User", "user_001")
 		req.Header.Set("X-Chat-API-Channel", ch)
 		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
+		w := newSafeResponseRecorder()
 		got, ok := p.resolveChannel(w, req)
-		if ok || got != "" || w.Code != http.StatusBadRequest {
-			t.Fatalf("channel %q: got=%q ok=%v status=%d, want reject 400", ch, got, ok, w.Code)
+		if ok || got != "" || w.Code() != http.StatusBadRequest {
+			t.Fatalf("channel %q: got=%q ok=%v status=%d, want reject 400", ch, got, ok, w.Code())
 		}
 	}
 }

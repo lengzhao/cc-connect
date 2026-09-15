@@ -54,13 +54,13 @@ func TestStructuredStreamNoMarkdownUpdate(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	<-done
 
-	joined := collectTextDeltas(rec.Body.String())
+	joined := collectTextDeltas(rec.Body().String())
 	if joined != fullAnswer {
-		t.Fatalf("joined = %q, want full answer\nSSE=%s", joined, rec.Body.String())
+		t.Fatalf("joined = %q, want full answer\nSSE=%s", joined, rec.Body().String())
 	}
 	if !strings.Contains(joined, "## 策略") {
 		t.Fatalf("mid section lost: %q", joined)
@@ -106,11 +106,11 @@ func TestStructuredStreamToolEventsSkipMarkdownSniff(t *testing.T) {
 	req.Header.Set("X-Chat-API-Channel", testChannel)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
 	<-done
 
-	out := rec.Body.String()
+	out := rec.Body().String()
 	if strings.Count(out, "event: tool_result") != 1 {
 		t.Fatalf("expected exactly one tool_result, got SSE:\n%s", out)
 	}
@@ -123,7 +123,7 @@ func TestStructuredStreamToolEventsSkipMarkdownSniff(t *testing.T) {
 }
 
 func TestStructuredStreamAnswerReplace(t *testing.T) {
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	sse, err := newSSEWriter(rec)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestStructuredStreamAnswerReplace(t *testing.T) {
 	})
 	_ = run.flushDelta()
 
-	body := rec.Body.String()
+	body := rec.Body().String()
 	if !strings.Contains(body, `"replace":true`) {
 		t.Fatalf("expected replace: %s", body)
 	}

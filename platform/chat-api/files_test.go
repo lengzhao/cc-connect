@@ -49,10 +49,10 @@ func TestListFiles(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/files", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("list status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 	var resp struct {
 		OK   bool `json:"ok"`
@@ -60,7 +60,7 @@ func TestListFiles(t *testing.T) {
 			Files []fileView `json:"files"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
 	if len(resp.Data.Files) != 2 {
@@ -73,12 +73,12 @@ func TestListFiles(t *testing.T) {
 
 	reqKind := httptest.NewRequest(http.MethodGet, "/v1/files?kind=download", nil)
 	setChatReadHeaders(reqKind, "secret")
-	recKind := httptest.NewRecorder()
+	recKind := newSafeResponseRecorder()
 	p.routes().ServeHTTP(recKind, reqKind)
-	if recKind.Code != http.StatusOK {
-		t.Fatalf("kind filter status = %d", recKind.Code)
+	if recKind.Code() != http.StatusOK {
+		t.Fatalf("kind filter status = %d", recKind.Code())
 	}
-	if err := json.Unmarshal(recKind.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(recKind.Body().Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
 	if len(resp.Data.Files) != 1 || resp.Data.Files[0].ID != downloadMeta.ID || resp.Data.Files[0].Kind != fileKindDownload {
@@ -103,10 +103,10 @@ func TestUploadAndDownloadFile(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/files", body)
 	setFileHeaders(req, "secret", "user_001")
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("upload status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusCreated {
+		t.Fatalf("upload status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 
 	var uploadResp struct {
@@ -118,7 +118,7 @@ func TestUploadAndDownloadFile(t *testing.T) {
 			Size     int64  `json:"size"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &uploadResp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &uploadResp); err != nil {
 		t.Fatal(err)
 	}
 	if !uploadResp.OK || !strings.HasPrefix(uploadResp.Data.ID, fileIDPrefix) {
@@ -135,12 +135,12 @@ func TestUploadAndDownloadFile(t *testing.T) {
 
 	dlReq := httptest.NewRequest(http.MethodGet, "/v1/files/"+uploadResp.Data.ID, nil)
 	setChatReadHeaders(dlReq, "secret")
-	dlRec := httptest.NewRecorder()
+	dlRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(dlRec, dlReq)
-	if dlRec.Code != http.StatusOK {
-		t.Fatalf("download status = %d, body = %s", dlRec.Code, dlRec.Body.String())
+	if dlRec.Code() != http.StatusOK {
+		t.Fatalf("download status = %d, body = %s", dlRec.Code(), dlRec.Body().String())
 	}
-	if got := dlRec.Body.String(); got != "hello upload" {
+	if got := dlRec.Body().String(); got != "hello upload" {
 		t.Fatalf("download body = %q", got)
 	}
 }
@@ -151,19 +151,19 @@ func TestUploadFileRequiresUserAndChannel(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/files", strings.NewReader(""))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-Channel", testChannel)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (missing user)", rec.Code)
+	if rec.Code() != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (missing user)", rec.Code())
 	}
 
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/files", strings.NewReader(""))
 	req2.Header.Set("Authorization", "Bearer secret")
 	req2.Header.Set("X-Chat-API-User", "user_001")
-	rec2 := httptest.NewRecorder()
+	rec2 := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec2, req2)
-	if rec2.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (missing channel)", rec2.Code)
+	if rec2.Code() != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (missing channel)", rec2.Code())
 	}
 }
 
@@ -171,10 +171,10 @@ func TestDownloadFileNotFound(t *testing.T) {
 	p, _ := testWorkspacePlatform(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/files/file_abcdefghijklmnopqrstuv", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
+	if rec.Code() != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code())
 	}
 }
 
@@ -214,26 +214,26 @@ func TestSharedFilesListsAndDownloadsOnlySharedRoot(t *testing.T) {
 
 	listReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=reports", nil)
 	setChatReadHeaders(listReq, "secret")
-	listRec := httptest.NewRecorder()
+	listRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(listRec, listReq)
-	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), `"path":"reports/brief.txt"`) {
-		t.Fatalf("list status=%d body=%s", listRec.Code, listRec.Body.String())
+	if listRec.Code() != http.StatusOK || !strings.Contains(listRec.Body().String(), `"path":"reports/brief.txt"`) {
+		t.Fatalf("list status=%d body=%s", listRec.Code(), listRec.Body().String())
 	}
 
 	downloadReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=reports/brief.txt", nil)
 	setChatReadHeaders(downloadReq, "secret")
-	downloadRec := httptest.NewRecorder()
+	downloadRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(downloadRec, downloadReq)
-	if downloadRec.Code != http.StatusOK || downloadRec.Body.String() != "brief" {
-		t.Fatalf("download status=%d body=%q", downloadRec.Code, downloadRec.Body.String())
+	if downloadRec.Code() != http.StatusOK || downloadRec.Body().String() != "brief" {
+		t.Fatalf("download status=%d body=%q", downloadRec.Code(), downloadRec.Body().String())
 	}
 
 	escapeReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=../secret", nil)
 	setChatReadHeaders(escapeReq, "secret")
-	escapeRec := httptest.NewRecorder()
+	escapeRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(escapeRec, escapeReq)
-	if escapeRec.Code != http.StatusBadRequest {
-		t.Fatalf("escape status=%d body=%s", escapeRec.Code, escapeRec.Body.String())
+	if escapeRec.Code() != http.StatusBadRequest {
+		t.Fatalf("escape status=%d body=%s", escapeRec.Code(), escapeRec.Body().String())
 	}
 
 	outside := filepath.Join(baseDir, "outside.txt")
@@ -246,10 +246,10 @@ func TestSharedFilesListsAndDownloadsOnlySharedRoot(t *testing.T) {
 	}
 	symlinkReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=outside-link", nil)
 	setChatReadHeaders(symlinkReq, "secret")
-	symlinkRec := httptest.NewRecorder()
+	symlinkRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(symlinkRec, symlinkReq)
-	if symlinkRec.Code != http.StatusBadRequest {
-		t.Fatalf("symlink escape status=%d body=%s", symlinkRec.Code, symlinkRec.Body.String())
+	if symlinkRec.Code() != http.StatusBadRequest {
+		t.Fatalf("symlink escape status=%d body=%s", symlinkRec.Code(), symlinkRec.Body().String())
 	}
 }
 
@@ -257,10 +257,10 @@ func TestSharedFilesInitializesManagedDirectories(t *testing.T) {
 	p, baseDir := testWorkspacePlatform(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=knowledge", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code(), rec.Body().String())
 	}
 	for _, rel := range []string{"files/chat/uploads", "files/chat/downloads"} {
 		if st, err := os.Stat(filepath.Join(baseDir, testChannel, filepath.FromSlash(rel))); err != nil || !st.IsDir() {
@@ -285,10 +285,10 @@ func TestSharedKnowledgeAPIIsProjectScoped(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=knowledge/shared.md", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-Channel", "another-channel")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || rec.Body.String() != "shared knowledge" {
-		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK || rec.Body().String() != "shared knowledge" {
+		t.Fatalf("status=%d body=%q", rec.Code(), rec.Body().String())
 	}
 }
 
@@ -298,10 +298,10 @@ func TestSharedMarkdownPutCreatesOverwritesAndDeletes(t *testing.T) {
 
 	createReq := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path="+path, strings.NewReader("# Version 1\n"))
 	setChatReadHeaders(createReq, "secret")
-	createRec := httptest.NewRecorder()
+	createRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(createRec, createReq)
-	if createRec.Code != http.StatusCreated || !strings.Contains(createRec.Body.String(), `"overwritten":false`) {
-		t.Fatalf("create status=%d body=%s", createRec.Code, createRec.Body.String())
+	if createRec.Code() != http.StatusCreated || !strings.Contains(createRec.Body().String(), `"overwritten":false`) {
+		t.Fatalf("create status=%d body=%s", createRec.Code(), createRec.Body().String())
 	}
 	target := filepath.Join(baseDir, workspaceFilesDir, filepath.FromSlash(path))
 	if got, err := os.ReadFile(target); err != nil || string(got) != "# Version 1\n" {
@@ -315,10 +315,10 @@ func TestSharedMarkdownPutCreatesOverwritesAndDeletes(t *testing.T) {
 
 	updateReq := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path="+path, strings.NewReader("# Version 2\n"))
 	setChatReadHeaders(updateReq, "secret")
-	updateRec := httptest.NewRecorder()
+	updateRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(updateRec, updateReq)
-	if updateRec.Code != http.StatusOK || !strings.Contains(updateRec.Body.String(), `"overwritten":true`) {
-		t.Fatalf("update status=%d body=%s", updateRec.Code, updateRec.Body.String())
+	if updateRec.Code() != http.StatusOK || !strings.Contains(updateRec.Body().String(), `"overwritten":true`) {
+		t.Fatalf("update status=%d body=%s", updateRec.Code(), updateRec.Body().String())
 	}
 	if got, err := os.ReadFile(target); err != nil || string(got) != "# Version 2\n" {
 		t.Fatalf("updated file=%q err=%v", got, err)
@@ -326,10 +326,10 @@ func TestSharedMarkdownPutCreatesOverwritesAndDeletes(t *testing.T) {
 
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/files/shared?path="+path, nil)
 	setChatReadHeaders(deleteReq, "secret")
-	deleteRec := httptest.NewRecorder()
+	deleteRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(deleteRec, deleteReq)
-	if deleteRec.Code != http.StatusOK || !strings.Contains(deleteRec.Body.String(), `"deleted":true`) {
-		t.Fatalf("delete status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	if deleteRec.Code() != http.StatusOK || !strings.Contains(deleteRec.Body().String(), `"deleted":true`) {
+		t.Fatalf("delete status=%d body=%s", deleteRec.Code(), deleteRec.Body().String())
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("deleted file still exists: %v", err)
@@ -337,17 +337,17 @@ func TestSharedMarkdownPutCreatesOverwritesAndDeletes(t *testing.T) {
 
 	missingReq := httptest.NewRequest(http.MethodDelete, "/v1/files/shared?path="+path, nil)
 	setChatReadHeaders(missingReq, "secret")
-	missingRec := httptest.NewRecorder()
+	missingRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(missingRec, missingReq)
-	if missingRec.Code != http.StatusNotFound {
-		t.Fatalf("missing delete status=%d body=%s", missingRec.Code, missingRec.Body.String())
+	if missingRec.Code() != http.StatusNotFound {
+		t.Fatalf("missing delete status=%d body=%s", missingRec.Code(), missingRec.Body().String())
 	}
 	missingParentReq := httptest.NewRequest(http.MethodDelete, "/v1/files/shared?path=memory/not/created/note.md", nil)
 	setChatReadHeaders(missingParentReq, "secret")
-	missingParentRec := httptest.NewRecorder()
+	missingParentRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(missingParentRec, missingParentReq)
-	if missingParentRec.Code != http.StatusNotFound {
-		t.Fatalf("missing-parent delete status=%d body=%s", missingParentRec.Code, missingParentRec.Body.String())
+	if missingParentRec.Code() != http.StatusNotFound {
+		t.Fatalf("missing-parent delete status=%d body=%s", missingParentRec.Code(), missingParentRec.Body().String())
 	}
 	if _, err := os.Stat(filepath.Join(baseDir, workspaceFilesDir, "memory", "not")); !os.IsNotExist(err) {
 		t.Fatalf("delete created a missing parent directory: %v", err)
@@ -358,10 +358,10 @@ func TestSharedMarkdownPutAcceptsMarkdownExtension(t *testing.T) {
 	p, _ := testWorkspacePlatform(t)
 	req := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=knowledge/guide.markdown", strings.NewReader("# Guide\n"))
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code(), rec.Body().String())
 	}
 }
 
@@ -376,10 +376,10 @@ func TestSharedMarkdownMutationRejectsUnsafePaths(t *testing.T) {
 		t.Run(strings.ReplaceAll(path, "/", "_"), func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path="+path, strings.NewReader("unsafe"))
 			setChatReadHeaders(req, "secret")
-			rec := httptest.NewRecorder()
+			rec := newSafeResponseRecorder()
 			p.routes().ServeHTTP(rec, req)
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("path=%q status=%d body=%s", path, rec.Code, rec.Body.String())
+			if rec.Code() != http.StatusBadRequest {
+				t.Fatalf("path=%q status=%d body=%s", path, rec.Code(), rec.Body().String())
 			}
 		})
 	}
@@ -390,7 +390,7 @@ func TestSharedMarkdownMutationRejectsSymlinksAndDirectories(t *testing.T) {
 	root := filepath.Join(baseDir, workspaceFilesDir)
 	initReq := httptest.NewRequest(http.MethodGet, "/v1/files/shared?path=knowledge", nil)
 	setChatReadHeaders(initReq, "secret")
-	p.routes().ServeHTTP(httptest.NewRecorder(), initReq)
+	p.routes().ServeHTTP(newSafeResponseRecorder(), initReq)
 
 	outside := filepath.Join(t.TempDir(), "outside.md")
 	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
@@ -411,10 +411,10 @@ func TestSharedMarkdownMutationRejectsSymlinksAndDirectories(t *testing.T) {
 		for _, method := range []string{http.MethodPut, http.MethodDelete} {
 			req := httptest.NewRequest(method, "/v1/files/shared?path="+path, strings.NewReader("changed"))
 			setChatReadHeaders(req, "secret")
-			rec := httptest.NewRecorder()
+			rec := newSafeResponseRecorder()
 			p.routes().ServeHTTP(rec, req)
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("method=%s path=%s status=%d body=%s", method, path, rec.Code, rec.Body.String())
+			if rec.Code() != http.StatusBadRequest {
+				t.Fatalf("method=%s path=%s status=%d body=%s", method, path, rec.Code(), rec.Body().String())
 			}
 		}
 	}
@@ -428,34 +428,34 @@ func TestSharedMarkdownPutEnforcesSizeAuthChannelAndMethod(t *testing.T) {
 
 	largeReq := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=memory/large.md", bytes.NewReader(make([]byte, sharedMarkdownMaxSize+1)))
 	setChatReadHeaders(largeReq, "secret")
-	largeRec := httptest.NewRecorder()
+	largeRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(largeRec, largeReq)
-	if largeRec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("large status=%d body=%s", largeRec.Code, largeRec.Body.String())
+	if largeRec.Code() != http.StatusRequestEntityTooLarge {
+		t.Fatalf("large status=%d body=%s", largeRec.Code(), largeRec.Body().String())
 	}
 
 	unauthorizedReq := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=memory/a.md", strings.NewReader("a"))
 	unauthorizedReq.Header.Set("X-Chat-API-Channel", testChannel)
-	unauthorizedRec := httptest.NewRecorder()
+	unauthorizedRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(unauthorizedRec, unauthorizedReq)
-	if unauthorizedRec.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthorized status=%d body=%s", unauthorizedRec.Code, unauthorizedRec.Body.String())
+	if unauthorizedRec.Code() != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d body=%s", unauthorizedRec.Code(), unauthorizedRec.Body().String())
 	}
 
 	noChannelReq := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=memory/a.md", strings.NewReader("a"))
 	noChannelReq.Header.Set("Authorization", "Bearer secret")
-	noChannelRec := httptest.NewRecorder()
+	noChannelRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(noChannelRec, noChannelReq)
-	if noChannelRec.Code != http.StatusBadRequest {
-		t.Fatalf("no-channel status=%d body=%s", noChannelRec.Code, noChannelRec.Body.String())
+	if noChannelRec.Code() != http.StatusBadRequest {
+		t.Fatalf("no-channel status=%d body=%s", noChannelRec.Code(), noChannelRec.Body().String())
 	}
 
 	postReq := httptest.NewRequest(http.MethodPost, "/v1/files/shared?path=memory/a.md", strings.NewReader("a"))
 	setChatReadHeaders(postReq, "secret")
-	postRec := httptest.NewRecorder()
+	postRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(postRec, postReq)
-	if postRec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("post status=%d body=%s", postRec.Code, postRec.Body.String())
+	if postRec.Code() != http.StatusMethodNotAllowed {
+		t.Fatalf("post status=%d body=%s", postRec.Code(), postRec.Body().String())
 	}
 }
 
@@ -464,10 +464,10 @@ func TestSharedMarkdownMutationIsProjectScoped(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/v1/files/shared?path=memory/note.md", strings.NewReader("other channel"))
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Chat-API-Channel", "other-channel")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code(), rec.Body().String())
 	}
 	if got, err := os.ReadFile(filepath.Join(baseDir, "files", "memory", "note.md")); err != nil || string(got) != "other channel" {
 		t.Fatalf("project shared file=%q err=%v", got, err)
@@ -489,10 +489,10 @@ func TestUploadWithoutWorkspace(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/files", body)
 	setFileHeaders(req, "secret", "user_001")
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
+	if rec.Code() != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code())
 	}
 }
 
@@ -509,16 +509,16 @@ func TestUploadTooLarge(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/files", body)
 	setFileHeaders(req, "secret", "user_001")
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want 413", rec.Code)
+	if rec.Code() != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code())
 	}
 }
 
 func TestSendFileStoresInDownloadDirAndEmitsSSE(t *testing.T) {
 	p, baseDir := testWorkspacePlatform(t)
-	sse, err := newSSEWriter(httptest.NewRecorder())
+	sse, err := newSSEWriter(newSafeResponseRecorder())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -794,10 +794,10 @@ func TestPrivilegedUpload_ForbiddenWhenDisabled(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/files", body)
 	setFileHeaders(req, "secret", "user_001")
 	req.Header.Set("Content-Type", ctype)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rec.Code(), rec.Body().String())
 	}
 }
 
@@ -809,10 +809,10 @@ func TestPrivilegedUpload_WritesWorkspacePath(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/files", body)
 	setFileHeaders(req, "secret", "user_001")
 	req.Header.Set("Content-Type", ctype)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200/201, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusCreated && rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d, want 200/201, body = %s", rec.Code(), rec.Body().String())
 	}
 
 	var uploadResp struct {
@@ -827,7 +827,7 @@ func TestPrivilegedUpload_WritesWorkspacePath(t *testing.T) {
 			Overwritten bool   `json:"overwritten"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &uploadResp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &uploadResp); err != nil {
 		t.Fatal(err)
 	}
 	if !uploadResp.OK {
@@ -860,17 +860,17 @@ func TestPrivilegedUpload_WritesWorkspacePath(t *testing.T) {
 
 	listReq := httptest.NewRequest(http.MethodGet, "/v1/files", nil)
 	setChatReadHeaders(listReq, "secret")
-	listRec := httptest.NewRecorder()
+	listRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(listRec, listReq)
-	if listRec.Code != http.StatusOK {
-		t.Fatalf("list status = %d", listRec.Code)
+	if listRec.Code() != http.StatusOK {
+		t.Fatalf("list status = %d", listRec.Code())
 	}
 	var listResp struct {
 		Data struct {
 			Files []fileView `json:"files"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(listRec.Body.Bytes(), &listResp); err != nil {
+	if err := json.Unmarshal(listRec.Body().Bytes(), &listResp); err != nil {
 		t.Fatal(err)
 	}
 	if len(listResp.Data.Files) != 0 {
@@ -886,20 +886,20 @@ func TestPrivilegedUpload_ConflictWithoutOverwrite(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/v1/files", body1)
 	setFileHeaders(req1, "secret", "user_001")
 	req1.Header.Set("Content-Type", ctype1)
-	rec1 := httptest.NewRecorder()
+	rec1 := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec1, req1)
-	if rec1.Code != http.StatusCreated && rec1.Code != http.StatusOK {
-		t.Fatalf("first upload status = %d, body = %s", rec1.Code, rec1.Body.String())
+	if rec1.Code() != http.StatusCreated && rec1.Code() != http.StatusOK {
+		t.Fatalf("first upload status = %d, body = %s", rec1.Code(), rec1.Body().String())
 	}
 
 	body2, ctype2 := privilegedUploadBody(t, "out.txt", "second", "subdir/out.txt", "")
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/files", body2)
 	setFileHeaders(req2, "secret", "user_001")
 	req2.Header.Set("Content-Type", ctype2)
-	rec2 := httptest.NewRecorder()
+	rec2 := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec2, req2)
-	if rec2.Code != http.StatusConflict {
-		t.Fatalf("second upload status = %d, want 409, body = %s", rec2.Code, rec2.Body.String())
+	if rec2.Code() != http.StatusConflict {
+		t.Fatalf("second upload status = %d, want 409, body = %s", rec2.Code(), rec2.Body().String())
 	}
 	wantPath := filepath.Join(baseDir, testChannel, "subdir", "out.txt")
 	got, err := os.ReadFile(wantPath)
@@ -919,20 +919,20 @@ func TestPrivilegedUpload_Overwrite(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/v1/files", body1)
 	setFileHeaders(req1, "secret", "user_001")
 	req1.Header.Set("Content-Type", ctype1)
-	rec1 := httptest.NewRecorder()
+	rec1 := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec1, req1)
-	if rec1.Code != http.StatusCreated && rec1.Code != http.StatusOK {
-		t.Fatalf("first upload status = %d, body = %s", rec1.Code, rec1.Body.String())
+	if rec1.Code() != http.StatusCreated && rec1.Code() != http.StatusOK {
+		t.Fatalf("first upload status = %d, body = %s", rec1.Code(), rec1.Body().String())
 	}
 
 	body2, ctype2 := privilegedUploadBody(t, "out.txt", "replaced", "subdir/out.txt", "true")
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/files", body2)
 	setFileHeaders(req2, "secret", "user_001")
 	req2.Header.Set("Content-Type", ctype2)
-	rec2 := httptest.NewRecorder()
+	rec2 := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec2, req2)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("overwrite status = %d, want 200, body = %s", rec2.Code, rec2.Body.String())
+	if rec2.Code() != http.StatusOK {
+		t.Fatalf("overwrite status = %d, want 200, body = %s", rec2.Code(), rec2.Body().String())
 	}
 	var uploadResp struct {
 		OK   bool `json:"ok"`
@@ -942,7 +942,7 @@ func TestPrivilegedUpload_Overwrite(t *testing.T) {
 			Path        string `json:"path"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec2.Body.Bytes(), &uploadResp); err != nil {
+	if err := json.Unmarshal(rec2.Body().Bytes(), &uploadResp); err != nil {
 		t.Fatal(err)
 	}
 	if !uploadResp.OK || !uploadResp.Data.Overwritten || uploadResp.Data.Size != 8 {
@@ -967,10 +967,10 @@ func TestPrivilegedUpload_EnforcesMaxSize(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/files", body)
 	setFileHeaders(req, "secret", "user_001")
 	req.Header.Set("Content-Type", ctype)
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status = %d, want 413, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413, body = %s", rec.Code(), rec.Body().String())
 	}
 }
 
@@ -979,10 +979,10 @@ func TestPrivilegedDownloadByPath_ForbiddenWhenDisabled(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/files/by-path?path=dir/f.txt", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rec.Code(), rec.Body().String())
 	}
 }
 
@@ -1001,12 +1001,12 @@ func TestPrivilegedDownloadByPath_ReturnsBytes(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/files/by-path?path="+rel, nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code(), rec.Body().String())
 	}
-	if got := rec.Body.String(); got != "by-path content" {
+	if got := rec.Body().String(); got != "by-path content" {
 		t.Fatalf("body = %q, want by-path content", got)
 	}
 	ct := rec.Header().Get("Content-Type")
@@ -1025,10 +1025,10 @@ func TestPrivilegedDownloadByPath_MissingFile(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/files/by-path?path=dir/missing.txt", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body = %s", rec.Code(), rec.Body().String())
 	}
 }
 
@@ -1043,10 +1043,10 @@ func TestPrivilegedDownloadByPath_DirectoryNotFound(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/files/by-path?path=adir", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 for directory, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for directory, body = %s", rec.Code(), rec.Body().String())
 	}
 }
 
@@ -1056,10 +1056,10 @@ func TestPrivilegedDownloadByPath_EmptyPath(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/files/by-path?path=", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body = %s", rec.Code(), rec.Body().String())
 	}
 }
 
@@ -1074,12 +1074,12 @@ func TestPrivilegedDownloadByPath_ManagedFileIDStillWorks(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/files/"+meta.ID, nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("managed download status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("managed download status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
-	if got := rec.Body.String(); got != "managed bytes" {
+	if got := rec.Body().String(); got != "managed bytes" {
 		t.Fatalf("body = %q", got)
 	}
 }
@@ -1177,17 +1177,17 @@ func TestDownloadFileTTL_LazyGCOnList(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/files", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("list status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", rec.Code(), rec.Body().String())
 	}
 	var resp struct {
 		Data struct {
 			Files []fileView `json:"files"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
 	ids := map[string]bool{}
@@ -1210,10 +1210,10 @@ func TestDownloadFileTTL_LazyGCOnList(t *testing.T) {
 
 	dlReq := httptest.NewRequest(http.MethodGet, "/v1/files/"+staleDL.ID, nil)
 	setChatReadHeaders(dlReq, "secret")
-	dlRec := httptest.NewRecorder()
+	dlRec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(dlRec, dlReq)
-	if dlRec.Code != http.StatusNotFound {
-		t.Fatalf("stale GET status = %d, want 404", dlRec.Code)
+	if dlRec.Code() != http.StatusNotFound {
+		t.Fatalf("stale GET status = %d, want 404", dlRec.Code())
 	}
 }
 
@@ -1235,17 +1235,17 @@ func TestDownloadFileTTL_DoesNotTouchUploads(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/files?kind=upload", nil)
 	setChatReadHeaders(req, "secret")
-	rec := httptest.NewRecorder()
+	rec := newSafeResponseRecorder()
 	p.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
+	if rec.Code() != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code())
 	}
 	var resp struct {
 		Data struct {
 			Files []fileView `json:"files"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(rec.Body().Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
 	if len(resp.Data.Files) != 1 || resp.Data.Files[0].ID != uploadMeta.ID {
