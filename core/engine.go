@@ -6321,6 +6321,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 				// Reset per-turn state for the next turn
 				msgID = queued.messageID
+				stages.msgSessionKey = queued.msgSessionKey
 				textParts = nil
 				segmentStart = 0
 				toolCount = 0

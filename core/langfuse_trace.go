@@ -9,7 +9,9 @@ import (
 // LangfuseTraceID returns the deterministic Langfuse trace id that
 // agent-runtime's exporter derives for a platform message:
 //
-//	"turn-" + hex(sha256(sessionKey + "\n" + messageID))[:16]
+//	"turn-" + hex(sha256(sessionKey + "\n" + messageID))[:32]
+//
+// (the first 16 digest bytes → 32 hex characters).
 //
 // Logging it in the turn summary lets log analysis join turns to their
 // Langfuse traces exactly, without fuzzy time/latency matching. Returns ""
