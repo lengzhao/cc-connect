@@ -3883,7 +3883,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		sendDone <- e.sendWithContextRefresh(agent, as, session, sessions, promptContent, msg.Images, msg.Files)
 	}()
 
-	e.processInteractiveEvents(state, session, sessions, interactiveKey, msg.MessageID, turnStart, stopTyping, sendDone, msg.ReplyCtx, turnStages{receivedAt: msg.ReceivedAt, hookElapsed: hookElapsed}, msg.SkipHistory)
+	e.processInteractiveEvents(state, session, sessions, interactiveKey, msg.MessageID, turnStart, stopTyping, sendDone, msg.ReplyCtx, turnStages{receivedAt: msg.ReceivedAt, hookElapsed: hookElapsed, msgSessionKey: msg.SessionKey}, msg.SkipHistory)
 	if elapsed := time.Since(sendStart); elapsed >= slowAgentSend {
 		slog.Warn("slow agent send", "elapsed", elapsed, "session", msg.SessionKey, "content_len", len(msg.Content))
 	}
@@ -4986,6 +4986,10 @@ var agentErrorHandlers = []agentErrorHandler{
 type turnStages struct {
 	receivedAt  time.Time     // engine ingress; zero disables queue_wait_ms
 	hookElapsed time.Duration // message.processing sync-hook time (queued turns measure their own)
+	// msgSessionKey is the raw Message.SessionKey (never workspace-prefixed):
+	// the same key the exporter's hooks see, so the turn summary can log the
+	// exact Langfuse trace_id for log↔trace joins.
+	msgSessionKey string
 }
 
 // queueStageWait returns ingress→turnStart; zero when ingress time is unknown
@@ -6025,6 +6029,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				summaryAttrs = append(summaryAttrs,
 					"cache_hit_ratio", math.Round(ratio*1000)/1000)
 			}
+			if traceID := LangfuseTraceID(stages.msgSessionKey, msgID); traceID != "" {
+				summaryAttrs = append(summaryAttrs, "trace_id", traceID)
+			}
 			summaryAttrs = append(summaryAttrs, "silent", isSilent)
 			slog.Info("turn complete", summaryAttrs...)
 			// DEBUG: full assistant response for in-depth debugging.
@@ -6689,7 +6696,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		}
 
 		slog.Info("processing queued message", "session", sessionKey)
-		e.processInteractiveEvents(state, session, sessions, sessionKey, queued.messageID, time.Now(), stopTyping, sendDone, queued.replyCtx, turnStages{receivedAt: queued.receivedAt})
+		e.processInteractiveEvents(state, session, sessions, sessionKey, queued.messageID, time.Now(), stopTyping, sendDone, queued.replyCtx, turnStages{receivedAt: queued.receivedAt, msgSessionKey: queued.msgSessionKey})
 	}
 }
 

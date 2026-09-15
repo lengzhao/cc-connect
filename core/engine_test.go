@@ -17409,6 +17409,130 @@ func TestTurnCompleteLogsToolTiming(t *testing.T) {
 	}
 }
 
+func TestLangfuseTraceID(t *testing.T) {
+	// Vector captured from a production trace: agent-runtime derived
+	// turn-692eaa9f… from this session_key + message_id pair.
+	const sessionKey = "chat-api:nex-workbench-inbox:conv_dUrsSrNfS2ndGSLm9V7gFg"
+	const messageID = "run_AJ9dKeEF7MwEl9q-"
+	const want = "turn-692eaa9ffe4aa27588a5c1009b004b21"
+	if got := LangfuseTraceID(sessionKey, messageID); got != want {
+		t.Fatalf("LangfuseTraceID = %q, want %q", got, want)
+	}
+	// Deterministic.
+	if LangfuseTraceID(sessionKey, messageID) != LangfuseTraceID(sessionKey, messageID) {
+		t.Fatal("LangfuseTraceID must be deterministic")
+	}
+	// Missing either half mirrors the exporter: no message-ref trace.
+	for _, tc := range [][2]string{
+		{"", messageID},
+		{sessionKey, ""},
+		{"   ", messageID},
+		{sessionKey, "  "},
+	} {
+		if got := LangfuseTraceID(tc[0], tc[1]); got != "" {
+			t.Fatalf("LangfuseTraceID(%q, %q) = %q, want empty", tc[0], tc[1], got)
+		}
+	}
+}
+
+func TestTurnCompleteLogsTraceID(t *testing.T) {
+	prev := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer func() { slog.SetDefault(prev) }()
+
+	p := &stubPlatformEngine{n: "test"}
+	sess := newQueuingSession("qs-trace-id")
+	agent := &controllableAgent{nextSession: sess}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	key := "test:trace-id"
+	session := e.sessions.GetOrCreateActive(key)
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx",
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	go func() {
+		sess.events <- Event{Type: EventResult, Content: "ok", Done: true}
+	}()
+
+	sendDone := make(chan error, 1)
+	sendDone <- nil
+	done := make(chan struct{})
+	msgSessionKey := "chat-api:web:conv_abc123"
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "turn1", time.Now(), nil, sendDone, "ctx", turnStages{msgSessionKey: msgSessionKey})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processInteractiveEvents did not complete in time")
+	}
+
+	var summary map[string]any
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if !strings.Contains(line, "turn complete") {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("parse log line: %v\n%s", err, line)
+		}
+		summary = rec
+		break
+	}
+	if summary == nil {
+		t.Fatalf("no turn complete log captured:\n%s", buf.String())
+	}
+	want := LangfuseTraceID(msgSessionKey, "turn1")
+	if got, _ := summary["trace_id"].(string); got != want {
+		t.Fatalf("trace_id = %q, want %q", got, want)
+	}
+
+	// Internal prompts without a platform session key (msgSessionKey empty)
+	// must not log a trace_id: the exporter derives none for them either.
+	buf.Reset()
+	go func() {
+		sess.events <- Event{Type: EventResult, Content: "ok again", Done: true}
+	}()
+	sendDone2 := make(chan error, 1)
+	sendDone2 <- nil
+	done2 := make(chan struct{})
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "turn2", time.Now(), nil, sendDone2, "ctx", turnStages{})
+		close(done2)
+	}()
+	select {
+	case <-done2:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second processInteractiveEvents did not complete in time")
+	}
+	summary = nil
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if !strings.Contains(line, "turn complete") {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("parse log line: %v\n%s", err, line)
+		}
+		summary = rec
+		break
+	}
+	if summary == nil {
+		t.Fatalf("no second turn complete log captured:\n%s", buf.String())
+	}
+	if _, ok := summary["trace_id"]; ok {
+		t.Fatalf("trace_id must be absent without a session key, got %v", summary["trace_id"])
+	}
+}
+
 func TestCloseToolTimingFIFOAndUnmatched(t *testing.T) {
 	var open []openToolCall
 	stats := map[string]*toolTimeStat{}
