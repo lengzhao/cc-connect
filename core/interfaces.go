@@ -96,6 +96,12 @@ type HookContextProvider interface {
 	HookContext(replyCtx any) HookContext
 }
 
+// IMChannelPromptProvider is an optional interface for IM platforms that expose
+// stable channel/thread ids in the cc-connect prompt envelope (e.g. Lark oc_/omt_).
+type IMChannelPromptProvider interface {
+	PromptChannelAttrs(replyCtx any) []string
+}
+
 // SessionManagerBinder is an optional platform capability for transports that
 // expose session CRUD over their own API and need access to the Engine store.
 type SessionManagerBinder interface {

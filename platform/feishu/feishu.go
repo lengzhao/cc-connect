@@ -109,6 +109,7 @@ func init() {
 type replyContext struct {
 	messageID  string
 	chatID     string
+	threadID   string
 	sessionKey string
 }
 
@@ -263,6 +264,8 @@ type imageBatchEntry struct {
 
 // compile-time interface assertions
 var _ core.RelayGroupVisibilityTarget = (*Platform)(nil)
+var _ core.HookContextProvider = (*Platform)(nil)
+var _ core.IMChannelPromptProvider = (*Platform)(nil)
 
 type interactivePlatform struct {
 	*Platform
@@ -1125,7 +1128,43 @@ func (p *Platform) dispatchCoreMessage(msg *core.Message) {
 		slog.Debug(p.tag()+": recalled message dispatch dropped", "message_id", msg.MessageID)
 		return
 	}
+	if msg.ChannelKey == "" {
+		if rc, ok := msg.ReplyCtx.(replyContext); ok && rc.chatID != "" {
+			msg.ChannelKey = rc.chatID
+		}
+	}
 	h(p.dispatchPlatform(), msg)
+}
+
+// PromptChannelAttrs implements core.IMChannelPromptProvider.
+func (p *Platform) PromptChannelAttrs(replyCtx any) []string {
+	rc, ok := replyCtx.(replyContext)
+	if !ok || rc.chatID == "" {
+		return nil
+	}
+	attrs := []string{fmt.Sprintf("channel_id=%s", rc.chatID)}
+	if rc.threadID != "" {
+		attrs = append(attrs, fmt.Sprintf("thread_id=%s", rc.threadID))
+	}
+	return attrs
+}
+
+// HookContext implements core.HookContextProvider.
+func (p *Platform) HookContext(replyCtx any) core.HookContext {
+	rc, ok := replyCtx.(replyContext)
+	if !ok || rc.chatID == "" {
+		return core.HookContext{}
+	}
+	ctx := map[string]any{
+		"channel_id": rc.chatID,
+	}
+	if rc.threadID != "" {
+		ctx["thread_id"] = rc.threadID
+	}
+	if rc.messageID != "" {
+		ctx["message_id"] = rc.messageID
+	}
+	return core.HookContext{Context: ctx}
 }
 
 // bufferImage adds a freshly-downloaded image to the per-session batch buffer.
@@ -1407,7 +1446,12 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	mentions := msg.Mentions
 	parentID := stringValue(msg.ParentId)
 
-	rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
+	rctx := replyContext{
+		messageID:  messageID,
+		chatID:     chatID,
+		threadID:   stringValue(msg.ThreadId),
+		sessionKey: sessionKey,
+	}
 	slog.Debug(p.tag()+": routed inbound message",
 		"message_id", messageID,
 		"session_key", sessionKey,

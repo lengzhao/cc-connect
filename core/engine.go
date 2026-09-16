@@ -3836,7 +3836,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 
 	promptContent := msg.Content
 	if !msg.SkipPromptMeta {
-		promptContent = e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, p, msg.AgentContext)
+		promptContent = e.buildAgentPrompt(msg.Content, msg.UserID, msg.UserName, msg.UserEmail, msg.Platform, msg.SessionKey, msg.ChannelKey, p, msg.AgentContext, msg.ReplyCtx)
 	}
 
 	sendStart := time.Now()
@@ -6096,7 +6096,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 				queuedPrompt := queued.content
 				if !queued.skipPromptMeta {
-					queuedPrompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext)
+					queuedPrompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext, queued.replyCtx)
 				}
 
 				state.mu.Lock()
@@ -6435,7 +6435,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		e.i18n.DetectAndSet(queued.content)
 		prompt := queued.content
 		if !queued.skipPromptMeta {
-			prompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext)
+			prompt = e.buildAgentPrompt(queued.content, queued.userID, queued.userName, queued.userEmail, queued.msgPlatform, queued.msgSessionKey, queued.channelKey, queued.platform, queued.agentContext, queued.replyCtx)
 		}
 
 		state.mu.Lock()
@@ -16527,17 +16527,13 @@ func (e *Engine) cmdBindSetup(p Platform, msg *Message) {
 
 // buildAgentPrompt prepends cc-connect metadata to content when injectTimestamp,
 // injectSender, and/or injectContext are enabled.
-func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey string, p Platform, agentCtx AgentContext) string {
+func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platform, sessionKey, channelKey string, p Platform, agentCtx AgentContext, replyCtx any) string {
 	var attrs []string
 	if e.injectTimestamp {
 		tzName := e.resolveUserTimezone(userID, p)
 		attrs = append(attrs, formatInjectTimestamp(time.Now(), tzName))
 	}
 	if e.injectSender && userID != "" {
-		chatID := channelKey
-		if chatID == "" {
-			chatID = extractChannelID(sessionKey)
-		}
 		attrs = append(attrs, fmt.Sprintf("sender_id=%s", userID))
 		if userName != "" {
 			attrs = append(attrs, fmt.Sprintf(`sender_name="%s"`, promptAttrValue(userName)))
@@ -16545,7 +16541,28 @@ func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platfo
 		if senderEmail != "" {
 			attrs = append(attrs, fmt.Sprintf(`sender_email="%s"`, promptAttrValue(senderEmail)))
 		}
-		attrs = append(attrs, fmt.Sprintf("platform=%s", platform), fmt.Sprintf("chat_id=%s", chatID))
+		attrs = append(attrs, fmt.Sprintf("platform=%s", platform))
+		if ip, ok := p.(IMChannelPromptProvider); ok {
+			if channelAttrs := ip.PromptChannelAttrs(replyCtx); len(channelAttrs) > 0 {
+				attrs = append(attrs, channelAttrs...)
+			} else {
+				chatID := channelKey
+				if chatID == "" {
+					chatID = extractChannelID(sessionKey)
+				}
+				if chatID != "" {
+					attrs = append(attrs, fmt.Sprintf("chat_id=%s", chatID))
+				}
+			}
+		} else {
+			chatID := channelKey
+			if chatID == "" {
+				chatID = extractChannelID(sessionKey)
+			}
+			if chatID != "" {
+				attrs = append(attrs, fmt.Sprintf("chat_id=%s", chatID))
+			}
+		}
 	}
 	if len(e.injectContext) > 0 && !agentCtx.Empty() {
 		filtered := FilterAgentContextByAllowlist(SanitizeAgentContext(agentCtx), e.injectContext)
