@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const dedupTTL = 60 * time.Second
+const dedupTTL = 10 * time.Minute
 
 // StartTime is set once at process startup.
 // Platforms use it to discard messages created before the current process started,

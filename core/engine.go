@@ -315,7 +315,8 @@ type DisplayCfg struct {
 	ToolMaxLen       int // max runes for tool use preview; 0 = no truncation
 	ToolMessages     bool
 	HistoryMaxLen    *int // max runes for /history entries; nil = default, 0 = no truncation
-	HideAgentFooter  bool // strip model/token footer lines emitted as agent text
+	HideAgentFooter      bool // strip model/token footer lines emitted as agent text
+	HideIntermediateText bool // suppress all intermediate text; only the final EventResult content is delivered
 }
 
 // InstantReplyCfg controls the immediate confirmation reply sent when a message
@@ -509,6 +510,7 @@ type queuedMessage struct {
 	receivedAt        time.Time // engine ingress time; see Message.ReceivedAt
 	agentContext      AgentContext
 	skipPromptMeta    bool // see Message.SkipPromptMeta
+	botMentioned      bool // see Message.BotMentioned
 }
 
 // interactiveState tracks a running interactive agent session and its permission state.
@@ -3221,6 +3223,7 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 		receivedAt:        msg.ReceivedAt,
 		agentContext:      msg.AgentContext.Clone(),
 		skipPromptMeta:    msg.SkipPromptMeta,
+		botMentioned:      msg.BotMentioned,
 	})
 	queueDepth := len(state.pendingMessages)
 
@@ -5617,6 +5620,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			content := event.Content
 			if e.display.HideAgentFooter {
 				content = stripAgentFooterLines(content)
+			}
+			if e.display.HideIntermediateText {
+				continue
 			}
 			if content != "" && !isEllipsisOnly(content) {
 				// Pre-compute silentHold transition including this chunk so the
@@ -16802,7 +16808,10 @@ func (e *Engine) buildAgentPrompt(content, userID, userName, senderEmail, platfo
 	if len(attrs) == 0 {
 		return content
 	}
-	return fmt.Sprintf("[cc-connect %s]\n%s", strings.Join(attrs, " "), content)
+	// Escape any "[cc-connect" sequences in user content to prevent prompt
+	// injection where a user crafts a fake header line to spoof metadata fields.
+	safeContent := strings.ReplaceAll(content, "[cc-connect", `\[cc-connect`)
+	return fmt.Sprintf("[cc-connect %s]\n%s", strings.Join(attrs, " "), safeContent)
 }
 
 func (e *Engine) resolveUserTimezone(userID string, p Platform) string {

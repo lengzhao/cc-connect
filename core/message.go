@@ -260,6 +260,12 @@ type Message struct {
 	// SkipHistory marks internal prompts whose input and response must not be
 	// persisted in the user-visible session history.
 	SkipHistory bool
+	// BotMentioned is true when the message explicitly @-mentioned the bot.
+	// Only meaningful for group-chat platforms where the engine filters by
+	// @mention (feishu/lark, etc.). Always false for P2P and non-mention-aware
+	// platforms. Injected into the [cc-connect …] header as bot_mentioned=true
+	// so the agent can distinguish "@bot 处理完毕" from ambient group chatter.
+	BotMentioned bool
 }
 
 // EventType distinguishes different kinds of agent output.

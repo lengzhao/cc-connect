@@ -451,7 +451,7 @@ func main() {
 		engine.SetProjectEnv(projectEnvFromOptions(proj.Agent.Options))
 		// Wire display settings including show_context_indicator and reply_footer
 		// Global [display] config can be overridden by project-level settings
-		_, _, _, _, _, showCtx, showFooter, _ := config.EffectiveDisplay(cfg, &proj)
+		_, _, _, _, _, showCtx, showFooter, _, _ := config.EffectiveDisplay(cfg, &proj)
 		engine.SetShowContextIndicator(showCtx)
 		showWorkdir := true
 		if proj.ShowWorkdirIndicator != nil {
@@ -581,17 +581,18 @@ func main() {
 
 		// Wire display truncation settings (includes legacy quiet → display mapping)
 		{
-			mode, tm, tool, tmlen, toollen, _, _, hideAgentFooter := config.EffectiveDisplay(cfg, &proj)
+			mode, tm, tool, tmlen, toollen, _, _, hideAgentFooter, hideIntermediateText := config.EffectiveDisplay(cfg, &proj)
 			historyMaxLen := config.EffectiveHistoryMaxLen(cfg, &proj)
 			engine.SetDisplayConfig(core.DisplayCfg{
-				Mode:             mode,
-				CardMode:         config.EffectiveCardMode(cfg, &proj),
-				ThinkingMessages: tm,
-				ThinkingMaxLen:   tmlen,
-				ToolMaxLen:       toollen,
-				ToolMessages:     tool,
-				HistoryMaxLen:    &historyMaxLen,
-				HideAgentFooter:  hideAgentFooter,
+				Mode:                 mode,
+				CardMode:             config.EffectiveCardMode(cfg, &proj),
+				ThinkingMessages:     tm,
+				ThinkingMaxLen:       tmlen,
+				ToolMaxLen:           toollen,
+				ToolMessages:         tool,
+				HistoryMaxLen:        &historyMaxLen,
+				HideAgentFooter:      hideAgentFooter,
+				HideIntermediateText: hideIntermediateText,
 			})
 		}
 
@@ -1349,7 +1350,7 @@ func main() {
 		apiSrv.Start()
 	}
 
-	slog.Info("cc-connect is running", "projects", len(engines))
+	slog.Info("[amber-fork] cc-connect is running", "version", version, "projects", len(engines))
 
 	// After startup, check if we were restarted and queue the success
 	// notification. The engine dispatches it on the first OnPlatformReady
@@ -1428,7 +1429,7 @@ func main() {
 		}
 	}
 
-	slog.Info("bye")
+	slog.Info("[amber-fork] cc-connect stopped")
 }
 
 // sessionStorePath builds a unique filename from project name + work_dir.
@@ -1734,17 +1735,18 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 	}
 
 	// Reload display config (includes legacy quiet → display mapping)
-	mode, tm, tool, tmlen, toollen, showCtx, showFooter, hideAgentFooter := config.EffectiveDisplay(cfg, proj)
+	mode, tm, tool, tmlen, toollen, showCtx, showFooter, hideAgentFooter, hideIntermediateText := config.EffectiveDisplay(cfg, proj)
 	historyMaxLen := config.EffectiveHistoryMaxLen(cfg, proj)
 	engine.SetDisplayConfig(core.DisplayCfg{
-		Mode:             mode,
-		CardMode:         config.EffectiveCardMode(cfg, proj),
-		ThinkingMessages: tm,
-		ThinkingMaxLen:   tmlen,
-		ToolMaxLen:       toollen,
-		ToolMessages:     tool,
-		HistoryMaxLen:    &historyMaxLen,
-		HideAgentFooter:  hideAgentFooter,
+		Mode:                 mode,
+		CardMode:             config.EffectiveCardMode(cfg, proj),
+		ThinkingMessages:     tm,
+		ThinkingMaxLen:       tmlen,
+		ToolMaxLen:           toollen,
+		ToolMessages:         tool,
+		HistoryMaxLen:        &historyMaxLen,
+		HideAgentFooter:      hideAgentFooter,
+		HideIntermediateText: hideIntermediateText,
 	})
 	result.DisplayUpdated = true
 

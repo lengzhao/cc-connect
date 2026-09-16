@@ -32,6 +32,7 @@ import (
 	larkapplication "github.com/larksuite/oapi-sdk-go/v3/service/application/v6"
 	larkcontact "github.com/larksuite/oapi-sdk-go/v3/service/contact/v3"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	"github.com/gorilla/websocket"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 )
 
@@ -131,6 +132,9 @@ type Platform struct {
 	doneEmoji                  string
 	allowFrom                  string
 	allowChat                  string
+	catchupChats               string             // comma-sep chat IDs for catch-up polling; empty = disabled
+	catchupCursor              sync.Map           // chatID -> int64 (unix seconds, last poll window end)
+	catchupCancel              context.CancelFunc
 	groupOnly                  bool
 	groupReplyAll              bool
 	respondToAtEveryoneAndHere bool
@@ -147,6 +151,7 @@ type Platform struct {
 	handler          core.MessageHandler
 	cardNavHandler   core.CardNavigationHandler
 	cancel           context.CancelFunc
+	ctx              context.Context
 	dedup            *core.MessageDedup
 	botOpenID        string
 	peerBots         map[string]string // app_id -> friendly alias, for quoted-reply attribution
@@ -314,6 +319,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	allowFrom, _ := opts["allow_from"].(string)
 	core.CheckAllowFrom(name, allowFrom)
 	allowChat, _ := opts["allow_chat"].(string)
+	catchupChats, _ := opts["catchup_chats"].(string)
 	groupOnly, _ := opts["group_only"].(bool)
 	groupReplyAll, _ := opts["group_reply_all"].(bool)
 	// require_mention = false is equivalent to group_reply_all = true:
@@ -411,6 +417,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		doneEmoji:                  doneEmoji,
 		allowFrom:                  allowFrom,
 		allowChat:                  allowChat,
+		catchupChats:               catchupChats,
 		groupOnly:                  groupOnly,
 		groupReplyAll:              groupReplyAll,
 		respondToAtEveryoneAndHere: respondToAtEveryoneAndHere,
@@ -470,6 +477,12 @@ func (p *Platform) getCancel() context.CancelFunc {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.cancel
+}
+
+func (p *Platform) getContext() context.Context {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.ctx
 }
 
 func (p *Platform) getServer() *http.Server {
@@ -589,7 +602,11 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 		return p.startWebhookMode()
 	}
 
-	return p.startWebSocketMode()
+	if err := p.startWebSocketMode(); err != nil {
+		return err
+	}
+	p.startCatchupPoller(p.getContext())
+	return nil
 }
 
 func (p *Platform) shouldUseWebhookMode() bool {
@@ -598,10 +615,16 @@ func (p *Platform) shouldUseWebhookMode() bool {
 
 // startWebSocketMode starts the WebSocket long connection mode.
 func (p *Platform) startWebSocketMode() error {
+	wsDialer := &websocket.Dialer{
+		NetDialContext: (&net.Dialer{
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+	}
 	wsOpts := []larkws.ClientOption{
 		larkws.WithEventHandler(p.eventHandler),
 		larkws.WithLogLevel(larkcore.LogLevelInfo),
 		larkws.WithLogger(&sanitizingLogger{inner: larkcore.NewEventLogger()}),
+		larkws.WithWebSocketDialer(wsDialer),
 	}
 	if p.domain != lark.FeishuBaseUrl {
 		wsOpts = append(wsOpts, larkws.WithDomain(p.domain))
@@ -611,6 +634,7 @@ func (p *Platform) startWebSocketMode() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.mu.Lock()
 	p.cancel = cancel
+	p.ctx = ctx
 	p.mu.Unlock()
 
 	go func() {
@@ -1071,7 +1095,7 @@ func (p *Platform) IsMessageRecalled(ctx context.Context, rctx any) (bool, error
 
 	req := larkim.NewGetMessageReqBuilder().
 		MessageId(messageID).
-		UserIdType(larkim.UserIdTypeGetMessageOpenId).
+		UserIdType(larkim.UserIdTypeOpenId).
 		Build()
 
 	var resp *larkim.GetMessageResp
@@ -1446,6 +1470,8 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	mentions := msg.Mentions
 	parentID := stringValue(msg.ParentId)
 
+	botMentioned := p.getBotOpenID() != "" && isBotMentioned(msg.Mentions, p.getBotOpenID())
+
 	rctx := replyContext{
 		messageID:  messageID,
 		chatID:     chatID,
@@ -1466,7 +1492,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	// blocked by IO-heavy operations (image/audio download, handler HTTP calls).
 	// The dedup and old-message checks above remain synchronous to guarantee
 	// correctness before spawning the goroutine.
-	go p.dispatchMessage(ctx, msgType, content, mentions, messageID, sessionKey, userID, chatID, rctx, parentID, createTimeMs)
+	go p.dispatchMessage(ctx, msgType, content, mentions, botMentioned, messageID, sessionKey, userID, chatID, rctx, parentID, createTimeMs)
 
 	return nil
 }
@@ -1483,7 +1509,7 @@ func (p *Platform) replyUnauthorizedAccess(ctx context.Context, rctx replyContex
 // dispatchMessage handles the message content parsing, media download, and
 // handler invocation. It runs in its own goroutine so that onMessage returns
 // quickly and does not block the SDK event loop.
-func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, messageID, sessionKey, userID, chatID string, rctx replyContext, parentID string, createTimeMs int64) {
+func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, botMentioned bool, messageID, sessionKey, userID, chatID string, rctx replyContext, parentID string, createTimeMs int64) {
 	if p.isMessageRecalled(messageID) {
 		slog.Debug(p.tag()+": recalled message ignored in async dispatch", "message_id", messageID)
 		return
@@ -1527,6 +1553,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Content: text, ExtraContent: quoted.text, Images: quoted.images, ReplyCtx: rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "image":
@@ -1576,6 +1603,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			Images:            append(quoted.images, core.ImageAttachment{MimeType: mimeType, Data: imgData}),
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "audio":
@@ -1608,6 +1636,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			},
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "post":
@@ -1623,6 +1652,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			Content: text, ExtraContent: quoted.text, Images: append(quoted.images, images...),
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "file":
@@ -1656,6 +1686,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			}},
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "merge_forward":
@@ -1673,6 +1704,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			Files:             files,
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		}
 		p.dispatchCoreMessage(coreMsg)
 
@@ -1694,6 +1726,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 				UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 				Content: "[sticker]", ExtraContent: quoted.text, ReplyCtx: rctx,
 				UserMessageTimeMs: createTimeMs,
+				BotMentioned:      botMentioned,
 			})
 			return
 		}
@@ -1704,6 +1737,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			Images:            []core.ImageAttachment{{MimeType: mimeType, Data: imgData}},
 			ReplyCtx:          rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	case "media":
@@ -1740,6 +1774,7 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 			UserID:    userID, UserName: userName, UserEmail: userEmail, ChatName: chatName,
 			Content: text, ExtraContent: quoted.text, Images: images, ReplyCtx: rctx,
 			UserMessageTimeMs: createTimeMs,
+			BotMentioned:      botMentioned,
 		})
 
 	default:
@@ -2921,13 +2956,13 @@ func detectFeishuFileType(mimeType, fileName string) string {
 	name := strings.ToLower(fileName)
 	switch {
 	case mimeType == "application/pdf" || strings.HasSuffix(name, ".pdf"):
-		return larkim.FileTypePdf
+		return larkim.CreateFileFileTypePdf
 	case strings.HasSuffix(name, ".doc") || strings.HasSuffix(name, ".docx"):
-		return larkim.FileTypeDoc
+		return larkim.CreateFileFileTypeDoc
 	case strings.HasSuffix(name, ".xls") || strings.HasSuffix(name, ".xlsx") || strings.HasSuffix(name, ".csv"):
-		return larkim.FileTypeXls
+		return larkim.CreateFileFileTypeXls
 	case strings.HasSuffix(name, ".ppt") || strings.HasSuffix(name, ".pptx"):
-		return larkim.FileTypePpt
+		return larkim.CreateFileFileTypePpt
 	// Feishu's file API only has "mp4" as the video type. We map all common
 	// video MIME types and extensions to FileTypeMp4 so the message renders
 	// as a native video player bubble rather than a generic file download.
@@ -2937,19 +2972,19 @@ func detectFeishuFileType(mimeType, fileName string) string {
 		strings.HasSuffix(name, ".mp4") || strings.HasSuffix(name, ".mov") ||
 		strings.HasSuffix(name, ".avi") || strings.HasSuffix(name, ".m4v") ||
 		strings.HasSuffix(name, ".mkv") || strings.HasSuffix(name, ".webm"):
-		return larkim.FileTypeMp4
+		return larkim.CreateFileFileTypeMp4
 	case mimeType == "audio/ogg" || mimeType == "audio/opus" || mimeType == "application/ogg" || strings.HasSuffix(name, ".ogg") || strings.HasSuffix(name, ".opus"):
-		return larkim.FileTypeOpus
+		return larkim.CreateFileFileTypeOpus
 	default:
-		return larkim.FileTypeStream
+		return larkim.CreateFileFileTypeStream
 	}
 }
 
 func detectFeishuFileMessageType(fileType string) string {
 	switch fileType {
-	case larkim.FileTypeOpus:
+	case larkim.CreateFileFileTypeOpus:
 		return larkim.MsgTypeAudio
-	case larkim.FileTypeMp4:
+	case larkim.CreateFileFileTypeMp4:
 		return larkim.MsgTypeMedia
 	default:
 		return larkim.MsgTypeFile
@@ -3554,7 +3589,7 @@ func (p *Platform) replyMessage(ctx context.Context, rc replyContext, msgType, c
 
 func (p *Platform) createMessage(ctx context.Context, chatID, msgType, content, op string) error {
 	req := larkim.NewCreateMessageReqBuilder().
-		ReceiveIdType(larkim.ReceiveIdTypeChatId).
+		ReceiveIdType(larkim.CreateMessageV1ReceiveIDTypeChatId).
 		Body(larkim.NewCreateMessageReqBodyBuilder().
 			ReceiveId(chatID).
 			MsgType(msgType).
@@ -4411,7 +4446,7 @@ func (p *Platform) SendPreviewStart(ctx context.Context, rctx any, content strin
 		}
 	} else {
 		req := larkim.NewCreateMessageReqBuilder().
-			ReceiveIdType(larkim.ReceiveIdTypeChatId).
+			ReceiveIdType(larkim.CreateMessageV1ReceiveIDTypeChatId).
 			Body(larkim.NewCreateMessageReqBodyBuilder().
 				ReceiveId(chatID).
 				MsgType(larkim.MsgTypeInteractive).
@@ -4702,6 +4737,13 @@ func (p *Platform) Stop() error {
 		if cancel := p.getCancel(); cancel != nil {
 			cancel()
 		}
+		// Stop catch-up poller explicitly.
+		p.mu.Lock()
+		if p.catchupCancel != nil {
+			p.catchupCancel()
+			p.catchupCancel = nil
+		}
+		p.mu.Unlock()
 	} else {
 		unregisterSharedWS(p)
 	}
@@ -4770,7 +4812,7 @@ func (p *Platform) SendAudio(ctx context.Context, rctx any, audio []byte, format
 		return p.withFreshTenantAccessTokenRetry(ctx, "upload audio", func(client *lark.Client, options ...larkcore.RequestOptionFunc) error {
 			req := larkim.NewCreateFileReqBuilder().
 				Body(larkim.NewCreateFileReqBodyBuilder().
-					FileType(larkim.FileTypeOpus).
+					FileType(larkim.CreateFileFileTypeOpus).
 					FileName("tts_audio.opus").
 					File(bytes.NewReader(audio)).
 					Build()).
@@ -4845,7 +4887,7 @@ func (p *Platform) SendVideo(ctx context.Context, rctx any, video []byte, format
 		return p.withFreshTenantAccessTokenRetry(ctx, "upload video", func(client *lark.Client, options ...larkcore.RequestOptionFunc) error {
 			req := larkim.NewCreateFileReqBuilder().
 				Body(larkim.NewCreateFileReqBodyBuilder().
-					FileType(larkim.FileTypeMp4).
+					FileType(larkim.CreateFileFileTypeMp4).
 					FileName(fileName).
 					File(bytes.NewReader(video)).
 					Build()).

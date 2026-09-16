@@ -21,6 +21,7 @@ require (
 	github.com/slack-go/slack v0.25.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.50.0
+	golang.org/x/image v0.45.0
 	maunium.net/go/mautrix v0.27.0
 	modernc.org/sqlite v1.49.1
 	rsc.io/qr v0.2.0
@@ -64,14 +65,16 @@ require (
 	github.com/yuin/goldmark v1.8.2 // indirect
 	go.mau.fi/util v0.9.8 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
-	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.42.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/larksuite/oapi-sdk-go/v3 => github.com/decren/oapi-sdk-go/v3 v3.10.1-amber.1.0.20260907111731-228fb6832673
