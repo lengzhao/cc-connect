@@ -2983,6 +2983,38 @@ func TestEngine_DisabledCommandsWildcard(t *testing.T) {
 	}
 }
 
+func TestEngine_CronDisabledByConfig(t *testing.T) {
+	e := newTestEngine()
+	e.SetCronEnabled(false)
+
+	p := &stubPlatformEngine{n: "test"}
+	msg := &Message{SessionKey: "test:u1", UserID: "user1", ReplyCtx: "ctx"}
+
+	e.handleCommand(p, msg, "/cron add 0 9 * * * test")
+	if len(p.sent) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(p.sent))
+	}
+	if !strings.Contains(p.sent[0], "disabled by configuration") {
+		t.Errorf("expected cron disabled message, got: %s", p.sent[0])
+	}
+}
+
+func TestEngine_TimerDisabledByConfig(t *testing.T) {
+	e := newTestEngine()
+	e.SetTimerEnabled(false)
+
+	p := &stubPlatformEngine{n: "test"}
+	msg := &Message{SessionKey: "test:u1", UserID: "user1", ReplyCtx: "ctx"}
+
+	e.handleCommand(p, msg, "/timer add 30m test")
+	if len(p.sent) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(p.sent))
+	}
+	if !strings.Contains(p.sent[0], "disabled by configuration") {
+		t.Errorf("expected timer disabled message, got: %s", p.sent[0])
+	}
+}
+
 // --- admin_from tests ---
 
 func TestEngine_AdminFrom_DenyByDefault(t *testing.T) {
@@ -17240,6 +17272,44 @@ func TestAgentSystemPrompt_DocumentsAudioVideoFlags(t *testing.T) {
 	// doesn't silently downgrade --audio/--video to --file.
 	if !strings.Contains(prompt, "Do NOT downgrade") {
 		t.Error("AgentSystemPrompt missing the 'Do NOT downgrade' anti-regression line")
+	}
+}
+
+func TestAgentSystemPrompt_DisabledFeatures(t *testing.T) {
+	// Default: both cron and timer instructions present.
+	prompt := AgentSystemPrompt()
+	if !strings.Contains(prompt, "cc-connect cron add") {
+		t.Error("AgentSystemPrompt should mention cron add by default")
+	}
+	if !strings.Contains(prompt, "cc-connect timer add") {
+		t.Error("AgentSystemPrompt should mention timer add by default")
+	}
+
+	// Cron disabled: cron instructions removed, timer still present.
+	prompt = AgentSystemPromptWithFeatures(false, true)
+	if strings.Contains(prompt, "cc-connect cron add") {
+		t.Error("AgentSystemPromptWithFeatures(false, true) should not mention cron add")
+	}
+	if !strings.Contains(prompt, "cc-connect timer add") {
+		t.Error("AgentSystemPromptWithFeatures(false, true) should still mention timer add")
+	}
+
+	// Timer disabled: timer instructions removed, cron still present.
+	prompt = AgentSystemPromptWithFeatures(true, false)
+	if !strings.Contains(prompt, "cc-connect cron add") {
+		t.Error("AgentSystemPromptWithFeatures(true, false) should still mention cron add")
+	}
+	if strings.Contains(prompt, "cc-connect timer add") {
+		t.Error("AgentSystemPromptWithFeatures(true, false) should not mention timer add")
+	}
+
+	// Both disabled: neither scheduling section appears.
+	prompt = AgentSystemPromptWithFeatures(false, false)
+	if strings.Contains(prompt, "cc-connect cron add") || strings.Contains(prompt, "cc-connect timer add") {
+		t.Error("AgentSystemPromptWithFeatures(false, false) should not mention cron or timer add")
+	}
+	if strings.Contains(prompt, "Scheduled tasks") {
+		t.Error("AgentSystemPromptWithFeatures(false, false) should not mention Scheduled tasks")
 	}
 }
 

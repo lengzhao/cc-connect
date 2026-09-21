@@ -357,6 +357,10 @@ func main() {
 	if !config.TimerEnabled(cfg) {
 		slog.Info("one-shot timers disabled via [timer] enabled = false")
 	}
+	core.SetCronFeatureEnabled(config.CronEnabled(cfg))
+	if !config.CronEnabled(cfg) {
+		slog.Info("cron jobs disabled via [cron] enabled = false")
+	}
 
 	if len(cfg.Projects) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: no projects configured in %s\n", configPath)
@@ -1006,28 +1010,37 @@ func main() {
 	}
 
 	// Start cron scheduler
-	cronStore, err := core.NewCronStore(cfg.DataDir)
-	if err != nil {
-		slog.Warn("cron store unavailable", "error", err)
-	}
 	var cronSched *core.CronScheduler
-	if cronStore != nil {
-		cronSched = core.NewCronScheduler(cronStore)
-		if cfg.Cron.Silent != nil && *cfg.Cron.Silent {
-			cronSched.SetDefaultSilent(true)
+	cronEnabled := config.CronEnabled(cfg)
+	if cronEnabled {
+		cronStore, err := core.NewCronStore(cfg.DataDir)
+		if err != nil {
+			slog.Warn("cron store unavailable", "error", err)
 		}
-		if cfg.Cron.SessionMode != "" {
-			cronSched.SetDefaultSessionMode(cfg.Cron.SessionMode)
+		if cronStore != nil {
+			cronSched = core.NewCronScheduler(cronStore)
+			if cfg.Cron.Silent != nil && *cfg.Cron.Silent {
+				cronSched.SetDefaultSilent(true)
+			}
+			if cfg.Cron.SessionMode != "" {
+				cronSched.SetDefaultSessionMode(cfg.Cron.SessionMode)
+			}
+			for i, e := range engines {
+				cronSched.RegisterEngine(cfg.Projects[i].Name, e)
+				e.SetCronScheduler(cronSched)
+			}
 		}
-		for i, e := range engines {
-			cronSched.RegisterEngine(cfg.Projects[i].Name, e)
-			e.SetCronScheduler(cronSched)
-		}
+	} else {
+		slog.Info("cron jobs disabled via [cron] enabled = false")
+	}
+	for _, e := range engines {
+		e.SetCronEnabled(cronEnabled)
 	}
 
 	// Start timer scheduler (optional via [timer] enabled)
 	var timerSched *core.TimerScheduler
-	if config.TimerEnabled(cfg) {
+	timerEnabled := config.TimerEnabled(cfg)
+	if timerEnabled {
 		timerStore, err := core.NewTimerStore(cfg.DataDir)
 		if err != nil {
 			slog.Warn("timer store unavailable", "error", err)
@@ -1051,6 +1064,11 @@ func main() {
 			slog.Warn("timer disabled but pending jobs exist — they will not run until timer is re-enabled",
 				"pending", len(pending))
 		}
+	} else {
+		slog.Info("one-shot timers disabled via [timer] enabled = false")
+	}
+	for _, e := range engines {
+		e.SetTimerEnabled(timerEnabled)
 	}
 
 	// Start heartbeat scheduler
@@ -1155,6 +1173,8 @@ func main() {
 		if timerSched != nil {
 			mgmtSrv.SetTimerScheduler(timerSched)
 		}
+		mgmtSrv.SetCronEnabled(cronEnabled)
+		mgmtSrv.SetTimerEnabled(timerEnabled)
 		mgmtSrv.SetHeartbeatScheduler(heartbeatSched)
 		if bridgeSrv != nil {
 			mgmtSrv.SetBridgeServer(bridgeSrv)
@@ -1347,6 +1367,8 @@ func main() {
 		if timerSched != nil {
 			apiSrv.SetTimerScheduler(timerSched)
 		}
+		apiSrv.SetCronEnabled(cronEnabled)
+		apiSrv.SetTimerEnabled(timerEnabled)
 		apiSrv.Start()
 	}
 

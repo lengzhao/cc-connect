@@ -601,6 +601,34 @@ func TestMgmt_CronList_SessionKeyScope(t *testing.T) {
 	}
 }
 
+func TestMgmt_CronDisabledByConfig(t *testing.T) {
+	mgmt, ts, _ := testManagementServer(t, "tok")
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := NewCronScheduler(store)
+	mgmt.SetCronScheduler(cs)
+	mgmt.SetCronEnabled(false)
+
+	// List should be forbidden
+	r := mgmtGet(t, ts.URL+"/api/v1/cron", "tok")
+	if r.OK {
+		t.Fatalf("expected cron list to fail when disabled, got: %s", r.Error)
+	}
+
+	// Add should be forbidden
+	r = mgmtPost(t, ts.URL+"/api/v1/cron", "tok", map[string]any{
+		"project":     "test-project",
+		"session_key": "user1",
+		"cron_expr":   "0 9 * * *",
+		"prompt":      "hello",
+	})
+	if r.OK {
+		t.Fatalf("expected cron add to fail when disabled, got: %s", r.Error)
+	}
+}
+
 func TestMgmt_CronExecByID(t *testing.T) {
 	mgmt, ts, e := testManagementServer(t, "tok")
 	store, err := NewCronStore(t.TempDir())

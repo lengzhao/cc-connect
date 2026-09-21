@@ -5,10 +5,14 @@ import (
 	"sync/atomic"
 )
 
-var timerFeatureEnabled atomic.Bool
+var (
+	timerFeatureEnabled atomic.Bool
+	cronFeatureEnabled  atomic.Bool
+)
 
 func init() {
 	timerFeatureEnabled.Store(true)
+	cronFeatureEnabled.Store(true)
 }
 
 // SetTimerFeatureEnabled toggles whether one-shot timer capabilities are exposed
@@ -23,19 +27,40 @@ func TimerFeatureEnabled() bool {
 	return timerFeatureEnabled.Load()
 }
 
+// SetCronFeatureEnabled toggles whether cron capabilities are exposed
+// to agents (system prompt, CLI hints) and users (/cron, cc-connect cron).
+// Must be set before agent processes start so shared prompt files are correct.
+func SetCronFeatureEnabled(enabled bool) {
+	cronFeatureEnabled.Store(enabled)
+}
+
+// CronFeatureEnabled reports whether cron jobs are enabled.
+func CronFeatureEnabled() bool {
+	return cronFeatureEnabled.Load()
+}
+
 // AgentSystemPrompt returns the system prompt fragment that informs agents about
 // cc-connect capabilities (cron scheduling, etc.).
 // The prompt is designed to be appended to the agent's existing system prompt.
 func AgentSystemPrompt() string {
+	return AgentSystemPromptWithFeatures(CronFeatureEnabled(), TimerFeatureEnabled())
+}
+
+// AgentSystemPromptWithFeatures returns the system prompt fragment, optionally
+// omitting cron and/or timer instructions when those features are disabled.
+func AgentSystemPromptWithFeatures(cronEnabled, timerEnabled bool) string {
 	var b strings.Builder
 	b.WriteString(agentSystemPromptIntro)
-	if TimerFeatureEnabled() {
+	switch {
+	case cronEnabled && timerEnabled:
 		b.WriteString(agentSystemPromptCronVsTimer)
-	} else {
+		b.WriteString(agentSystemPromptCronBody)
+		b.WriteString(agentSystemPromptTimerBody)
+	case cronEnabled:
 		b.WriteString(agentSystemPromptCronOnlyIntro)
-	}
-	b.WriteString(agentSystemPromptCronBody)
-	if TimerFeatureEnabled() {
+		b.WriteString(agentSystemPromptCronBody)
+	case timerEnabled:
+		b.WriteString(agentSystemPromptTimerOnlyIntro)
 		b.WriteString(agentSystemPromptTimerBody)
 	}
 	b.WriteString(agentSystemPromptRelayAndSilent)
@@ -100,6 +125,17 @@ When telling the user the task is scheduled, say "use /cron to view".
 One-shot delayed reminders (e.g. "in 30 minutes", "明天早上9点提醒我") are NOT available
 in this deployment. Do NOT use cron to simulate them — cron expressions repeat on a schedule
 and cannot fire once. Tell the user only recurring schedules are supported here.
+
+`
+
+const agentSystemPromptTimerOnlyIntro = `### Scheduled tasks (timer)
+
+Use cc-connect timer for one-shot delayed tasks (e.g. "in 30 minutes", "明天早上9点提醒我").
+When telling the user the task is scheduled, say "use /timer to view".
+
+Recurring schedules (e.g. "every day", "每天早上6点") are NOT available
+in this deployment. Do NOT simulate them with repeated one-shot timers.
+Tell the user only one-shot delayed tasks are supported here.
 
 `
 

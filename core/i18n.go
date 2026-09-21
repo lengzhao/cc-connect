@@ -270,6 +270,7 @@ const (
 	MsgHeartbeatInvalidMins  MsgKey = "heartbeat_invalid_mins"
 
 	MsgCronNotAvailable       MsgKey = "cron_not_available"
+	MsgCronFeatureDisabled    MsgKey = "cron_feature_disabled"
 	MsgCronUsage              MsgKey = "cron_usage"
 	MsgCronAddUsage           MsgKey = "cron_add_usage"
 	MsgCronAdded              MsgKey = "cron_added"
@@ -382,6 +383,7 @@ const (
 	MsgCronFailedSuffix          MsgKey = "cron_failed_suffix"
 
 	MsgTimerNotAvailable  MsgKey = "timer_not_available"
+	MsgTimerFeatureDisabled MsgKey = "timer_feature_disabled"
 	MsgTimerUsage         MsgKey = "timer_usage"
 	MsgTimerAddUsage      MsgKey = "timer_add_usage"
 	MsgTimerAdded         MsgKey = "timer_added"
@@ -1834,6 +1836,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "スケジューラは利用できません。",
 		LangSpanish:            "El programador de tareas no está disponible.",
 	},
+	MsgCronFeatureDisabled: {
+		LangEnglish:            "Cron jobs are disabled by configuration.",
+		LangChinese:            "定时任务已被配置禁用。",
+		LangTraditionalChinese: "定時任務已被配置停用。",
+		LangJapanese:           "Cron ジョブは設定で無効化されています。",
+		LangSpanish:            "Las tareas cron están deshabilitadas por configuración.",
+	},
 	MsgCronUsage: {
 		LangEnglish:            "Usage:\n/cron add <min> <hour> <day> <month> <weekday> <prompt>\n/cron list\n/cron exec <id>\n/cron del <id>\n/cron enable <id> · /cron disable <id>\n/cron mute <id> · /cron unmute <id>\n/cron setup — write cc-connect instructions to agent memory file",
 		LangChinese:            "用法：\n/cron add <分> <时> <日> <月> <周> <任务描述>\n/cron list\n/cron exec <id> 立即执行\n/cron del <id>\n/cron enable <id> · /cron disable <id>\n/cron mute <id> · /cron unmute <id> 静音/取消静音\n/cron setup — 将 cc-connect 指令写入 agent 记忆文件",
@@ -2039,6 +2048,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "定時器調度器未啟用。",
 		LangJapanese:           "タイマースケジューラは利用できません。",
 		LangSpanish:            "El programador de temporizador no está disponible.",
+	},
+	MsgTimerFeatureDisabled: {
+		LangEnglish:            "One-shot timers are disabled by configuration.",
+		LangChinese:            "一次性定时器已被配置禁用。",
+		LangTraditionalChinese: "一次性定時器已被配置停用。",
+		LangJapanese:           "ワンショットタイマーは設定で無効化されています。",
+		LangSpanish:            "Los temporizadores únicos están deshabilitados por configuración.",
 	},
 	MsgTimerUsage: {
 		LangEnglish:            "Usage:\n/timer add <delay|time> <prompt>\n/timer addexec <delay|time> <command>\n/timer list\n/timer del <id>\n/timer mute <id> · /timer unmute <id>\n\nDelay: 30m, 2h, 1h30m. Or absolute time: 2026-05-16T09:00\nTime without timezone uses system local time.",

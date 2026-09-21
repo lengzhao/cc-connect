@@ -32,6 +32,9 @@ type APIServer struct {
 	cron       *CronScheduler
 	timer      *TimerScheduler
 	relay      *RelayManager
+	// cronEnabled / timerEnabled gate the corresponding API endpoints.
+	cronEnabled  bool
+	timerEnabled bool
 	// maxAttachmentBytes caps the raw size of a single attachment accepted by
 	// /send; the request body limit in handleSend is derived from it (base64
 	// expansion + envelope). Defaults to DefaultMaxAttachmentSize.
@@ -89,6 +92,8 @@ func NewAPIServer(dataDir string) (*APIServer, error) {
 		mux:                http.NewServeMux(),
 		engines:            make(map[string]*Engine),
 		maxAttachmentBytes: DefaultMaxAttachmentSize,
+		cronEnabled:        true,
+		timerEnabled:       true,
 	}
 	s.mux.HandleFunc("/send", s.handleSend)
 	s.mux.HandleFunc("/sessions", s.handleSessions)
@@ -137,6 +142,32 @@ func (s *APIServer) SetCronScheduler(cs *CronScheduler) {
 
 func (s *APIServer) SetTimerScheduler(ts *TimerScheduler) {
 	s.timer = ts
+}
+
+// SetCronEnabled toggles whether the cron API endpoints are available.
+func (s *APIServer) SetCronEnabled(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cronEnabled = enabled
+}
+
+// SetTimerEnabled toggles whether the timer API endpoints are available.
+func (s *APIServer) SetTimerEnabled(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.timerEnabled = enabled
+}
+
+func (s *APIServer) cronAPIEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cronEnabled
+}
+
+func (s *APIServer) timerAPIEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.timerEnabled
 }
 
 // SetMaxAttachmentSize overrides the per-attachment size limit (bytes) used by
@@ -337,6 +368,10 @@ func (s *APIServer) handleCronAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.cronAPIEnabled() {
+		http.Error(w, "cron is disabled by configuration", http.StatusForbidden)
+		return
+	}
 	if s.cron == nil {
 		http.Error(w, "cron scheduler not available", http.StatusServiceUnavailable)
 		return
@@ -425,6 +460,10 @@ func (s *APIServer) handleCronAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *APIServer) handleCronList(w http.ResponseWriter, r *http.Request) {
+	if !s.cronAPIEnabled() {
+		http.Error(w, "cron is disabled by configuration", http.StatusForbidden)
+		return
+	}
 	if s.cron == nil {
 		http.Error(w, "cron scheduler not available", http.StatusServiceUnavailable)
 		return
@@ -444,6 +483,10 @@ func (s *APIServer) handleCronList(w http.ResponseWriter, r *http.Request) {
 func (s *APIServer) handleCronDel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.cronAPIEnabled() {
+		http.Error(w, "cron is disabled by configuration", http.StatusForbidden)
 		return
 	}
 	if s.cron == nil {
@@ -473,6 +516,10 @@ func (s *APIServer) handleCronDel(w http.ResponseWriter, r *http.Request) {
 func (s *APIServer) handleCronExec(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.cronAPIEnabled() {
+		http.Error(w, "cron is disabled by configuration", http.StatusForbidden)
 		return
 	}
 	if s.cron == nil {
@@ -512,6 +559,10 @@ func (s *APIServer) handleCronInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.cronAPIEnabled() {
+		http.Error(w, "cron is disabled by configuration", http.StatusForbidden)
+		return
+	}
 	if s.cron == nil {
 		http.Error(w, "cron scheduler not available", http.StatusServiceUnavailable)
 		return
@@ -535,6 +586,10 @@ func (s *APIServer) handleCronInfo(w http.ResponseWriter, r *http.Request) {
 func (s *APIServer) handleCronEdit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.cronAPIEnabled() {
+		http.Error(w, "cron is disabled by configuration", http.StatusForbidden)
 		return
 	}
 	if s.cron == nil {
@@ -598,6 +653,10 @@ type TimerAddRequest struct {
 func (s *APIServer) handleTimerAdd(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.timerAPIEnabled() {
+		http.Error(w, "timer is disabled by configuration", http.StatusForbidden)
 		return
 	}
 	if s.timer == nil {
@@ -691,6 +750,10 @@ func (s *APIServer) handleTimerAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *APIServer) handleTimerList(w http.ResponseWriter, r *http.Request) {
+	if !s.timerAPIEnabled() {
+		http.Error(w, "timer is disabled by configuration", http.StatusForbidden)
+		return
+	}
 	if s.timer == nil {
 		http.Error(w, "timer scheduler not available", http.StatusServiceUnavailable)
 		return
@@ -720,6 +783,10 @@ func (s *APIServer) handleTimerInfo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.timerAPIEnabled() {
+		http.Error(w, "timer is disabled by configuration", http.StatusForbidden)
+		return
+	}
 	if s.timer == nil {
 		http.Error(w, "timer scheduler not available", http.StatusServiceUnavailable)
 		return
@@ -743,6 +810,10 @@ func (s *APIServer) handleTimerInfo(w http.ResponseWriter, r *http.Request) {
 func (s *APIServer) handleTimerDel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.timerAPIEnabled() {
+		http.Error(w, "timer is disabled by configuration", http.StatusForbidden)
 		return
 	}
 	if s.timer == nil {

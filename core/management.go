@@ -51,6 +51,8 @@ type ManagementServer struct {
 	timerScheduler     *TimerScheduler
 	heartbeatScheduler *HeartbeatScheduler
 	bridgeServer       *BridgeServer
+	cronEnabled        bool
+	timerEnabled       bool
 
 	setupFeishuSave      func(req FeishuSetupSaveRequest) error
 	setupWeixinSave      func(req WeixinSetupSaveRequest) error
@@ -83,6 +85,8 @@ func NewManagementServer(port int, token string, corsOrigins []string) *Manageme
 		corsOrigins: corsOrigins,
 		engines:     make(map[string]*Engine),
 		startedAt:   time.Now(),
+		cronEnabled: true,
+		timerEnabled: true,
 	}
 }
 
@@ -96,6 +100,12 @@ func (m *ManagementServer) SetCronScheduler(cs *CronScheduler)           { m.cro
 func (m *ManagementServer) SetTimerScheduler(ts *TimerScheduler)         { m.timerScheduler = ts }
 func (m *ManagementServer) SetHeartbeatScheduler(hs *HeartbeatScheduler) { m.heartbeatScheduler = hs }
 func (m *ManagementServer) SetBridgeServer(bs *BridgeServer)             { m.bridgeServer = bs }
+
+// SetCronEnabled toggles whether the management cron API is available.
+func (m *ManagementServer) SetCronEnabled(enabled bool) { m.cronEnabled = enabled }
+
+// SetTimerEnabled toggles whether the management timer API is available.
+func (m *ManagementServer) SetTimerEnabled(enabled bool) { m.timerEnabled = enabled }
 func (m *ManagementServer) SetSetupFeishuSave(fn func(FeishuSetupSaveRequest) error) {
 	m.setupFeishuSave = fn
 }
@@ -1496,6 +1506,10 @@ func (m *ManagementServer) handleProjectHeartbeat(w http.ResponseWriter, r *http
 // ── Cron endpoints ────────────────────────────────────────────
 
 func (m *ManagementServer) handleCron(w http.ResponseWriter, r *http.Request) {
+	if !m.cronEnabled {
+		mgmtError(w, http.StatusForbidden, "cron is disabled by configuration")
+		return
+	}
 	if m.cronScheduler == nil {
 		mgmtError(w, http.StatusServiceUnavailable, "cron scheduler not available")
 		return
@@ -1578,6 +1592,10 @@ func (m *ManagementServer) handleCron(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *ManagementServer) handleCronByID(w http.ResponseWriter, r *http.Request) {
+	if !m.cronEnabled {
+		mgmtError(w, http.StatusForbidden, "cron is disabled by configuration")
+		return
+	}
 	if m.cronScheduler == nil {
 		mgmtError(w, http.StatusServiceUnavailable, "cron scheduler not available")
 		return
