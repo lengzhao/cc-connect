@@ -137,25 +137,26 @@ type Platform struct {
 	shareSessionInChannel      bool
 	threadIsolation            bool
 	// noReplyToTrigger: when true, send via Create instead of Im.Message.Reply (no quote to the user's message).
-	noReplyToTrigger bool
-	resolveMentions  bool
-	includeUserEmail bool // include Contact API email in Message.UserEmail when available
-	client           *lark.Client
-	replayClient     *lark.Client
-	replayClientMu   sync.Mutex
-	wsClient         *larkws.Client
-	handler          core.MessageHandler
-	cardNavHandler   core.CardNavigationHandler
-	cancel           context.CancelFunc
-	dedup            *core.MessageDedup
-	botOpenID        string
-	peerBots         map[string]string // app_id -> friendly alias, for quoted-reply attribution
-	mentionMap       map[string]string // agent name -> open_id (for outbound @ resolution)
-	userNameCache    sync.Map          // open_id -> feishuUserInfo
-	chatNameCache    sync.Map          // chat_id -> chat name
-	chatMemberCache  sync.Map          // chatID -> *chatMemberEntry
-	recalledMu       sync.Mutex
-	recalledMsgIDs   map[string]time.Time // message_id -> recall time, short TTL race guard
+	noReplyToTrigger      bool
+	resolveMentions       bool
+	includeUserEmail      bool // include Contact API email in Message.UserEmail when available
+	automonJWTDelegations map[string]string
+	client                *lark.Client
+	replayClient          *lark.Client
+	replayClientMu        sync.Mutex
+	wsClient              *larkws.Client
+	handler               core.MessageHandler
+	cardNavHandler        core.CardNavigationHandler
+	cancel                context.CancelFunc
+	dedup                 *core.MessageDedup
+	botOpenID             string
+	peerBots              map[string]string // app_id -> friendly alias, for quoted-reply attribution
+	mentionMap            map[string]string // agent name -> open_id (for outbound @ resolution)
+	userNameCache         sync.Map          // open_id -> feishuUserInfo
+	chatNameCache         sync.Map          // chat_id -> chat name
+	chatMemberCache       sync.Map          // chatID -> *chatMemberEntry
+	recalledMu            sync.Mutex
+	recalledMsgIDs        map[string]time.Time // message_id -> recall time, short TTL race guard
 	// Webhook mode fields (for Lark international version)
 	server       *http.Server
 	port         string
@@ -326,6 +327,10 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	threadIsolation, _ := opts["thread_isolation"].(bool)
 	resolveMentionsOpt, _ := opts["resolve_mentions"].(bool)
 	includeUserEmail, _ := opts["include_user_email"].(bool)
+	automonJWTDelegations, err := parseAutomonJWTDelegations(opts["automon_jwt_delegations"])
+	if err != nil {
+		return nil, err
+	}
 	noReplyToTrigger := false
 	if v, ok := opts["reply_to_trigger"].(bool); ok && !v {
 		noReplyToTrigger = true
@@ -418,6 +423,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		threadIsolation:            threadIsolation,
 		resolveMentions:            resolveMentionsOpt,
 		includeUserEmail:           includeUserEmail,
+		automonJWTDelegations:      automonJWTDelegations,
 		noReplyToTrigger:           noReplyToTrigger,
 		client:                     lark.NewClient(appID, appSecret, clientOpts...),
 		replayClient:               newFeishuReplayClient(appID, appSecret, domain),
@@ -427,8 +433,8 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		encryptKey:                 encryptKey,
 		peerBots:                   peerBots,
 		mentionMap:                 mentionMap,
-		imageBatch:        make(map[string]*imageBatchEntry),
-		imageBatchWindow:  imageBatchWindow,
+		imageBatch:                 make(map[string]*imageBatchEntry),
+		imageBatchWindow:           imageBatchWindow,
 	}
 	if v, ok := opts["lts_work_item_callback_url"].(string); ok {
 		base.ltsWorkItemCallbackURL = strings.TrimRight(strings.TrimSpace(v), "/")
@@ -1754,6 +1760,10 @@ func (p *Platform) resolveUserName(openID string) string {
 }
 
 func (p *Platform) resolveUserNameAndEmail(openID string) (string, string) {
+	if email, ok := p.automonJWTDelegations[openID]; ok {
+		slog.Info(p.tag()+": configured Automon JWT delegation", "sender_open_id", openID, "delegated_email", email)
+		return openID, email
+	}
 	name, email := p.cachedUserInfo(openID)
 	if !p.includeUserEmail {
 		email = ""

@@ -453,6 +453,29 @@ include_user_email = true
 
 目标用户必须在应用的**通讯录权限范围**内，否则 Contact API 不会返回邮箱；cc-connect 会省略 `sender_email` 并继续正常处理消息。
 
+### Automon JWT 身份委托（`automon_jwt_delegations`）
+
+对于没有员工邮箱的通知 Bot，可由管理员在对应 Lark/Feishu 平台配置中明确指定执行责任人的邮箱：
+
+```toml
+[[projects.platforms]]
+type = "lark"
+[projects.platforms.options]
+app_id = "cli_your_app"
+app_secret = "your_app_secret"
+include_user_email = true
+automon_jwt_delegations = ["ou_notification_bot=owner@ambr.io"]
+```
+
+配置中心使用同一字段；Agent Runtime 的字符串数组透传无需修改。修改后需重新加载平台（重启 Runtime）。
+
+- 仅精确匹配当前平台的发送者 Open ID；不根据正文、被 @ 的人或客户邮箱匹配。
+- 显式映射优先于通讯录，独立于 `include_user_email` 生效；映射命中时不查询通讯录。
+- 保留真实 `UserID`、会话归属；显示名使用来源 Open ID，不冒充被委托人。映射邮箱进入 `Message.UserEmail` 和 `CC_HOOK_USER_EMAIL`，供现有 Runtime 网关 JWT 签发使用。
+- 每次命中记录 `configured Automon JWT delegation` 日志，包含来源 Open ID 和委托邮箱。
+- 未匹配用户保持原行为；无通配符和默认兜底。非法配置或重复 Open ID 在平台初始化时直接报错。
+- 这是管理员授予来源 Bot 以指定人员身份调用工具的委托，作用于该平台配置下所有获准接收的消息，不仅限于某一个工具或工单；沿用 `allow_from` / `allow_chat` 控制入口。不会改变 Lark CLI 的 Bot token 或修复其群访问权限。
+
 ### 示例
 
 开启后 Agent 收到的消息前缀类似：
