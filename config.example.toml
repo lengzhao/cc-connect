@@ -1142,6 +1142,7 @@ app_secret = "your-feishu-app-secret"
 # enable_feishu_card = true
 # allow_from = "*"
 # include_user_email = false  # Same as Feishu; requires contact:user.email:readonly on Lark app
+# automon_jwt_delegations = ["ou_notification_bot=owner@example.com"] # Explicit delegated identity; preserves sender Open ID
 # reaction_emoji = "OnIt"
 # done_emoji = "none"
 # progress_style = "legacy"  # legacy | compact | card
