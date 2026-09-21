@@ -583,6 +583,57 @@ func TestLoad_DefaultsDataDir(t *testing.T) {
 	}
 }
 
+func TestLoad_CronTimerEnabledDefaults(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(baseConfigTOML), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if !CronEnabled(cfg) {
+		t.Fatal("CronEnabled() should default to true")
+	}
+	if !TimerEnabled(cfg) {
+		t.Fatal("TimerEnabled() should default to true")
+	}
+}
+
+func TestLoad_CronTimerEnabledFalse(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := baseConfigTOML + `
+[cron]
+enabled = false
+
+[timer]
+enabled = false
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if CronEnabled(cfg) {
+		t.Fatal("CronEnabled() should be false when [cron] enabled = false")
+	}
+	if TimerEnabled(cfg) {
+		t.Fatal("TimerEnabled() should be false when [timer] enabled = false")
+	}
+}
+
 func TestLoad_ResolvesEnvPlaceholders(t *testing.T) {
 
 	root := t.TempDir()

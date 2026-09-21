@@ -365,6 +365,8 @@ type Engine struct {
 	hooks              *HookManager
 	cronScheduler      *CronScheduler
 	timerScheduler     *TimerScheduler
+	cronEnabled        bool
+	timerEnabled       bool
 	heartbeatScheduler *HeartbeatScheduler
 
 	commands *CommandRegistry
@@ -746,6 +748,8 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		shell:                 defaultShell(),
 		shellFlag:             defaultShellFlag(),
 		pendingRestartTimeout: defaultPendingRestartTimeout,
+		cronEnabled:           true,
+		timerEnabled:          true,
 	}
 
 	if ag != nil {
@@ -1103,6 +1107,26 @@ func (e *Engine) SetCronScheduler(cs *CronScheduler) {
 
 func (e *Engine) SetTimerScheduler(ts *TimerScheduler) {
 	e.timerScheduler = ts
+}
+
+// SetCronEnabled toggles whether cron jobs and /cron are available.
+func (e *Engine) SetCronEnabled(enabled bool) {
+	e.cronEnabled = enabled
+}
+
+// SetTimerEnabled toggles whether one-shot timers and /timer are available.
+func (e *Engine) SetTimerEnabled(enabled bool) {
+	e.timerEnabled = enabled
+}
+
+// CronEnabled reports whether cron is enabled for this engine.
+func (e *Engine) CronEnabled() bool {
+	return e.cronEnabled
+}
+
+// TimerEnabled reports whether one-shot timers are enabled for this engine.
+func (e *Engine) TimerEnabled() bool {
+	return e.timerEnabled
 }
 
 func (e *Engine) SetHeartbeatScheduler(hs *HeartbeatScheduler) {
@@ -14208,6 +14232,10 @@ func (e *Engine) appendMemoryFile(p Platform, msg *Message, filePath, text strin
 // ──────────────────────────────────────────────────────────────
 
 func (e *Engine) cmdCron(p Platform, msg *Message, args []string) {
+	if !e.cronEnabled {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronFeatureDisabled))
+		return
+	}
 	if e.cronScheduler == nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronNotAvailable))
 		return
@@ -14470,6 +14498,10 @@ func (e *Engine) cmdCronMute(p Platform, msg *Message, args []string, mute bool)
 }
 
 func (e *Engine) cmdCronSetup(p Platform, msg *Message) {
+	if !e.cronEnabled {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgCronFeatureDisabled))
+		return
+	}
 	result, baseName, err := e.setupMemoryFile()
 	switch result {
 	case setupNative:
@@ -14497,6 +14529,10 @@ func (e *Engine) cronEmptyText() string {
 // ──────────────────────────────────────────────────────────────
 
 func (e *Engine) cmdTimer(p Platform, msg *Message, args []string) {
+	if !e.timerEnabled {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgTimerFeatureDisabled))
+		return
+	}
 	if e.timerScheduler == nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgTimerNotAvailable))
 		return
@@ -16465,7 +16501,6 @@ func (e *Engine) setupMemoryFile() (setupResult, string, error) {
 	if _, ok := e.agent.(SystemPromptSupporter); ok {
 		return setupNative, "", nil
 	}
-
 	mp, ok := e.agent.(MemoryFileProvider)
 	if !ok {
 		return setupNoMemory, "", nil
@@ -16480,9 +16515,9 @@ func (e *Engine) setupMemoryFile() (setupResult, string, error) {
 
 	existing, _ := os.ReadFile(filePath)
 	existingText := string(existing)
-	block := "\n" + ccConnectInstructionMarker + "\n" + AgentSystemPrompt() + "\n"
+	block := "\n" + ccConnectInstructionMarker + "\n" + e.agentSystemPrompt() + "\n"
 	if idx := strings.Index(existingText, ccConnectInstructionMarker); idx >= 0 {
-		if strings.Contains(existingText[idx:], AgentSystemPrompt()) {
+		if strings.Contains(existingText[idx:], e.agentSystemPrompt()) {
 			return setupExists, baseName, nil
 		}
 		updated := strings.TrimRight(existingText[:idx], "\n") + block
@@ -16507,6 +16542,12 @@ func (e *Engine) setupMemoryFile() (setupResult, string, error) {
 	}
 
 	return setupOK, baseName, nil
+}
+
+// agentSystemPrompt returns the system prompt fragment for this engine,
+// omitting cron/timer instructions when the feature is disabled.
+func (e *Engine) agentSystemPrompt() string {
+	return AgentSystemPromptWithFeatures(e.cronEnabled, e.timerEnabled)
 }
 
 func (e *Engine) cmdBindSetup(p Platform, msg *Message) {

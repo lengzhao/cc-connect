@@ -380,7 +380,7 @@ func TestHandleCronExec_TriggersJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	api := &APIServer{engines: map[string]*Engine{"test": engine}, cron: scheduler}
+	api := &APIServer{engines: map[string]*Engine{"test": engine}, cron: scheduler, cronEnabled: true, timerEnabled: true}
 	body, err := json.Marshal(map[string]any{"id": job.ID})
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
@@ -433,7 +433,7 @@ func TestHandleCronExec_RunAliasRouteTriggersJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	api := &APIServer{engines: map[string]*Engine{"test": engine}, cron: scheduler, mux: http.NewServeMux()}
+	api := &APIServer{engines: map[string]*Engine{"test": engine}, cron: scheduler, mux: http.NewServeMux(), cronEnabled: true, timerEnabled: true}
 	api.mux.HandleFunc("/cron/exec", api.handleCronExec)
 	api.mux.HandleFunc("/cron/run", api.handleCronExec)
 	body, err := json.Marshal(map[string]any{"id": job.ID})
@@ -478,7 +478,7 @@ func TestHandleCronExec_ProjectMissingIsBadRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	api := &APIServer{cron: scheduler}
+	api := &APIServer{cron: scheduler, cronEnabled: true, timerEnabled: true}
 	body, err := json.Marshal(map[string]any{"id": job.ID})
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
@@ -508,7 +508,7 @@ func TestHandleCronList_SessionKeyScope(t *testing.T) {
 		}
 	}
 
-	api := &APIServer{cron: scheduler}
+	api := &APIServer{cron: scheduler, cronEnabled: true, timerEnabled: true}
 
 	req := httptest.NewRequest(http.MethodGet, "/cron/list?session_key=chat-api:default_channel:conv_a", nil)
 	rec := httptest.NewRecorder()
@@ -538,6 +538,66 @@ func TestHandleCronList_SessionKeyScope(t *testing.T) {
 	}
 	if len(allJobs) != 2 {
 		t.Fatalf("all list = %d jobs, want 2", len(allJobs))
+	}
+}
+
+func TestHandleCronAdd_DisabledByConfig(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler := NewCronScheduler(store)
+
+	api := &APIServer{cron: scheduler, cronEnabled: false, timerEnabled: true}
+	body, err := json.Marshal(CronAddRequest{
+		Project:    "test",
+		SessionKey: "test:u1",
+		CronExpr:   "0 9 * * *",
+		Prompt:     "hello",
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/cron/add", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	api.handleCronAdd(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "disabled by configuration") {
+		t.Fatalf("expected disabled message, got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleTimerAdd_DisabledByConfig(t *testing.T) {
+	store, err := NewTimerStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler := NewTimerScheduler(store)
+
+	api := &APIServer{timer: scheduler, cronEnabled: true, timerEnabled: false}
+	body, err := json.Marshal(TimerAddRequest{
+		Project:    "test",
+		SessionKey: "test:u1",
+		Delay:      "30m",
+		Prompt:     "hello",
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/timer/add", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	api.handleTimerAdd(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "disabled by configuration") {
+		t.Fatalf("expected disabled message, got: %s", rec.Body.String())
 	}
 }
 

@@ -140,8 +140,17 @@ type Config struct {
 
 // CronConfig controls cron job behavior.
 type CronConfig struct {
+	Enabled     *bool  `toml:"enabled"`      // enable cron jobs and /cron; default true
 	Silent      *bool  `toml:"silent"`       // suppress cron start notification; default false
 	SessionMode string `toml:"session_mode"` // default session mode: "" or "reuse" (default) or "new_per_run"
+}
+
+// CronEnabled reports whether cron jobs are enabled process-wide.
+func CronEnabled(cfg *Config) bool {
+	if cfg == nil || cfg.Cron.Enabled == nil {
+		return true
+	}
+	return *cfg.Cron.Enabled
 }
 
 // TimerConfig controls one-shot timer behavior.
@@ -496,7 +505,7 @@ type ProjectConfig struct {
 	// SessionStoreKeyPrefix limits jsonl_channel persistence to session keys
 	// with this prefix (default "chat-api:").
 	SessionStoreKeyPrefix string `toml:"session_store_key_prefix,omitempty"`
-	SkipGit *bool  `toml:"skip_git,omitempty"`
+	SkipGit               *bool  `toml:"skip_git,omitempty"`
 	// WorkspaceInitAllowLocalPaths allows /workspace init and the conversational
 	// init flow to bind existing local directories. Default false keeps init
 	// limited to git URLs; use /workspace bind or /workspace route for explicit

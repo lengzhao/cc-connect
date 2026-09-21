@@ -329,6 +329,10 @@ level = "info" # debug, info, warn, error
 # 控制定时任务行为。
 
 # [cron]
+# enabled = true             # Enable cron jobs and /cron (default: true)
+#                            # 启用定时任务与 /cron（默认 true）
+# enabled = false            # Disable /cron, cc-connect cron, and cron scheduling
+#                            # 禁用 /cron、cc-connect cron 及定时调度
 # silent = false             # Suppress "⏰ task name" notification when cron starts (default: false)
 #                            # 静默模式：不发送定时任务开始执行的通知消息（默认 false）
 # session_mode = "reuse"     # Default session mode for all cron jobs: "reuse" (default) or "new_per_run"
