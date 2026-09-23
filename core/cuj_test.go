@@ -64,8 +64,8 @@ type cujAgent struct {
 	// Used by tests that need to drive a multi-event turn (text chunks +
 	// permission request + result) from a single Send call. See
 	// setNextSessionEvents on cujAgent.
-	nextSessionEvents    []Event
-	nextSessionDelayMs   int
+	nextSessionEvents  []Event
+	nextSessionDelayMs int
 }
 
 func (a *cujAgent) Name() string { return "cuj" }
@@ -2403,5 +2403,59 @@ func TestCUJ_STREAM1_StreamingResumesAfterPermissionPrompt(t *testing.T) {
 		if strings.Contains(m, postText) {
 			t.Fatalf("post-resolution text was bulk-sent via plain Send (regression: streaming broken after permission prompt). getSent=%#v", plat.getSent())
 		}
+	}
+}
+
+// A chat -> decision card -> authenticated click -> next chat keeps one session.
+func TestCUJ_DecisionReturnsToOriginalSession(t *testing.T) {
+	p := &decisionTestPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	e := NewEngine("decision-cuj", &cujAgent{}, []Platform{p}, t.TempDir()+"/sessions.json", LangEnglish)
+	defer e.Stop()
+	key := "test:room:thread:root"
+	e.ReceiveMessage(p, &Message{SessionKey: key, Platform: "test", UserID: "alice", UserEmail: "alice@example.com", MessageID: "first", Content: "Please prepare a decision", ReplyCtx: key})
+	deadline := time.Now().Add(3 * time.Second)
+	for len(p.getSent()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	session := e.sessions.GetActive(key)
+	if session == nil || len(p.getSent()) == 0 {
+		t.Fatal("initial reply missing")
+	}
+	for session.Busy() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	token := e.decisions.tokenFor(key, session.ID)
+	v, err := e.decisions.create(context.Background(), token, decisionSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.handler(v.ID, "alice", "yes", "continue", v.MessageID); err != nil {
+		t.Fatal(err)
+	}
+	e.decisions.drainOne()
+	waitDecision(t, e.decisions, v.ID, "delivered")
+	deadline = time.Now().Add(3 * time.Second)
+	for session.Busy() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(p.getSent()) < 2 {
+		t.Fatalf("no agent continuation visible: %v", p.getSent())
+	}
+	e.ReceiveMessage(p, &Message{SessionKey: key, Platform: "test", UserID: "alice", MessageID: "last", Content: "Thanks", ReplyCtx: key})
+	deadline = time.Now().Add(3 * time.Second)
+	for (len(p.getSent()) < 3 || session.Busy()) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if e.sessions.GetActive(key).ID != session.ID || len(p.getSent()) < 3 {
+		t.Fatal("lost original conversation")
+	}
+	count := 0
+	for _, h := range session.GetHistory(0) {
+		if h.Role == "user" && strings.Contains(h.Content, v.ID) {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("decision appears %d times in history", count)
 	}
 }

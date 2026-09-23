@@ -151,6 +151,7 @@ type Platform struct {
 	wsClient              *larkws.Client
 	handler               core.MessageHandler
 	cardNavHandler        core.CardNavigationHandler
+	decisionHandler       func(string, string, string, string, string) (*core.Decision, error)
 	cancel                context.CancelFunc
 	ctx                   context.Context
 	dedup                 *core.MessageDedup
@@ -714,6 +715,9 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 		return nil, nil
 	}
 
+	if resp, handled := p.handleDecisionAction(event); handled {
+		return resp, nil
+	}
 	if resp, handled := p.handleNexWorkItemCardAction(event); handled {
 		return resp, nil
 	}

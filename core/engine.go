@@ -308,13 +308,13 @@ var RestartCh = make(chan RestartRequest, 1)
 // DisplayCfg controls how intermediate messages are surfaced.
 // A value of -1 means "use default", 0 means "no truncation".
 type DisplayCfg struct {
-	Mode             string // "full" (default), "compact", or "quiet" — thinking/tool visibility
-	CardMode         string // "legacy" (default) or "rich" (Card 2.0 Feishu)
-	ThinkingMessages bool
-	ThinkingMaxLen   int // max runes for thinking preview; 0 = no truncation
-	ToolMaxLen       int // max runes for tool use preview; 0 = no truncation
-	ToolMessages     bool
-	HistoryMaxLen    *int // max runes for /history entries; nil = default, 0 = no truncation
+	Mode                 string // "full" (default), "compact", or "quiet" — thinking/tool visibility
+	CardMode             string // "legacy" (default) or "rich" (Card 2.0 Feishu)
+	ThinkingMessages     bool
+	ThinkingMaxLen       int // max runes for thinking preview; 0 = no truncation
+	ToolMaxLen           int // max runes for tool use preview; 0 = no truncation
+	ToolMessages         bool
+	HistoryMaxLen        *int // max runes for /history entries; nil = default, 0 = no truncation
 	HideAgentFooter      bool // strip model/token footer lines emitted as agent text
 	HideIntermediateText bool // suppress all intermediate text; only the final EventResult content is delivered
 }
@@ -334,6 +334,8 @@ type RateLimitCfg struct {
 
 // Engine routes messages between platforms and the agent for a single project.
 type Engine struct {
+	decisions *decisionService
+
 	name                  string
 	agent                 Agent
 	platforms             []Platform
@@ -757,6 +759,13 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		pendingRestartTimeout: defaultPendingRestartTimeout,
 		cronEnabled:           true,
 		timerEnabled:          true,
+	}
+
+	e.decisions = newDecisionService(e, sessionStorePath)
+	for _, p := range platforms {
+		if d, ok := p.(DecisionPlatform); ok {
+			d.SetDecisionHandler(e.decisions.answer)
+		}
 	}
 
 	if ag != nil {
@@ -2377,6 +2386,7 @@ func (e *Engine) Start() error {
 		return startErrs[0] // Return first error
 	}
 
+	go e.decisions.run()
 	e.startObserver()
 	return nil
 }
@@ -3785,6 +3795,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		return
 	}
 
+	e.decisions.remember(p, msg, session, sessions, interactiveKey, workspaceDir)
 	hookStart := time.Now()
 	e.emitMessageProcessingHook(p, msg)
 	hookElapsed := time.Since(hookStart)
@@ -3907,7 +3918,9 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 			sendDone <- fmt.Errorf("agent session became nil")
 			return
 		}
-		sendDone <- e.sendWithContextRefresh(agent, as, session, sessions, promptContent, msg.Images, msg.Files)
+		err := e.sendWithContextRefresh(agent, as, session, sessions, promptContent, msg.Images, msg.Files)
+		e.decisions.sent(msg.MessageID, err)
+		sendDone <- err
 	}()
 
 	e.processInteractiveEvents(state, session, sessions, interactiveKey, msg.MessageID, turnStart, stopTyping, sendDone, msg.ReplyCtx, turnStages{receivedAt: msg.ReceivedAt, hookElapsed: hookElapsed, msgSessionKey: msg.SessionKey}, msg.SkipHistory)
@@ -4129,6 +4142,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 		envVars := []string{
 			"CC_PROJECT=" + e.name,
 			"CC_SESSION_KEY=" + ccKey,
+			"CC_ASK_USER_TOKEN=" + e.decisions.tokenFor(sessionKey, session.ID),
 		}
 		if e.dataDir != "" {
 			envVars = append(envVars, "CC_DATA_DIR="+e.dataDir)
@@ -6301,6 +6315,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				state.currentTurnUserMessageTimeMs = queued.userMessageTimeMs
 				state.mu.Unlock()
 
+				e.decisions.rememberQueued(queued, session.ID)
 				e.emitQueuedMessageProcessingHook(queued)
 
 				// Stop the previous turn's typing indicator
@@ -6691,6 +6706,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		state.currentTurnUserMessageTimeMs = queued.userMessageTimeMs
 		state.mu.Unlock()
 
+		e.decisions.rememberQueued(queued, session.ID)
 		e.emitQueuedMessageProcessingHook(queued)
 
 		e.i18n.DetectAndSet(queued.content)
