@@ -682,17 +682,17 @@ func TestWorkspaceAgentOptions_RoundTripsThroughNew(t *testing.T) {
 		t.Skip("run_as_user-based LookPath bypass is Unix-only")
 	}
 	parent := &Agent{
-		cmd:              "my-cli",
-		cliExtraArgs:     []string{"code", "--add-dir", "/parent"},
-		cmdArgsFlag:      "-a",
-		model:            "claude-opus-4-7",
-		reasoningEffort:  "high",
-		mode:             "acceptEdits",
-		allowedTools:     []string{"Edit", "Read"},
-		disallowedTools:  []string{"Bash"},
-		maxContextTokens: 200000,
-		routerURL:        "http://127.0.0.1:3456",
-		routerAPIKey:     "secret",
+		cmd:                     "my-cli",
+		cliExtraArgs:            []string{"code", "--add-dir", "/parent"},
+		cmdArgsFlag:             "-a",
+		model:                   "claude-opus-4-7",
+		reasoningEffort:         "high",
+		mode:                    "acceptEdits",
+		allowedTools:            []string{"Edit", "Read"},
+		disallowedTools:         []string{"Bash"},
+		maxContextTokens:        200000,
+		routerURL:               "http://127.0.0.1:3456",
+		routerAPIKey:            "secret",
 		appendSystemPromptFiles: []string{"~/.claude/AUTOMON.md"},
 	}
 	opts := parent.WorkspaceAgentOptions()
@@ -938,4 +938,15 @@ func TestValidateSessionIDInProject_CrossProjectLeak(t *testing.T) {
 // regression can ship.
 func TestAgent_ImplementsSessionIDValidator(t *testing.T) {
 	var _ core.SessionIDValidator = (*Agent)(nil)
+}
+
+func TestSolDefaultsToNoneForFunctionTools(t *testing.T) {
+	for _, model := range []string{"gpt-5.6-sol", "provider/gpt-5.6-sol"} {
+		if got := resolveReasoningEffort("", model); got != "none" {
+			t.Fatalf("%s defaults to %q; tool-enabled chat completions require none", model, got)
+		}
+	}
+	if got := resolveReasoningEffort("low", "gpt-5.5"); got != "low" {
+		t.Fatal("changed production model configuration")
+	}
 }

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/mail"
 	"strings"
+	"time"
 
 	"github.com/chenhg5/cc-connect/core"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -63,25 +65,29 @@ func decisionCard(v *core.Decision, answered bool) map[string]any {
 				label = o.Label
 			}
 		}
-		elements = append(elements, map[string]any{"tag": "div", "text": plainText(label)})
+		elements = append(elements, map[string]any{"tag": "markdown", "content": "**✓ " + escapeDecisionMarkdown(label) + "**"})
 		if v.Comment != "" {
-			elements = append(elements, map[string]any{"tag": "div", "text": plainText(v.Comment)})
+			elements = append(elements, map[string]any{"tag": "markdown", "content": escapeDecisionMarkdown(v.Comment)})
 		}
-		elements = append(elements, map[string]any{"tag": "note", "elements": []any{plainText(i.T(core.MsgDecisionSaved))}})
+		elements = append(elements, map[string]any{"tag": "markdown", "content": i.T(core.MsgDecisionSaved), "text_size": "notation"})
 	} else {
 		form := []map[string]any{}
 		if v.Spec.AllowComment {
-			form = append(form, map[string]any{"tag": "input", "name": "comment", "placeholder": plainText(i.T(core.MsgDecisionComment)), "max_length": 1000, "input_type": "multiline_text"})
+			form = append(form, map[string]any{"tag": "input", "name": "comment", "placeholder": plainText(i.T(core.MsgDecisionComment)), "max_length": 1000, "input_type": "multiline_text", "required": false, "rows": 2})
 		}
 		columns := []map[string]any{}
 		for idx, o := range v.Spec.Options {
-			button := map[string]any{"tag": "button", "name": fmt.Sprintf("decision_%d", idx), "text": plainText(o.Label), "type": "default", "form_action_type": "submit", "value": map[string]string{"action": "decision:submit", "request_id": v.ID, "option_id": o.ID}}
-			columns = append(columns, map[string]any{"tag": "column", "width": "auto", "elements": []any{button}})
+			button := map[string]any{"tag": "button", "name": fmt.Sprintf("decision_%d", idx), "text": plainText(o.Label), "type": "default", "form_action_type": "submit", "behaviors": []any{map[string]any{"type": "callback", "value": map[string]string{"action": "decision:submit", "request_id": v.ID, "option_id": o.ID}}}}
+			columns = append(columns, map[string]any{"tag": "column", "width": "weighted", "weight": 1, "elements": []any{button}})
 		}
 		form = append(form, map[string]any{"tag": "column_set", "columns": columns})
 		elements = append(elements, map[string]any{"tag": "form", "name": "decision_form", "elements": form})
 	}
-	return map[string]any{"config": map[string]any{"wide_screen_mode": true, "update_multi": true}, "header": map[string]any{"title": plainText(v.Spec.Title), "template": color}, "elements": elements}
+	title := v.Spec.Title
+	if answered {
+		title = "✓ " + title
+	}
+	return map[string]any{"schema": "2.0", "config": map[string]any{"width_mode": "fill", "update_multi": true}, "header": map[string]any{"title": plainText(title), "template": color}, "body": map[string]any{"elements": elements}}
 }
 func (p *Platform) SendDecision(ctx context.Context, v *core.Decision) (string, error) {
 	card, err := json.Marshal(decisionCard(v, false))
@@ -147,11 +153,48 @@ func (p *Platform) handleDecisionAction(event *callback.CardActionTriggerEvent) 
 	comment, _ := ev.Action.FormValue["comment"].(string)
 	v, err := p.decisionHandler(id, ev.Operator.OpenID, option, comment, ev.Context.OpenMessageID)
 	if errors.Is(err, core.ErrDecisionNotFound) {
+		slog.Warn(p.tag()+": decision request not found", "request_id", id, "message_id", ev.Context.OpenMessageID)
 		return nil, false
 	}
 	if err != nil {
+		slog.Warn(p.tag()+": decision callback rejected", "request_id", id, "message_id", ev.Context.OpenMessageID, "error", err)
 		return rejected()
 	}
 	i = core.NewI18n(core.DetectLanguage(v.Spec.Title + v.Spec.Markdown))
+	slog.Info(p.tag()+": decision answer recorded", "request_id", id, "message_id", ev.Context.OpenMessageID, "status", v.Status)
+	// Return the replacement immediately; independently PATCH the same recorded
+	// receipt so every client sees it even when the callback response is lost.
+	if p.client != nil {
+		card := decisionCard(v, true)
+		go p.patchDecisionReceipt(ev.Context.OpenMessageID, card)
+	}
 	return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "success", Content: i.T(core.MsgDecisionSaved)}, Card: &callback.Card{Type: "raw", Data: decisionCard(v, true)}}, true
+}
+
+func escapeDecisionMarkdown(s string) string {
+	return strings.NewReplacer("\\", "\\\\", "*", "\\*", "_", "\\_", "[", "\\[", "]", "\\]", "<", "&lt;", ">", "&gt;", "`", "\\`").Replace(s)
+}
+
+// A single bounded update, not a background retry queue. Persistence is already
+// committed, so it is safe for the callback return and PATCH to apply the same card.
+func (p *Platform) patchDecisionReceipt(messageID string, card map[string]any) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	body, err := json.Marshal(card)
+	if err != nil {
+		return
+	}
+	err = p.withFreshTenantAccessTokenRetry(ctx, "update decision receipt", func(client *lark.Client, opts ...larkcore.RequestOptionFunc) error {
+		resp, err := client.Im.Message.Patch(ctx, larkim.NewPatchMessageReqBuilder().MessageId(messageID).Body(larkim.NewPatchMessageReqBodyBuilder().Content(string(body)).Build()).Build(), opts...)
+		if err != nil {
+			return err
+		}
+		if !resp.Success() {
+			return fmt.Errorf("receipt update code=%d msg=%s", resp.Code, resp.Msg)
+		}
+		return nil
+	})
+	if err != nil {
+		slog.Warn(p.tag()+": decision receipt update failed", "message_id", messageID, "error", err)
+	}
 }

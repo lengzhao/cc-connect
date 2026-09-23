@@ -343,7 +343,7 @@ func normalizeEffort(raw string) string {
 // reasoning_effort with function tools on ChatAI /v1/chat/completions.
 func modelRequiresNoneReasoningEffort(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
-	return strings.Contains(m, "gpt-5.6-terra")
+	return strings.Contains(m, "gpt-5.6-terra") || strings.Contains(m, "gpt-5.6-sol")
 }
 
 // resolveReasoningEffort returns the configured effort when set; otherwise

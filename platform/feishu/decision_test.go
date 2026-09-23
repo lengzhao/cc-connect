@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chenhg5/cc-connect/core"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -118,5 +120,89 @@ func TestDecisionSendUsesAppScopedIdentityAndThreadReply(t *testing.T) {
 	}
 	if !create || !reply {
 		t.Fatal("did not test both direct and thread delivery")
+	}
+}
+
+// Exercise the actual SDK decoder with values taken from the generated button,
+// instead of inventing a callback independently of the card we send.
+func TestDecisionCardV2RoundTripThroughSDK(t *testing.T) {
+	v := &core.Decision{ID: "r2", Status: "answered", Spec: core.DecisionSpec{Title: "确认方案", Markdown: "**方案 A**", AllowComment: true, Options: []core.DecisionOption{{ID: "approve", Label: "同意"}}}, OptionID: "approve", Comment: "按方案执行"}
+	raw, _ := json.Marshal(decisionCard(v, false))
+	var card map[string]any
+	_ = json.Unmarshal(raw, &card)
+	if card["schema"] != "2.0" {
+		t.Fatal("form cards must use explicit Card 2.0 callbacks")
+	}
+	elems := card["body"].(map[string]any)["elements"].([]any)
+	form := elems[1].(map[string]any)["elements"].([]any)
+	input := form[0].(map[string]any)
+	if input["required"] != false {
+		t.Fatal("comment should be optional")
+	}
+	columns := form[1].(map[string]any)["columns"].([]any)
+	button := columns[0].(map[string]any)["elements"].([]any)[0].(map[string]any)
+	behaviors, ok := button["behaviors"].([]any)
+	if !ok || len(behaviors) != 1 {
+		t.Fatal("button has no callback behavior")
+	}
+	behavior := behaviors[0].(map[string]any)
+	if behavior["type"] != "callback" {
+		t.Fatal("button is not a callback")
+	}
+	p := &Platform{platformName: "lark"}
+	called := 0
+	p.SetDecisionHandler(func(id, user, option, comment, msg string) (*core.Decision, error) {
+		called++
+		if id != "r2" || user != "ou_user" || option != "approve" || comment != "按方案执行" || msg != "om_card" {
+			t.Fatal("callback was not decoded correctly")
+		}
+		return v, nil
+	})
+	handler := dispatcher.NewEventDispatcher("", "").OnP2CardActionTrigger(func(ctx context.Context, event *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
+		return p.onCardAction(event)
+	})
+	payload, _ := json.Marshal(map[string]any{"schema": "2.0", "header": map[string]any{"event_id": "click-test", "event_type": "card.action.trigger", "app_id": "cli_test", "tenant_key": "test"}, "event": map[string]any{"operator": map[string]any{"open_id": "ou_user"}, "context": map[string]any{"open_message_id": "om_card"}, "action": map[string]any{"tag": "button", "value": behavior["value"], "form_value": map[string]any{"comment": "按方案执行"}}}})
+	response, err := handler.Do(context.Background(), payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := json.Marshal(response)
+	if called != 1 || !strings.Contains(string(out), `"schema":"2.0"`) || !strings.Contains(string(out), "✓") || strings.Contains(string(out), "decision:submit") {
+		t.Fatalf("missing immediate non-interactive receipt: %s", out)
+	}
+}
+
+func TestDecisionCallbackDoesNotWaitForReceiptPatch(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "tenant_access_token") {
+			_, _ = w.Write([]byte(`{"code":0,"expire":7200,"tenant_access_token":"test"}`))
+			return
+		}
+		if r.Method != http.MethodPatch || r.URL.Path != "/open-apis/im/v1/messages/om_card" {
+			t.Errorf("wrong patch target %s %s", r.Method, r.URL.Path)
+		}
+		close(started)
+		<-release
+		_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
+	}))
+	defer srv.Close()
+	defer close(release)
+	p := &Platform{platformName: "lark", client: lark.NewClient("decision-patch-test", "secret", lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client()))}
+	p.SetDecisionHandler(func(string, string, string, string, string) (*core.Decision, error) {
+		return &core.Decision{Spec: core.DecisionSpec{Title: "确认", Markdown: "内容", Options: []core.DecisionOption{{ID: "yes", Label: "同意"}}}, OptionID: "yes"}, nil
+	})
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{Operator: &callback.Operator{OpenID: "ou_user"}, Context: &callback.Context{OpenMessageID: "om_card"}, Action: &callback.CallBackAction{Value: map[string]any{"action": "decision:submit", "request_id": "r1", "option_id": "yes"}}}}
+	before := time.Now()
+	resp, handled := p.handleDecisionAction(event)
+	if !handled || resp.Card == nil || time.Since(before) > time.Second {
+		t.Fatal("callback waited for network instead of returning receipt")
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("global receipt PATCH was not sent")
 	}
 }

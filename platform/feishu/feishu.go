@@ -590,6 +590,11 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 					return resp, nil
 				}
 			}
+			// All sibling projects had a chance to resolve the request. An old
+			// card whose durable record was removed must get visible feedback.
+			if event.Event != nil && event.Event.Action != nil && event.Event.Action.Value["action"] == "decision:submit" {
+				return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "error", Content: core.NewI18n(core.LangChinese).T(core.MsgDecisionRejected)}}, nil
+			}
 			return nil, nil
 		}).
 		OnP2BotMenuV6(func(ctx context.Context, event *larkapplication.P2BotMenuV6) error {
