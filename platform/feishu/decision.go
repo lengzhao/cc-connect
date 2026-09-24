@@ -54,11 +54,14 @@ func (p *Platform) ResolveDecisionRecipient(ctx context.Context, recipient strin
 }
 
 func decisionCard(v *core.Decision, answered bool) map[string]any {
+	if len(v.Spec.Card) > 0 {
+		return customDecisionCard(v, answered)
+	}
 	i := core.NewI18n(core.DetectLanguage(v.Spec.Title + v.Spec.Markdown))
 	elements := []map[string]any{{"tag": "markdown", "content": sanitizeMarkdownURLs(preprocessFeishuMarkdown(v.Spec.Markdown))}}
 	color := "blue"
 	if answered {
-		color = "green"
+		color = "wathet"
 		label := ""
 		for _, o := range v.Spec.Options {
 			if o.ID == v.OptionID {
@@ -74,7 +77,7 @@ func decisionCard(v *core.Decision, answered bool) map[string]any {
 	} else {
 		fields := append([]core.DecisionField(nil), v.Spec.Fields...)
 		for _, o := range v.Spec.Options {
-			if o.SkipValidation {
+			if o.SkipValidation || o.Cancel {
 				for n := range fields {
 					fields[n].Required = false
 				}
@@ -86,23 +89,25 @@ func decisionCard(v *core.Decision, answered bool) map[string]any {
 			form = append(form, map[string]any{"tag": "input", "name": "comment", "default_value": v.Comment, "placeholder": plainText(i.T(core.MsgDecisionComment)), "max_length": 1000, "input_type": "multiline_text", "required": false, "rows": 2})
 		}
 		columns := []map[string]any{}
-		cancelButtons := []map[string]any{}
+
 		for idx, o := range v.Spec.Options {
 			button := map[string]any{"tag": "button", "name": fmt.Sprintf("decision_%d", idx), "text": plainText(o.Label), "type": "default", "form_action_type": "submit", "behaviors": []any{map[string]any{"type": "callback", "value": map[string]string{"action": "decision:submit", "request_id": v.ID, "option_id": o.ID, "revision": fmt.Sprint(v.Revision)}}}}
-			if o.Cancel {
-				delete(button, "form_action_type")
-				cancelButtons = append(cancelButtons, button)
-				continue
-			}
 			columns = append(columns, map[string]any{"tag": "column", "width": "weighted", "weight": 1, "elements": []any{button}})
 		}
-		form = append(form, map[string]any{"tag": "column_set", "columns": columns})
-		elements = append(elements, map[string]any{"tag": "form", "name": "decision_form", "elements": form})
-		elements = append(elements, cancelButtons...)
+		for start := 0; start < len(columns); start += 3 {
+			end := start + 3
+			if end > len(columns) {
+				end = len(columns)
+			}
+			form = append(form, map[string]any{"tag": "column_set", "columns": columns[start:end]})
+		}
+		if len(v.Spec.Options) > 0 {
+			elements = append(elements, map[string]any{"tag": "form", "name": "decision_form", "elements": form})
+		}
 	}
 	title := v.Spec.Title
 	if answered {
-		title = "✓ " + title
+		title = "⏳ " + title
 	}
 	return map[string]any{"schema": "2.0", "config": map[string]any{"width_mode": "fill", "update_multi": true}, "header": map[string]any{"title": plainText(title), "template": color}, "body": map[string]any{"elements": elements}}
 }
@@ -192,18 +197,10 @@ func (p *Platform) handleDecisionAction(event *callback.CardActionTriggerEvent) 
 	}
 	i = core.NewI18n(core.DetectLanguage(v.Spec.Title + v.Spec.Markdown))
 	slog.Info(p.tag()+": decision answer recorded", "request_id", id, "message_id", ev.Context.OpenMessageID, "status", v.Status)
-	// Intermediate actions return only a toast. Returning a receipt or queuing
-	// a PATCH here could overwrite the next form produced by the Agent.
-	if core.DecisionIntermediate(v) {
-		return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "success", Content: i.T(core.MsgDecisionSaved)}}, true
-	}
-	// Return the replacement immediately; independently PATCH the same recorded
-	// receipt so every client sees it even when the callback response is lost.
-	if p.client != nil {
-		card := decisionCard(v, true)
-		go p.patchDecisionReceipt(ev.Context.OpenMessageID, card)
-	}
-	return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "success", Content: i.T(core.MsgDecisionSaved)}, Card: &callback.Card{Type: "raw", Data: decisionCard(v, true)}}, true
+	// Receipt PATCH completed inside the durable handler before continuation.
+	// Never return a raw replacement here: a delayed callback response could
+	// overwrite the Agent's newer revision.
+	return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "success", Content: i.T(core.MsgDecisionSaved)}}, true
 }
 
 func escapeDecisionMarkdown(s string) string {
@@ -214,13 +211,6 @@ func escapeDecisionMarkdown(s string) string {
 // committed, so it is safe for the callback return and PATCH to apply the same card.
 func (p *Platform) UpdateDecision(ctx context.Context, v *core.Decision) error {
 	return p.patchDecisionCard(ctx, v.MessageID, decisionCard(v, false))
-}
-func (p *Platform) patchDecisionReceipt(messageID string, card map[string]any) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := p.patchDecisionCard(ctx, messageID, card); err != nil {
-		slog.Warn(p.tag()+": decision receipt update failed", "message_id", messageID, "error", err)
-	}
 }
 func (p *Platform) patchDecisionCard(ctx context.Context, messageID string, card map[string]any) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

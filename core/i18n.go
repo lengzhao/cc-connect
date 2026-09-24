@@ -660,7 +660,7 @@ const (
 )
 
 var messages = map[MsgKey]map[Language]string{
-	MsgDecisionSaved:    {LangEnglish: "Decision recorded; queued for the original session.", LangChinese: "选择已记录，将交回原会话继续处理。", LangTraditionalChinese: "選擇已記錄，將交回原對話繼續處理。", LangJapanese: "回答を記録しました。元の会話に引き継ぎます。", LangSpanish: "Decisión registrada; se enviará a la conversación original."},
+	MsgDecisionSaved:    {LangEnglish: "Interaction recorded; processing in the original session.", LangChinese: "已收到，正在原会话处理中。", LangTraditionalChinese: "已收到，正在原對話處理中。", LangJapanese: "回答を記録しました。元の会話に引き継ぎます。", LangSpanish: "Decisión registrada; se enviará a la conversación original."},
 	MsgDecisionRejected: {LangEnglish: "Cannot submit: check the designated recipient and whether this card has expired or was already answered.", LangChinese: "无法提交：请确认是指定答复人，且卡片未过期、未重复提交。", LangTraditionalChinese: "無法提交：請確認是指定答覆人，且卡片未過期、未重複提交。", LangJapanese: "送信できません。回答者、有効期限、回答済みかを確認してください。", LangSpanish: "No se puede enviar: compruebe el destinatario, la caducidad y si ya respondió."},
 	MsgDecisionComment:  {LangEnglish: "Comment (optional)", LangChinese: "补充意见（可选）", LangTraditionalChinese: "補充意見（選填）", LangJapanese: "コメント（任意）", LangSpanish: "Comentario (opcional)"},
 	MsgStarting: {

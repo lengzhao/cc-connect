@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/chenhg5/cc-connect/core"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -47,7 +46,7 @@ func TestDecisionLongConnectionCallbackPersistsBeforeAcknowledgement(t *testing.
 	})
 	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{Operator: &callback.Operator{OpenID: "ou_user"}, Context: &callback.Context{OpenMessageID: "om_card"}, Action: &callback.CallBackAction{Value: map[string]any{"action": "decision:submit", "request_id": "r1", "option_id": "yes"}, FormValue: map[string]any{"comment": "notes"}}}}
 	resp, handled := p.handleDecisionAction(event)
-	if !handled || !saved || resp.Toast.Type != "success" || resp.Card == nil {
+	if !handled || !saved || resp.Toast.Type != "success" || resp.Card != nil {
 		t.Fatalf("bad ack: %+v", resp)
 	}
 	p.SetDecisionHandler(func(string, string, string, string, string, ...map[string]any) (*core.Decision, error) {
@@ -167,43 +166,40 @@ func TestDecisionCardV2RoundTripThroughSDK(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _ := json.Marshal(response)
-	if called != 1 || !strings.Contains(string(out), `"schema":"2.0"`) || !strings.Contains(string(out), "✓") || strings.Contains(string(out), "decision:submit") {
-		t.Fatalf("missing immediate non-interactive receipt: %s", out)
+	if called != 1 || !strings.Contains(string(out), `"type":"success"`) || strings.Contains(string(out), `"card"`) {
+		t.Fatalf("callback must not overwrite newer cards: %s", out)
 	}
 }
 
-func TestDecisionCallbackDoesNotWaitForReceiptPatch(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
+func TestDecisionReceiptWriterPatchesOriginalMessage(t *testing.T) {
+	patches := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "tenant_access_token") {
 			_, _ = w.Write([]byte(`{"code":0,"expire":7200,"tenant_access_token":"test"}`))
 			return
 		}
-		if r.Method != http.MethodPatch || r.URL.Path != "/open-apis/im/v1/messages/om_card" {
+		if r.Method != "PATCH" || r.URL.Path != "/open-apis/im/v1/messages/om_card" {
 			t.Errorf("wrong patch target %s %s", r.Method, r.URL.Path)
 		}
-		close(started)
-		<-release
+		var body struct {
+			Content string `json:"content"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if strings.Contains(body.Content, "decision:submit") || !strings.Contains(body.Content, "chosen") {
+			t.Error("receipt must preserve selection and remove buttons")
+		}
+		patches++
 		_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
 	}))
 	defer srv.Close()
-	defer close(release)
-	p := &Platform{platformName: "lark", client: lark.NewClient("decision-patch-test", "secret", lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client()))}
-	p.SetDecisionHandler(func(string, string, string, string, string, ...map[string]any) (*core.Decision, error) {
-		return &core.Decision{Spec: core.DecisionSpec{Title: "确认", Markdown: "内容", Options: []core.DecisionOption{{ID: "yes", Label: "同意"}}}, OptionID: "yes"}, nil
-	})
-	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{Operator: &callback.Operator{OpenID: "ou_user"}, Context: &callback.Context{OpenMessageID: "om_card"}, Action: &callback.CallBackAction{Value: map[string]any{"action": "decision:submit", "request_id": "r1", "option_id": "yes"}}}}
-	before := time.Now()
-	resp, handled := p.handleDecisionAction(event)
-	if !handled || resp.Card == nil || time.Since(before) > time.Second {
-		t.Fatal("callback waited for network instead of returning receipt")
+	p := &Platform{client: lark.NewClient("receipt-unified-test", "secret", lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client()))}
+	v := &core.Decision{MessageID: "om_card", OptionID: "yes", Spec: core.DecisionSpec{Title: "Choice", Markdown: "Review", Options: []core.DecisionOption{{ID: "yes", Label: "chosen"}}}}
+	if err := p.RecordDecisionReceipt(context.Background(), v); err != nil {
+		t.Fatal(err)
 	}
-	select {
-	case <-started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("global receipt PATCH was not sent")
+	if patches != 1 {
+		t.Fatal("receipt not applied")
 	}
 }
 
@@ -221,9 +217,8 @@ func TestDecisionFormFieldsAndCancel(t *testing.T) {
 		}
 	}
 	elems := card["body"].(map[string]any)["elements"].([]map[string]any)
-	cancel := elems[len(elems)-1]
-	if cancel["tag"] != "button" || cancel["form_action_type"] != nil {
-		t.Fatal("cancel must be outside validated form")
+	if len(elems) != 2 || elems[1]["tag"] != "form" {
+		t.Fatal("all actions must stay in the same form")
 	}
 	p := &Platform{}
 	p.SetDecisionHandler(func(id, user, option, comment, msg string, fields ...map[string]any) (*core.Decision, error) {
@@ -236,10 +231,10 @@ func TestDecisionFormFieldsAndCancel(t *testing.T) {
 	})
 	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{Operator: &callback.Operator{OpenID: "user"}, Context: &callback.Context{OpenMessageID: "original"}, Action: &callback.CallBackAction{Value: map[string]any{"action": "decision:submit", "request_id": "form", "option_id": "build"}, FormValue: map[string]any{"branch": "develop", "env": "uat", "platform": []any{"ipa"}}}}}
 	response, handled := p.handleDecisionAction(event)
-	if !handled || response.Card == nil {
-		t.Fatal("no inline receipt")
+	if !handled || response.Toast == nil || response.Card != nil {
+		t.Fatal("expected toast without stale card replacement")
 	}
-	out, _ := json.Marshal(response.Card)
+	out, _ := json.Marshal(decisionCard(v, true))
 	if !strings.Contains(string(out), "develop") || strings.Contains(string(out), "decision:submit") {
 		t.Fatalf("bad receipt %s", out)
 	}

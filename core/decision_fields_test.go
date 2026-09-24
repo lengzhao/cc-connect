@@ -48,7 +48,7 @@ func TestDecisionFormCancelSkipsRequiredFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := p.handler(v.ID, "alice", "cancel", "", v.MessageID)
-	if err != nil || !decisionCancelled(result.Spec, result.OptionID) {
+	if err != nil || result.OptionID != "cancel" || result.Status != "answered" {
 		t.Fatalf("cancel failed: %+v %v", result, err)
 	}
 }

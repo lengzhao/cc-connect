@@ -9,18 +9,22 @@ import (
 	"time"
 )
 
+type DecisionSpecPreparer interface{ PrepareDecisionSpec(*DecisionSpec) error }
+type DecisionReceiptWriter interface {
+	RecordDecisionReceipt(context.Context, *Decision) error
+}
+
+func decisionWaitingStatus(s DecisionSpec) string {
+	if len(s.Options) == 0 {
+		return "displayed"
+	}
+	return "pending"
+}
+
 type DecisionUpdater interface {
 	UpdateDecision(context.Context, *Decision) error
 }
 
-func DecisionIntermediate(v *Decision) bool {
-	for _, o := range v.Spec.Options {
-		if o.ID == v.OptionID {
-			return o.Intermediate
-		}
-	}
-	return false
-}
 func decisionTurnID(v *Decision) string {
 	if v.Revision == 0 {
 		return "decision:" + v.ID
@@ -59,7 +63,7 @@ func (d *decisionService) update(ctx context.Context, origin DecisionOrigin, spe
 		return nil, fmt.Errorf("platform cannot update decision cards")
 	}
 	repeat := v.UpdateHash == hash && v.UpdateFrom == spec.ExpectedRevision && v.Revision == spec.ExpectedRevision+1
-	if repeat && v.Status == "pending" {
+	if repeat && (v.Status == "pending" || v.Status == "displayed") {
 		copy := *v
 		d.mu.Unlock()
 		return &copy, nil
@@ -73,9 +77,9 @@ func (d *decisionService) update(ctx context.Context, origin DecisionOrigin, spe
 			d.mu.Unlock()
 			return nil, fmt.Errorf("card revision changed")
 		}
-		if !DecisionIntermediate(v) || (v.Status != "dispatching" && v.Status != "delivered" && v.Status != "delivery_unknown") {
+		if v.Status != "dispatching" && v.Status != "delivered" && v.Status != "delivery_unknown" && v.Status != "pending" && v.Status != "displayed" {
 			d.mu.Unlock()
-			return nil, fmt.Errorf("only a consumed intermediate action can reopen the form")
+			return nil, fmt.Errorf("card is still recording an interaction; retry after continuation")
 		}
 		old := *v
 		// Carry submitted values into fields unless the Agent deliberately provides
@@ -127,7 +131,7 @@ func (d *decisionService) update(ctx context.Context, origin DecisionOrigin, spe
 		result := *v
 		return &result, nil
 	}
-	v.Status = "pending"
+	v.Status = decisionWaitingStatus(v.Spec)
 	v.Error = ""
 	if err != nil {
 		v.Status = "update_unknown"

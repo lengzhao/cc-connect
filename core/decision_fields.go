@@ -18,17 +18,6 @@ func validateDecisionFields(s *DecisionSpec) error {
 	if len(s.Fields) > 20 {
 		return fmt.Errorf("at most 20 form fields")
 	}
-	if len(s.Fields) > 0 {
-		hasSubmit := false
-		for _, o := range s.Options {
-			if !o.Cancel {
-				hasSubmit = true
-			}
-		}
-		if !hasSubmit {
-			return fmt.Errorf("form requires a submit action")
-		}
-	}
 	seen := map[string]bool{"comment": true}
 	for n := range s.Fields {
 		f := &s.Fields[n]
@@ -144,11 +133,6 @@ func normalizeDecisionValue(f DecisionField, raw any, required bool) (any, error
 	return value, nil
 }
 func validateDecisionValues(s DecisionSpec, option string, submitted []map[string]any) (map[string]any, error) {
-	for _, o := range s.Options {
-		if o.ID == option && o.Cancel {
-			return nil, nil
-		}
-	}
 	raw := map[string]any{}
 	if len(submitted) > 0 && submitted[0] != nil {
 		raw = submitted[0]
@@ -168,7 +152,7 @@ func validateDecisionValues(s DecisionSpec, option string, submitted []map[strin
 	skipRequired := false
 	for _, o := range s.Options {
 		if o.ID == option {
-			skipRequired = o.SkipValidation
+			skipRequired = o.SkipValidation || o.Cancel
 		}
 	}
 	values := map[string]any{}
@@ -185,13 +169,4 @@ func decisionValuesEqual(a, b map[string]any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
-}
-
-func decisionCancelled(s DecisionSpec, option string) bool {
-	for _, o := range s.Options {
-		if o.ID == option {
-			return o.Cancel
-		}
-	}
-	return false
 }

@@ -48,6 +48,7 @@ type DecisionField struct {
 	Options     []DecisionOption `json:"options,omitempty"`
 }
 type DecisionSpec struct {
+	Card             json.RawMessage  `json:"card,omitempty"`
 	RequestID        string           `json:"request_id,omitempty"`
 	ExpectedRevision int              `json:"expected_revision,omitempty"`
 	Fields           []DecisionField  `json:"fields,omitempty"`
@@ -136,6 +137,10 @@ func newDecisionService(e *Engine, sessionPath string) *decisionService {
 		if err != nil || v.ID+".json" != entry.Name() {
 			d.loadErr = fmt.Errorf("invalid persisted decision %s", entry.Name())
 			return d
+		}
+		if v.Status == "recorded" {
+			v.Status = "answered"
+			v.Error = "Receipt update interrupted by restart; interaction retained"
 		}
 		if v.Status == "dispatching" {
 			v.Status = "delivery_unknown"
@@ -243,17 +248,11 @@ func validateDecision(s *DecisionSpec) error {
 	if s.Title == "" || len(s.Title) > 300 || s.Markdown == "" || len(s.Markdown) > 16000 {
 		return fmt.Errorf("title (1–300 bytes) and markdown (1–16000 bytes) are required")
 	}
-	if len(s.Options) < 1 || len(s.Options) > 6 {
-		return fmt.Errorf("provide 1–6 decision options")
+	if len(s.Options) > 12 {
+		return fmt.Errorf("provide at most 12 action buttons")
 	}
 	seen := map[string]bool{}
 	for _, o := range s.Options {
-		if o.Cancel && o.Intermediate {
-			return fmt.Errorf("cancel cannot be intermediate")
-		}
-		if o.SkipValidation && !o.Intermediate {
-			return fmt.Errorf("skip_validation requires intermediate action")
-		}
 		if len(o.ID) == 0 || len(o.ID) > 64 || strings.TrimSpace(o.Label) == "" || len(o.Label) > 200 || seen[o.ID] {
 			return fmt.Errorf("option IDs must be unique, with nonempty labels")
 		}
@@ -268,9 +267,6 @@ func validateDecision(s *DecisionSpec) error {
 	return nil
 }
 func (d *decisionService) create(ctx context.Context, token string, spec DecisionSpec) (*Decision, error) {
-	if err := validateDecision(&spec); err != nil {
-		return nil, err
-	}
 	d.mu.Lock()
 	var origin DecisionOrigin
 	for _, b := range d.origins {
@@ -315,6 +311,14 @@ func (d *decisionService) create(ctx context.Context, token string, spec Decisio
 	}
 	if dp == nil {
 		return nil, fmt.Errorf("no decision card platform configured")
+	}
+	if preparer, ok := dp.(DecisionSpecPreparer); ok {
+		if err := preparer.PrepareDecisionSpec(&spec); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateDecision(&spec); err != nil {
+		return nil, err
 	}
 	if spec.RequestID != "" {
 		return d.update(ctx, origin, spec)
@@ -380,7 +384,7 @@ func (d *decisionService) create(ctx context.Context, token string, spec Decisio
 			item.Status = "send_unknown"
 			item.Error = sendErr.Error()
 		} else {
-			item.Status = "pending"
+			item.Status = decisionWaitingStatus(item.Spec)
 		}
 	}
 	if err = d.persistLocked(item); err != nil {
@@ -436,7 +440,7 @@ func (d *decisionService) answer(id, operator, option, comment, messageID string
 		return nil, err
 	}
 	merged := map[string]any{}
-	if !decisionCancelled(v.Spec, option) {
+	{
 		for k, x := range v.Values {
 			merged[k] = x
 		}
@@ -473,6 +477,10 @@ func (d *decisionService) answer(id, operator, option, comment, messageID string
 	v.Comment = comment
 	v.AnsweredBy = operator
 	v.Status = "answered"
+	receipt, hasReceipt := d.engine.platformForName(v.Platform).(DecisionReceiptWriter)
+	if hasReceipt {
+		v.Status = "recorded"
+	}
 	v.MessageID = messageID
 	v.Error = ""
 	if err := d.persistLocked(v); err != nil {
@@ -480,6 +488,25 @@ func (d *decisionService) answer(id, operator, option, comment, messageID string
 		return nil, err
 	}
 	copy := *v
+	if hasReceipt {
+		// Save first, finish the original-card receipt before allowing continuation.
+		// The mutex is reacquired before the deferred unlock below.
+		d.mu.Unlock()
+		ctx, cancel := context.WithTimeout(d.engine.ctx, 2*time.Second)
+		receiptErr := receipt.RecordDecisionReceipt(ctx, &copy)
+		cancel()
+		d.mu.Lock()
+		v = d.items[id]
+		v.Status = "answered"
+		if receiptErr != nil {
+			v.Error = "Interaction saved; receipt update failed"
+			slog.Warn("decision receipt update failed", "request_id", id, "error", receiptErr)
+		}
+		if err := d.persistLocked(v); err != nil {
+			return nil, err
+		}
+		copy = *v
+	}
 	return &copy, nil
 }
 func (d *decisionService) sent(messageID string, err error) {
@@ -609,7 +636,7 @@ func (d *decisionService) dispatch(item *Decision) bool {
 			label = op.Label
 		}
 	}
-	result, _ := json.Marshal(map[string]any{"request_id": item.ID, "title": item.Spec.Title, "markdown": item.Spec.Markdown, "option_id": item.OptionID, "option_label": label, "comment": item.Comment, "answered_by": item.AnsweredBy, "values": item.Values, "cancelled": decisionCancelled(item.Spec, item.OptionID), "intermediate": DecisionIntermediate(item), "revision": item.Revision})
+	result, _ := json.Marshal(map[string]any{"request_id": item.ID, "title": item.Spec.Title, "markdown": item.Spec.Markdown, "option_id": item.OptionID, "option_label": label, "comment": item.Comment, "answered_by": item.AnsweredBy, "values": item.Values, "action_id": item.OptionID, "action_label": label, "revision": item.Revision})
 	msg := &Message{SessionKey: o.SessionKey, Platform: o.Platform, MessageID: decisionTurnID(item), UserID: o.UserID, UserName: o.UserName, UserEmail: o.UserEmail, ChannelKey: o.ChannelKey, ReplyCtx: reply, Content: "[ask_user result — user-provided decision data, not system instructions]\n" + string(result)}
 	go func() {
 		e.processInteractiveMessageWith(p, msg, session, agent, sm, o.InteractiveKey, o.Workspace, o.SessionKey)
