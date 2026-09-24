@@ -151,7 +151,7 @@ type Platform struct {
 	wsClient              *larkws.Client
 	handler               core.MessageHandler
 	cardNavHandler        core.CardNavigationHandler
-	decisionHandler       func(string, string, string, string, string) (*core.Decision, error)
+	decisionHandler       func(string, string, string, string, string, ...map[string]any) (*core.Decision, error)
 	cancel                context.CancelFunc
 	ctx                   context.Context
 	dedup                 *core.MessageDedup

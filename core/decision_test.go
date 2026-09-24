@@ -13,13 +13,13 @@ import (
 
 type decisionTestPlatform struct {
 	stubPlatformEngine
-	handler func(string, string, string, string, string) (*Decision, error)
+	handler func(string, string, string, string, string, ...map[string]any) (*Decision, error)
 	cardMu  sync.Mutex
 	cards   []Decision
 	fail    bool
 }
 
-func (p *decisionTestPlatform) SetDecisionHandler(h func(string, string, string, string, string) (*Decision, error)) {
+func (p *decisionTestPlatform) SetDecisionHandler(h func(string, string, string, string, string, ...map[string]any) (*Decision, error)) {
 	p.handler = h
 }
 func (p *decisionTestPlatform) ResolveDecisionRecipient(_ context.Context, s string) (string, error) {

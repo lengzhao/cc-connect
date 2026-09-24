@@ -2425,11 +2425,13 @@ func TestCUJ_DecisionReturnsToOriginalSession(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	token := e.decisions.tokenFor(key, session.ID)
-	v, err := e.decisions.create(context.Background(), token, decisionSpec())
+	spec := decisionSpec()
+	spec.Fields = []DecisionField{{ID: "branch", Label: "Branch", Type: "text", Required: true}}
+	v, err := e.decisions.create(context.Background(), token, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = p.handler(v.ID, "alice", "yes", "continue", v.MessageID); err != nil {
+	if _, err = p.handler(v.ID, "alice", "yes", "continue", v.MessageID, map[string]any{"branch": "origin/develop"}); err != nil {
 		t.Fatal(err)
 	}
 	e.decisions.drainOne()
@@ -2452,6 +2454,9 @@ func TestCUJ_DecisionReturnsToOriginalSession(t *testing.T) {
 	count := 0
 	for _, h := range session.GetHistory(0) {
 		if h.Role == "user" && strings.Contains(h.Content, v.ID) {
+			if !strings.Contains(h.Content, `"branch":"origin/develop"`) {
+				t.Fatal("form values missing from original session")
+			}
 			count++
 		}
 	}

@@ -18,7 +18,7 @@ import (
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
-func (p *Platform) SetDecisionHandler(h func(string, string, string, string, string) (*core.Decision, error)) {
+func (p *Platform) SetDecisionHandler(h func(string, string, string, string, string, ...map[string]any) (*core.Decision, error)) {
 	p.decisionHandler = h
 }
 func (p *Platform) ResolveDecisionRecipient(ctx context.Context, recipient string) (string, error) {
@@ -65,23 +65,31 @@ func decisionCard(v *core.Decision, answered bool) map[string]any {
 				label = o.Label
 			}
 		}
+		elements = append(elements, decisionValuesSummary(v)...)
 		elements = append(elements, map[string]any{"tag": "markdown", "content": "**✓ " + escapeDecisionMarkdown(label) + "**"})
 		if v.Comment != "" {
 			elements = append(elements, map[string]any{"tag": "markdown", "content": escapeDecisionMarkdown(v.Comment)})
 		}
 		elements = append(elements, map[string]any{"tag": "markdown", "content": i.T(core.MsgDecisionSaved), "text_size": "notation"})
 	} else {
-		form := []map[string]any{}
+		form := decisionFormFields(v.Spec.Fields)
 		if v.Spec.AllowComment {
 			form = append(form, map[string]any{"tag": "input", "name": "comment", "placeholder": plainText(i.T(core.MsgDecisionComment)), "max_length": 1000, "input_type": "multiline_text", "required": false, "rows": 2})
 		}
 		columns := []map[string]any{}
+		cancelButtons := []map[string]any{}
 		for idx, o := range v.Spec.Options {
 			button := map[string]any{"tag": "button", "name": fmt.Sprintf("decision_%d", idx), "text": plainText(o.Label), "type": "default", "form_action_type": "submit", "behaviors": []any{map[string]any{"type": "callback", "value": map[string]string{"action": "decision:submit", "request_id": v.ID, "option_id": o.ID}}}}
+			if o.Cancel {
+				delete(button, "form_action_type")
+				cancelButtons = append(cancelButtons, button)
+				continue
+			}
 			columns = append(columns, map[string]any{"tag": "column", "width": "weighted", "weight": 1, "elements": []any{button}})
 		}
 		form = append(form, map[string]any{"tag": "column_set", "columns": columns})
 		elements = append(elements, map[string]any{"tag": "form", "name": "decision_form", "elements": form})
+		elements = append(elements, cancelButtons...)
 	}
 	title := v.Spec.Title
 	if answered {
@@ -151,12 +159,22 @@ func (p *Platform) handleDecisionAction(event *callback.CardActionTriggerEvent) 
 	id, _ := ev.Action.Value["request_id"].(string)
 	option, _ := ev.Action.Value["option_id"].(string)
 	comment, _ := ev.Action.FormValue["comment"].(string)
-	v, err := p.decisionHandler(id, ev.Operator.OpenID, option, comment, ev.Context.OpenMessageID)
+	values := map[string]any{}
+	for k, value := range ev.Action.FormValue {
+		if k != "comment" {
+			values[k] = value
+		}
+	}
+	v, err := p.decisionHandler(id, ev.Operator.OpenID, option, comment, ev.Context.OpenMessageID, values)
 	if errors.Is(err, core.ErrDecisionNotFound) {
 		slog.Warn(p.tag()+": decision request not found", "request_id", id, "message_id", ev.Context.OpenMessageID)
 		return nil, false
 	}
 	if err != nil {
+		var fieldErr *core.DecisionFormError
+		if errors.As(err, &fieldErr) {
+			return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "error", Content: fieldErr.Message}}, true
+		}
 		slog.Warn(p.tag()+": decision callback rejected", "request_id", id, "message_id", ev.Context.OpenMessageID, "error", err)
 		return rejected()
 	}

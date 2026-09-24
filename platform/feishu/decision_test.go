@@ -38,7 +38,7 @@ func TestDecisionCardFormUsesHostIDsAndPreservesMarkdown(t *testing.T) {
 func TestDecisionLongConnectionCallbackPersistsBeforeAcknowledgement(t *testing.T) {
 	p := &Platform{}
 	saved := false
-	p.SetDecisionHandler(func(id, user, option, comment, msg string) (*core.Decision, error) {
+	p.SetDecisionHandler(func(id, user, option, comment, msg string, fields ...map[string]any) (*core.Decision, error) {
 		if id != "r1" || user != "ou_user" || option != "yes" || comment != "notes" || msg != "om_card" {
 			t.Fatalf("wrong callback values: %s %s %s %s %s", id, user, option, comment, msg)
 		}
@@ -50,14 +50,14 @@ func TestDecisionLongConnectionCallbackPersistsBeforeAcknowledgement(t *testing.
 	if !handled || !saved || resp.Toast.Type != "success" || resp.Card == nil {
 		t.Fatalf("bad ack: %+v", resp)
 	}
-	p.SetDecisionHandler(func(string, string, string, string, string) (*core.Decision, error) {
+	p.SetDecisionHandler(func(string, string, string, string, string, ...map[string]any) (*core.Decision, error) {
 		return nil, errors.New("disk failure")
 	})
 	resp, handled = p.handleDecisionAction(event)
 	if !handled || resp.Toast.Type != "error" || resp.Card != nil {
 		t.Fatal("false success after persistence failure")
 	}
-	p.SetDecisionHandler(func(string, string, string, string, string) (*core.Decision, error) {
+	p.SetDecisionHandler(func(string, string, string, string, string, ...map[string]any) (*core.Decision, error) {
 		return nil, core.ErrDecisionNotFound
 	})
 	if _, handled = p.handleDecisionAction(event); handled {
@@ -151,7 +151,7 @@ func TestDecisionCardV2RoundTripThroughSDK(t *testing.T) {
 	}
 	p := &Platform{platformName: "lark"}
 	called := 0
-	p.SetDecisionHandler(func(id, user, option, comment, msg string) (*core.Decision, error) {
+	p.SetDecisionHandler(func(id, user, option, comment, msg string, fields ...map[string]any) (*core.Decision, error) {
 		called++
 		if id != "r2" || user != "ou_user" || option != "approve" || comment != "按方案执行" || msg != "om_card" {
 			t.Fatal("callback was not decoded correctly")
@@ -191,7 +191,7 @@ func TestDecisionCallbackDoesNotWaitForReceiptPatch(t *testing.T) {
 	defer srv.Close()
 	defer close(release)
 	p := &Platform{platformName: "lark", client: lark.NewClient("decision-patch-test", "secret", lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client()))}
-	p.SetDecisionHandler(func(string, string, string, string, string) (*core.Decision, error) {
+	p.SetDecisionHandler(func(string, string, string, string, string, ...map[string]any) (*core.Decision, error) {
 		return &core.Decision{Spec: core.DecisionSpec{Title: "确认", Markdown: "内容", Options: []core.DecisionOption{{ID: "yes", Label: "同意"}}}, OptionID: "yes"}, nil
 	})
 	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{Operator: &callback.Operator{OpenID: "ou_user"}, Context: &callback.Context{OpenMessageID: "om_card"}, Action: &callback.CallBackAction{Value: map[string]any{"action": "decision:submit", "request_id": "r1", "option_id": "yes"}}}}
@@ -204,5 +204,43 @@ func TestDecisionCallbackDoesNotWaitForReceiptPatch(t *testing.T) {
 	case <-started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("global receipt PATCH was not sent")
+	}
+}
+
+func TestDecisionFormFieldsAndCancel(t *testing.T) {
+	v := &core.Decision{ID: "form", Spec: core.DecisionSpec{Title: "Build", Markdown: "Configure", Fields: []core.DecisionField{
+		{ID: "branch", Label: "Branch", Type: "text", Required: true, MaxLength: 100, Default: "develop"},
+		{ID: "env", Label: "Environment", Type: "select", Options: []core.DecisionOption{{ID: "uat", Label: "UAT"}}, Default: "uat"},
+		{ID: "platform", Label: "Platforms", Type: "multiselect", Options: []core.DecisionOption{{ID: "ipa", Label: "IPA"}}},
+	}, Options: []core.DecisionOption{{ID: "build", Label: "Build"}, {ID: "cancel", Label: "Cancel", Cancel: true}}}}
+	card := decisionCard(v, false)
+	raw, _ := json.Marshal(card)
+	for _, part := range []string{`"tag":"select_static"`, `"tag":"multi_select_static"`, `"default_value":"develop"`} {
+		if !strings.Contains(string(raw), part) {
+			t.Fatalf("missing %s: %s", part, raw)
+		}
+	}
+	elems := card["body"].(map[string]any)["elements"].([]map[string]any)
+	cancel := elems[len(elems)-1]
+	if cancel["tag"] != "button" || cancel["form_action_type"] != nil {
+		t.Fatal("cancel must be outside validated form")
+	}
+	p := &Platform{}
+	p.SetDecisionHandler(func(id, user, option, comment, msg string, fields ...map[string]any) (*core.Decision, error) {
+		if len(fields) != 1 || fields[0]["branch"] != "develop" || fields[0]["env"] != "uat" {
+			t.Fatal("form values lost")
+		}
+		v.Values = fields[0]
+		v.OptionID = option
+		return v, nil
+	})
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{Operator: &callback.Operator{OpenID: "user"}, Context: &callback.Context{OpenMessageID: "original"}, Action: &callback.CallBackAction{Value: map[string]any{"action": "decision:submit", "request_id": "form", "option_id": "build"}, FormValue: map[string]any{"branch": "develop", "env": "uat", "platform": []any{"ipa"}}}}}
+	response, handled := p.handleDecisionAction(event)
+	if !handled || response.Card == nil {
+		t.Fatal("no inline receipt")
+	}
+	out, _ := json.Marshal(response.Card)
+	if !strings.Contains(string(out), "develop") || strings.Contains(string(out), "decision:submit") {
+		t.Fatalf("bad receipt %s", out)
 	}
 }
