@@ -197,13 +197,16 @@ func (p *Platform) handleDecisionAction(event *callback.CardActionTriggerEvent) 
 	}
 	i = core.NewI18n(core.DetectLanguage(v.Spec.Title + v.Spec.Markdown))
 	slog.Info(p.tag()+": decision answer recorded", "request_id", id, "message_id", ev.Context.OpenMessageID, "status", v.Status)
-	if v.ReceiptState == "pending" || v.ReceiptState == "failed" {
-		return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "info", Content: "选择已保存，卡片展示尚未更新，请勿重复提交"}}, true
+	// A click only records the choice. One worker writes the receipt before
+	// starting the Agent; never race that writer with a callback replacement.
+	if v.Status == "recorded" {
+		return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "info", Content: "已收到，正在处理"}}, true
 	}
-	// Receipt PATCH completed inside the durable handler before continuation.
-	// Never return a raw replacement here: a delayed callback response could
-	// overwrite the Agent's newer revision.
+	if v.Error != "" {
+		return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "info", Content: "选择已保存，卡片展示更新失败"}}, true
+	}
 	return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "success", Content: i.T(core.MsgDecisionSaved)}}, true
+
 }
 
 func escapeDecisionMarkdown(s string) string {

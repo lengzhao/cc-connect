@@ -43,7 +43,13 @@ func TestDecisionReceiptPrecedesContinuationAndAllButtonsCanUpdate(t *testing.T)
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { _, err := p.handler(v.ID, "alice", "yes", "", v.MessageID); done <- err }()
+	if _, err := p.handler(v.ID, "alice", "yes", "", v.MessageID); err != nil {
+		t.Fatal(err)
+	}
+	if p.calls.Load() != 0 {
+		t.Fatal("callback performed a network request")
+	}
+	go func() { e.decisions.drainOne(); done <- nil }()
 	<-p.started
 	data, err := os.ReadFile(filepath.Join(path+".decisions", v.ID+".json"))
 	if err != nil {
@@ -54,7 +60,6 @@ func TestDecisionReceiptPrecedesContinuationAndAllButtonsCanUpdate(t *testing.T)
 	if saved.Status != "recorded" || saved.OptionID != "yes" {
 		t.Fatal("receipt started before durable save")
 	}
-	e.decisions.drainOne()
 	if len(s.GetHistory(0)) != 0 {
 		t.Fatal("Agent ran before receipt finished")
 	}
@@ -124,7 +129,7 @@ func TestReceiptFailureRetriesBeforeContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer.Status != "recorded" || answer.ReceiptState != "pending" {
+	if answer.Status != "recorded" {
 		t.Fatalf("failed PATCH lost repair state: %+v", answer)
 	}
 	e.decisions.drainOne()
@@ -140,14 +145,13 @@ func TestReceiptFailureRetriesBeforeContinuation(t *testing.T) {
 	}
 	p.fail = false
 	e.decisions.mu.Lock()
-	e.decisions.items[v.ID].ReceiptNextAt = time.Time{}
 	item := *e.decisions.items[v.ID]
 	e.decisions.mu.Unlock()
 	e.decisions.retryReceipt(&item)
 	e.decisions.mu.Lock()
 	saved := *e.decisions.items[v.ID]
 	e.decisions.mu.Unlock()
-	if saved.Status != "answered" || saved.ReceiptState != "updated" || p.calls != 2 {
+	if saved.Status != "answered" || p.calls != 2 {
 		t.Fatalf("repair failed %+v", saved)
 	}
 	e.decisions.retryReceipt(&item)
@@ -159,14 +163,13 @@ func TestReceiptFailureRetriesBeforeContinuation(t *testing.T) {
 	current := e.decisions.items[v.ID]
 	current.Status = "recorded"
 	current.ReceiptAttempts = 2
-	current.ReceiptNextAt = time.Time{}
 	item = *current
 	e.decisions.mu.Unlock()
 	e.decisions.retryReceipt(&item)
 	e.decisions.mu.Lock()
 	saved = *e.decisions.items[v.ID]
 	e.decisions.mu.Unlock()
-	if saved.Status != "answered" || saved.ReceiptState != "failed" || saved.ReceiptAttempts != 3 {
+	if saved.Status != "answered" || saved.ReceiptAttempts != 3 {
 		t.Fatalf("retry budget not enforced: %+v", saved)
 	}
 	e.decisions.retryReceipt(&item)

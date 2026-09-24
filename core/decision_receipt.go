@@ -11,13 +11,12 @@ import (
 func (d *decisionService) retryReceipt(item *Decision) {
 	d.mu.Lock()
 	v := d.items[item.ID]
-	if v == nil || v.Status != "recorded" || v.Revision != item.Revision || time.Now().Before(v.ReceiptNextAt) {
+	if v == nil || v.Status != "recorded" || v.Revision != item.Revision {
 		d.mu.Unlock()
 		return
 	}
 	if v.ReceiptAttempts >= 3 {
 		v.Status = "answered"
-		v.ReceiptState = "failed"
 		v.Error = "Interaction saved; card display update failed after 3 attempts"
 		if err := d.persistLocked(v); err != nil {
 			v.Status = "recorded"
@@ -28,7 +27,6 @@ func (d *decisionService) retryReceipt(item *Decision) {
 	}
 	old := *v
 	v.ReceiptAttempts++
-	v.ReceiptNextAt = time.Now().Add(10 * time.Second)
 	if err := d.persistLocked(v); err != nil {
 		*v = old
 		d.mu.Unlock()
@@ -52,14 +50,12 @@ func (d *decisionService) retryReceipt(item *Decision) {
 	old = *v
 	if ok && err == nil {
 		v.Status = "answered"
-		v.ReceiptState = "updated"
 		v.Error = ""
 	} else {
 		v.Error = "Interaction saved; receipt retry failed"
 		slog.Warn("decision receipt retry failed", "request_id", v.ID, "revision", v.Revision, "attempt", v.ReceiptAttempts, "error", err)
 		if v.ReceiptAttempts >= 3 {
 			v.Status = "answered"
-			v.ReceiptState = "failed"
 		}
 	}
 	if err := d.persistLocked(v); err != nil {
