@@ -244,3 +244,18 @@ func TestDecisionFormFieldsAndCancel(t *testing.T) {
 		t.Fatalf("bad receipt %s", out)
 	}
 }
+
+func TestDecisionIntermediateDoesNotOverwriteNextCard(t *testing.T) {
+	p := &Platform{platformName: "lark"}
+	p.SetDecisionHandler(func(id, user, option, comment, msg string, fields ...map[string]any) (*core.Decision, error) {
+		if fields[0]["_revision"] != "3" {
+			t.Fatal("revision not forwarded")
+		}
+		return &core.Decision{Revision: 3, OptionID: "check", Spec: core.DecisionSpec{Title: "Check", Options: []core.DecisionOption{{ID: "check", Label: "Check", Intermediate: true}}}}, nil
+	})
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{Operator: &callback.Operator{OpenID: "user"}, Context: &callback.Context{OpenMessageID: "original"}, Action: &callback.CallBackAction{Value: map[string]any{"action": "decision:submit", "request_id": "r1", "option_id": "check", "revision": "3"}}}}
+	reply, handled := p.handleDecisionAction(event)
+	if !handled || reply.Toast == nil || reply.Card != nil {
+		t.Fatal("intermediate callback must not overwrite the next revision")
+	}
+}

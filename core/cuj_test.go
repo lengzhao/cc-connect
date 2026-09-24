@@ -2426,12 +2426,35 @@ func TestCUJ_DecisionReturnsToOriginalSession(t *testing.T) {
 	}
 	token := e.decisions.tokenFor(key, session.ID)
 	spec := decisionSpec()
+	spec.Options[0].Intermediate = true
 	spec.Fields = []DecisionField{{ID: "branch", Label: "Branch", Type: "text", Required: true}}
 	v, err := e.decisions.create(context.Background(), token, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = p.handler(v.ID, "alice", "yes", "continue", v.MessageID, map[string]any{"branch": "origin/develop"}); err != nil {
+		t.Fatal(err)
+	}
+	e.decisions.drainOne()
+	waitDecision(t, e.decisions, v.ID, "delivered")
+	deadline = time.Now().Add(3 * time.Second)
+	for session.Busy() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Agent updates the same message after the intermediate action, then the
+	// user finally confirms the revised card.
+	spec.RequestID = v.ID
+	spec.ExpectedRevision = 0
+	spec.Options = append([]DecisionOption(nil), spec.Options...)
+	spec.Options[0].Intermediate = false
+	next, err := e.decisions.create(context.Background(), token, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.MessageID != v.MessageID || len(p.cards) != 1 || len(p.updates) != 1 {
+		t.Fatal("navigation sent a second card")
+	}
+	if _, err = p.handler(v.ID, "alice", "yes", "continue", v.MessageID, map[string]any{"branch": "origin/develop", "_revision": "1"}); err != nil {
 		t.Fatal(err)
 	}
 	e.decisions.drainOne()
@@ -2460,7 +2483,7 @@ func TestCUJ_DecisionReturnsToOriginalSession(t *testing.T) {
 			count++
 		}
 	}
-	if count != 1 {
+	if count != 2 {
 		t.Fatalf("decision appears %d times in history", count)
 	}
 }

@@ -295,6 +295,17 @@ func TestQueuedMessagePreservesFiles(t *testing.T) {
 	if len(records[1].files) != 1 || records[1].files[0].FileName != "queued.txt" || string(records[1].files[0].Data) != "queued-file" {
 		t.Fatalf("queued file not preserved: %#v", records[1].files)
 	}
+	// waitRecords observes Send, before the queued turn finishes saving history.
+	// Do not let TempDir cleanup race the remaining session writes.
+	session := engine.GetSessions().GetActive(first.SessionKey)
+	deadline := time.Now().Add(3 * time.Second)
+	for session.Busy() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if session.Busy() {
+		t.Fatal("queued media turn did not finish")
+	}
+
 }
 
 func TestSendToSessionWithAttachmentsDeliversTextImagesAndFiles(t *testing.T) {

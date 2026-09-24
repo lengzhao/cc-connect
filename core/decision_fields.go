@@ -165,9 +165,15 @@ func validateDecisionValues(s DecisionSpec, option string, submitted []map[strin
 	if len(s.Fields) == 0 {
 		return nil, nil
 	}
+	skipRequired := false
+	for _, o := range s.Options {
+		if o.ID == option {
+			skipRequired = o.SkipValidation
+		}
+	}
 	values := map[string]any{}
 	for _, f := range s.Fields {
-		v, err := normalizeDecisionValue(f, raw[f.ID], f.Required)
+		v, err := normalizeDecisionValue(f, raw[f.ID], f.Required && !skipRequired)
 		if err != nil {
 			return nil, err
 		}

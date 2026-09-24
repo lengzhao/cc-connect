@@ -13,10 +13,13 @@ import (
 
 type decisionTestPlatform struct {
 	stubPlatformEngine
-	handler func(string, string, string, string, string, ...map[string]any) (*Decision, error)
-	cardMu  sync.Mutex
-	cards   []Decision
-	fail    bool
+	handler    func(string, string, string, string, string, ...map[string]any) (*Decision, error)
+	cardMu     sync.Mutex
+	cards      []Decision
+	fail       bool
+	updates    []Decision
+	updateFail bool
+	updateHook func(*Decision)
 }
 
 func (p *decisionTestPlatform) SetDecisionHandler(h func(string, string, string, string, string, ...map[string]any) (*Decision, error)) {
@@ -254,4 +257,17 @@ func TestDecisionRestoresWorkspaceAndDoesNotLetBusySessionStarveOthers(t *testin
 	if status != "answered" {
 		t.Fatal("busy first session was consumed")
 	}
+}
+
+func (p *decisionTestPlatform) UpdateDecision(_ context.Context, v *Decision) error {
+	p.cardMu.Lock()
+	defer p.cardMu.Unlock()
+	p.updates = append(p.updates, *v)
+	if p.updateHook != nil {
+		p.updateHook(v)
+	}
+	if p.updateFail {
+		return errors.New("patch failed")
+	}
+	return nil
 }
