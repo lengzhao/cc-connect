@@ -2,8 +2,9 @@ package feishu
 
 import (
 	"fmt"
-	"github.com/chenhg5/cc-connect/core"
 	"strings"
+
+	"github.com/chenhg5/cc-connect/core"
 )
 
 func decisionFormFields(fields []core.DecisionField) []map[string]any {
@@ -36,7 +37,8 @@ func decisionFormFields(fields []core.DecisionField) []map[string]any {
 				if f.Type == "select" {
 					c["initial_option"] = f.Default
 				} else {
-					c["initial_options"] = f.Default
+					// Card 2.0 multi-select uses selected_values, not initial_options.
+					c["selected_values"] = f.Default
 				}
 			}
 		}
