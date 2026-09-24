@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -92,5 +93,84 @@ func TestDecisionReceiptPrecedesContinuationAndAllButtonsCanUpdate(t *testing.T)
 	spec.Options = []DecisionOption{{ID: "again", Label: "Try another"}}
 	if _, err = e.decisions.create(context.Background(), token, spec); err != nil {
 		t.Fatal("Agent cannot add next actions", err)
+	}
+}
+
+type failingReceiptPlatform struct {
+	decisionTestPlatform
+	calls int
+	fail  bool
+}
+
+func (p *failingReceiptPlatform) RecordDecisionReceipt(context.Context, *Decision) error {
+	p.calls++
+	if p.fail {
+		return fmt.Errorf("patch failed")
+	}
+	return nil
+}
+func TestReceiptFailureRetriesBeforeContinuation(t *testing.T) {
+	p := &failingReceiptPlatform{decisionTestPlatform: decisionTestPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}, fail: true}
+	e := NewEngine("p", &cujAgent{}, []Platform{p}, filepath.Join(t.TempDir(), "sessions.json"), LangEnglish)
+	defer e.Stop()
+	s := e.sessions.GetOrCreateActive("test:room")
+	m := &Message{SessionKey: "test:room", UserID: "alice", MessageID: "origin"}
+	e.decisions.remember(p, m, s, e.sessions, m.SessionKey, "")
+	v, err := e.decisions.create(context.Background(), e.decisions.tokenFor(m.SessionKey, s.ID), decisionSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, err := p.handler(v.ID, "alice", "yes", "", v.MessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.Status != "recorded" || answer.ReceiptState != "pending" {
+		t.Fatalf("failed PATCH lost repair state: %+v", answer)
+	}
+	e.decisions.drainOne()
+	if len(s.GetHistory(0)) != 0 {
+		t.Fatal("continued before receipt repair")
+	}
+	_, err = p.handler(v.ID, "alice", "yes", "", v.MessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.calls != 1 {
+		t.Fatal("duplicate click issued PATCH")
+	}
+	p.fail = false
+	e.decisions.mu.Lock()
+	e.decisions.items[v.ID].ReceiptNextAt = time.Time{}
+	item := *e.decisions.items[v.ID]
+	e.decisions.mu.Unlock()
+	e.decisions.retryReceipt(&item)
+	e.decisions.mu.Lock()
+	saved := *e.decisions.items[v.ID]
+	e.decisions.mu.Unlock()
+	if saved.Status != "answered" || saved.ReceiptState != "updated" || p.calls != 2 {
+		t.Fatalf("repair failed %+v", saved)
+	}
+	e.decisions.retryReceipt(&item)
+	if p.calls != 2 {
+		t.Fatal("stale repair updated newer state")
+	}
+	p.fail = true
+	e.decisions.mu.Lock()
+	current := e.decisions.items[v.ID]
+	current.Status = "recorded"
+	current.ReceiptAttempts = 2
+	current.ReceiptNextAt = time.Time{}
+	item = *current
+	e.decisions.mu.Unlock()
+	e.decisions.retryReceipt(&item)
+	e.decisions.mu.Lock()
+	saved = *e.decisions.items[v.ID]
+	e.decisions.mu.Unlock()
+	if saved.Status != "answered" || saved.ReceiptState != "failed" || saved.ReceiptAttempts != 3 {
+		t.Fatalf("retry budget not enforced: %+v", saved)
+	}
+	e.decisions.retryReceipt(&item)
+	if p.calls != 3 {
+		t.Fatal("exhausted receipt retried again")
 	}
 }

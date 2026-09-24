@@ -77,14 +77,17 @@ type DecisionOrigin struct {
 }
 
 type Decision struct {
-	Revision    int            `json:"revision"`
-	UpdateFrom  int            `json:"update_from,omitempty"`
-	UpdateHash  string         `json:"update_hash,omitempty"`
-	ID          string         `json:"request_id"`
-	Spec        DecisionSpec   `json:"spec"`
-	Origin      DecisionOrigin `json:"origin"`
-	Platform    string         `json:"platform"`
-	RecipientID string         `json:"recipient_id"`
+	ReceiptAttempts int            `json:"receipt_attempts,omitempty"`
+	ReceiptNextAt   time.Time      `json:"receipt_next_at,omitempty"`
+	ReceiptState    string         `json:"receipt_state,omitempty"`
+	Revision        int            `json:"revision"`
+	UpdateFrom      int            `json:"update_from,omitempty"`
+	UpdateHash      string         `json:"update_hash,omitempty"`
+	ID              string         `json:"request_id"`
+	Spec            DecisionSpec   `json:"spec"`
+	Origin          DecisionOrigin `json:"origin"`
+	Platform        string         `json:"platform"`
+	RecipientID     string         `json:"recipient_id"`
 	// Empty means direct message; otherwise deliver to the originating conversation.
 	DeliverySessionKey string         `json:"delivery_session_key,omitempty"`
 	MessageID          string         `json:"message_id,omitempty"`
@@ -139,8 +142,8 @@ func newDecisionService(e *Engine, sessionPath string) *decisionService {
 			return d
 		}
 		if v.Status == "recorded" {
-			v.Status = "answered"
-			v.Error = "Receipt update interrupted by restart; interaction retained"
+			v.ReceiptState = "pending"
+			v.Error = "Receipt update interrupted by restart; retry pending"
 		}
 		if v.Status == "dispatching" {
 			v.Status = "delivery_unknown"
@@ -480,6 +483,9 @@ func (d *decisionService) answer(id, operator, option, comment, messageID string
 	receipt, hasReceipt := d.engine.platformForName(v.Platform).(DecisionReceiptWriter)
 	if hasReceipt {
 		v.Status = "recorded"
+		v.ReceiptState = "pending"
+		v.ReceiptAttempts = 1
+		v.ReceiptNextAt = time.Now().Add(10 * time.Second)
 	}
 	v.MessageID = messageID
 	v.Error = ""
@@ -498,7 +504,11 @@ func (d *decisionService) answer(id, operator, option, comment, messageID string
 		d.mu.Lock()
 		v = d.items[id]
 		v.Status = "answered"
+		v.ReceiptState = "updated"
 		if receiptErr != nil {
+			v.Status = "recorded"
+			v.ReceiptState = "pending"
+			v.ReceiptNextAt = time.Now().Add(2 * time.Second)
 			v.Error = "Interaction saved; receipt update failed"
 			slog.Warn("decision receipt update failed", "request_id", id, "error", receiptErr)
 		}
@@ -569,6 +579,7 @@ func (d *decisionService) setStatus(id, status, reason string) error {
 func (d *decisionService) drainOne() {
 	d.mu.Lock()
 	var items []*Decision
+	var receipts []*Decision
 	for _, v := range d.items {
 		if v.Status == "pending" && time.Now().After(v.ExpiresAt) {
 			v.Status = "expired"
@@ -576,12 +587,20 @@ func (d *decisionService) drainOne() {
 				slog.Error("decision expiration persistence failed", "request_id", v.ID, "error", err)
 			}
 		}
+		if v.Status == "recorded" && !time.Now().Before(v.ReceiptNextAt) {
+			copy := *v
+			receipts = append(receipts, &copy)
+		}
 		if v.Status == "answered" {
 			copy := *v
 			items = append(items, &copy)
 		}
 	}
 	d.mu.Unlock()
+	for _, receipt := range receipts {
+		d.retryReceipt(receipt)
+		break
+	}
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.Before(items[j].CreatedAt) })
 	for _, item := range items {
 		if d.dispatch(item) {

@@ -197,6 +197,9 @@ func (p *Platform) handleDecisionAction(event *callback.CardActionTriggerEvent) 
 	}
 	i = core.NewI18n(core.DetectLanguage(v.Spec.Title + v.Spec.Markdown))
 	slog.Info(p.tag()+": decision answer recorded", "request_id", id, "message_id", ev.Context.OpenMessageID, "status", v.Status)
+	if v.ReceiptState == "pending" || v.ReceiptState == "failed" {
+		return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "info", Content: "选择已保存，卡片展示尚未更新，请勿重复提交"}}, true
+	}
 	// Receipt PATCH completed inside the durable handler before continuation.
 	// Never return a raw replacement here: a delayed callback response could
 	// overwrite the Agent's newer revision.
