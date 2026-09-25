@@ -40,3 +40,33 @@ func TestDecisionCustomCardRejectsForeignCallbacks(t *testing.T) {
 		}
 	}
 }
+
+func TestDecisionCustomCheckboxRendersNativeAndReadonlyReceipt(t *testing.T) {
+	for _, tag := range []string{"checker", "checkbox"} {
+		s := core.DecisionSpec{Card: json.RawMessage(`{"schema":"2.0","body":{"elements":[{"tag":"` + tag + `","name":"confirm","text":{"tag":"plain_text","content":"Confirm"},"checked":true,"required":true},{"tag":"checker","name":"optional","text":{"tag":"plain_text","content":"Optional"},"checked":false},{"tag":"button","name":"submit","text":{"tag":"plain_text","content":"Submit"}}]}}`)}
+		if err := (&Platform{}).PrepareDecisionSpec(&s); err != nil {
+			t.Fatal(err)
+		}
+		if s.Fields[0].Type != "checkbox" || s.Fields[0].Default != true || !s.Fields[0].Required {
+			t.Fatalf("bad field: %+v", s.Fields)
+		}
+		v := &core.Decision{ID: "check", Revision: 1, Spec: s, Values: map[string]any{"confirm": true, "optional": false}, OptionID: "submit"}
+		b, _ := json.Marshal(decisionCard(v, false))
+		if strings.Count(string(b), `"tag":"checker"`) != 2 || strings.Contains(string(b), `"tag":"checkbox"`) || !strings.Contains(string(b), `"checked":true`) {
+			t.Fatalf("bad card: %s", b)
+		}
+		receipt, _ := json.Marshal(decisionCard(v, true))
+		for _, bad := range []string{`"tag":"checker"`, `"tag":"button"`} {
+			if strings.Contains(string(receipt), bad) {
+				t.Fatalf("interactive receipt: %s", receipt)
+			}
+		}
+		if !strings.Contains(string(receipt), "☑") || !strings.Contains(string(receipt), "☐") {
+			t.Fatalf("lost checkbox summary: %s", receipt)
+		}
+	}
+	fields := decisionFormFields([]core.DecisionField{{ID: "check", Label: "Check", Type: "checkbox", Default: true}})
+	if fields[0]["tag"] != "checker" || fields[0]["checked"] != true {
+		t.Fatalf("bad simple field: %v", fields)
+	}
+}

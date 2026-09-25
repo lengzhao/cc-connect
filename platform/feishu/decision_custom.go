@@ -79,7 +79,7 @@ func (p *Platform) PrepareDecisionSpec(s *core.DecisionSpec) error {
 					return fmt.Errorf("use at most one form")
 				}
 			case "column_set", "column":
-			case "button", "input", "select_static", "multi_select_static":
+			case "button", "input", "select_static", "multi_select_static", "checker", "checkbox":
 				if !inForm {
 					outside++
 				}
@@ -100,7 +100,13 @@ func (p *Platform) PrepareDecisionSpec(s *core.DecisionSpec) error {
 				} else {
 					required, _ := node["required"].(bool)
 					f := core.DecisionField{ID: name, Label: name, Required: required, Placeholder: cardPlainText(node["placeholder"])}
-					if tag == "input" {
+					if tag == "checker" || tag == "checkbox" {
+						f.Type = "checkbox"
+						f.Default = node["checked"]
+						if label := cardPlainText(node["text"]); label != "" {
+							f.Label = label
+						}
+					} else if tag == "input" {
 						f.Type = "text"
 						if node["input_type"] == "multiline_text" {
 							f.Type = "textarea"
@@ -213,7 +219,12 @@ func customDecisionCard(v *core.Decision, receipt bool) map[string]any {
 					}
 					continue
 				}
-				node["required"] = f.Required && !skip
+				if f.Type == "checkbox" {
+					node["tag"] = "checker"
+					delete(node, "required") // Checkbox consent is validated on form submit.
+				} else {
+					node["required"] = f.Required && !skip
+				}
 				if f.Type == "text" || f.Type == "textarea" {
 					node["max_length"] = f.MaxLength
 				}
@@ -223,6 +234,8 @@ func customDecisionCard(v *core.Decision, receipt bool) map[string]any {
 						node["default_value"] = f.Default
 					case "select":
 						node["initial_option"] = f.Default
+					case "checkbox":
+						node["checked"] = f.Default
 					case "multiselect":
 						node["selected_values"] = f.Default
 					}

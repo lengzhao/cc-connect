@@ -29,6 +29,10 @@ func validateDecisionFields(s *DecisionSpec) error {
 			return fmt.Errorf("field %s: placeholder too long", f.ID)
 		}
 		switch f.Type {
+		case "checkbox":
+			if len(f.Options) != 0 {
+				return fmt.Errorf("field %s: checkbox cannot have options", f.ID)
+			}
 		case "text", "textarea":
 			if len(f.Options) != 0 {
 				return fmt.Errorf("field %s: text cannot have options", f.ID)
@@ -65,6 +69,20 @@ func validateDecisionFields(s *DecisionSpec) error {
 func normalizeDecisionValue(f DecisionField, raw any, required bool) (any, error) {
 	fail := func() (any, error) {
 		return nil, &DecisionFormError{Message: fmt.Sprintf("invalid or missing value: %s", f.Label)}
+	}
+	if f.Type == "checkbox" {
+		value := false
+		if raw != nil {
+			var ok bool
+			value, ok = raw.(bool)
+			if !ok {
+				return fail()
+			}
+		}
+		if required && !value {
+			return fail()
+		}
+		return value, nil
 	}
 	if f.Type == "multiselect" {
 		values := []string{}

@@ -10,9 +10,16 @@ import (
 func decisionFormFields(fields []core.DecisionField) []map[string]any {
 	out := []map[string]any{}
 	for _, f := range fields {
-		out = append(out, map[string]any{"tag": "markdown", "content": "**" + escapeDecisionMarkdown(f.Label) + "**"})
+		if f.Type != "checkbox" {
+			out = append(out, map[string]any{"tag": "markdown", "content": "**" + escapeDecisionMarkdown(f.Label) + "**"})
+		}
 		c := map[string]any{"name": f.ID, "required": f.Required, "placeholder": plainText(f.Placeholder), "width": "fill"}
 		switch f.Type {
+		case "checkbox":
+			c = map[string]any{"tag": "checker", "name": f.ID, "text": plainText(f.Label), "checked": false}
+			if f.Default != nil {
+				c["checked"] = f.Default
+			}
 		case "text", "textarea":
 			c["tag"] = "input"
 			c["max_length"] = f.MaxLength
@@ -65,6 +72,12 @@ func decisionValuesSummary(v *core.Decision) []map[string]any {
 		}
 		text := ""
 		switch value := raw.(type) {
+		case bool:
+			if value {
+				text = "☑"
+			} else {
+				text = "☐"
+			}
 		case string:
 			text = show(value)
 		case []string:
