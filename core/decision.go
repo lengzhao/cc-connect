@@ -48,6 +48,7 @@ type DecisionField struct {
 	Options     []DecisionOption `json:"options,omitempty"`
 }
 type DecisionSpec struct {
+	WidthMode        string           `json:"width_mode,omitempty"`
 	Card             json.RawMessage  `json:"card,omitempty"`
 	RequestID        string           `json:"request_id,omitempty"`
 	ExpectedRevision int              `json:"expected_revision,omitempty"`
@@ -237,6 +238,9 @@ func (d *decisionService) persistLocked(item *Decision) error {
 	return dir.Sync()
 }
 func validateDecision(s *DecisionSpec) error {
+	if s.WidthMode != "" && s.WidthMode != "default" && s.WidthMode != "compact" && s.WidthMode != "fill" {
+		return fmt.Errorf("width_mode must be default, compact or fill")
+	}
 	if err := validateDecisionFields(s); err != nil {
 		return err
 	}

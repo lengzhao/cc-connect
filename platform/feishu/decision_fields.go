@@ -30,18 +30,34 @@ func decisionFormFields(fields []core.DecisionField) []map[string]any {
 			if f.Default != nil {
 				c["default_value"] = f.Default
 			}
-		case "select", "multiselect":
+		case "date", "time", "datetime":
+			tag := map[string]string{"date": "date_picker", "time": "picker_time", "datetime": "picker_datetime"}[f.Type]
+			c["tag"] = tag
+			if f.Default != nil {
+				c[decisionComponents[tag].defaultKey] = decisionDefaultValue(f)
+			}
+		case "person", "people", "select", "multiselect":
 			c["tag"] = "select_static"
-			if f.Type == "multiselect" {
+			if f.Type == "multiselect" || f.Type == "people" {
 				c["tag"] = "multi_select_static"
+			}
+			if f.Type == "person" {
+				c["tag"] = "select_person"
+			}
+			if f.Type == "people" {
+				c["tag"] = "multi_select_person"
 			}
 			options := []any{}
 			for _, o := range f.Options {
-				options = append(options, map[string]any{"text": plainText(o.Label), "value": o.ID})
+				if f.Type == "person" || f.Type == "people" {
+					options = append(options, map[string]any{"value": o.ID})
+				} else {
+					options = append(options, map[string]any{"text": plainText(o.Label), "value": o.ID})
+				}
 			}
 			c["options"] = options
 			if f.Default != nil {
-				if f.Type == "select" {
+				if f.Type == "select" || f.Type == "person" {
 					c["initial_option"] = f.Default
 				} else {
 					// Card 2.0 multi-select uses selected_values, not initial_options.

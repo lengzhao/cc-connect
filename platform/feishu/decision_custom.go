@@ -11,6 +11,11 @@ import (
 // Raw Card 2.0 layout is agent-owned; callbacks and routing are host-owned.
 func (p *Platform) PrepareDecisionSpec(s *core.DecisionSpec) error {
 	if len(s.Card) == 0 {
+		for _, f := range s.Fields {
+			if f.Type == "image" || f.Type == "images" {
+				return fmt.Errorf("image selection requires a custom select_img card with img_key options")
+			}
+		}
 		return nil
 	}
 	if len(s.Card) > 24000 {
@@ -29,6 +34,11 @@ func (p *Platform) PrepareDecisionSpec(s *core.DecisionSpec) error {
 	for k := range card {
 		if k != "schema" && k != "header" && k != "body" && k != "config" {
 			return fmt.Errorf("unsupported card property %s", k)
+		}
+	}
+	if cfg, ok := card["config"].(map[string]any); ok {
+		if width, exists := cfg["width_mode"]; exists && width != "default" && width != "compact" && width != "fill" {
+			return fmt.Errorf("card config.width_mode must be default, compact or fill")
 		}
 	}
 	body, ok := card["body"].(map[string]any)
@@ -72,14 +82,18 @@ func (p *Platform) PrepareDecisionSpec(s *core.DecisionSpec) error {
 				return fmt.Errorf("Runtime owns card behaviors; omit them")
 			}
 			switch tag {
-			case "markdown", "img", "hr":
+			case "markdown", "img", "hr", "div", "img_combination", "person", "person_list", "chart":
+			case "table":
+				if depth != 0 {
+					return fmt.Errorf("table must be at the card root, outside forms")
+				}
 			case "form":
 				forms++
-				if inForm || forms > 1 {
-					return fmt.Errorf("use at most one form")
+				if depth != 0 || inForm || forms > 1 {
+					return fmt.Errorf("use at most one form, directly at the card root")
 				}
-			case "column_set", "column":
-			case "button", "input", "select_static", "multi_select_static", "checker", "checkbox":
+			case "column_set", "column", "collapsible_panel":
+			case "button", "input", "select_static", "multi_select_static", "checker", "checkbox", "textarea", "select_person", "multi_select_person", "date_picker", "picker_time", "picker_datetime", "select_img":
 				if !inForm {
 					outside++
 				}
@@ -98,49 +112,16 @@ func (p *Platform) PrepareDecisionSpec(s *core.DecisionSpec) error {
 					skip, _ := node["skip_validation"].(bool)
 					s.Options = append(s.Options, core.DecisionOption{ID: name, Label: label, SkipValidation: skip})
 				} else {
-					required, _ := node["required"].(bool)
-					f := core.DecisionField{ID: name, Label: name, Required: required, Placeholder: cardPlainText(node["placeholder"])}
-					if tag == "checker" || tag == "checkbox" {
-						f.Type = "checkbox"
-						f.Default = node["checked"]
-						if label := cardPlainText(node["text"]); label != "" {
-							f.Label = label
-						}
-					} else if tag == "input" {
-						f.Type = "text"
-						if node["input_type"] == "multiline_text" {
-							f.Type = "textarea"
-						}
-						f.Default = node["default_value"]
-						if n, ok := node["max_length"].(float64); ok {
-							f.MaxLength = int(n)
-						}
-					} else {
-						f.Type = "select"
-						f.Default = node["initial_option"]
-						if tag == "multi_select_static" {
-							f.Type = "multiselect"
-							f.Default = node["selected_values"]
-						}
-						if _, bad := node["initial_options"]; bad {
-							return fmt.Errorf("multi_select_static defaults use selected_values")
-						}
-						choices, _ := node["options"].([]any)
-						for _, raw := range choices {
-							choice, ok := raw.(map[string]any)
-							if !ok {
-								return fmt.Errorf("invalid choice")
-							}
-							id, _ := choice["value"].(string)
-							f.Options = append(f.Options, core.DecisionOption{ID: id, Label: cardPlainText(choice["text"])})
-						}
+					f, err := decisionFieldFromComponent(node)
+					if err != nil {
+						return err
 					}
 					s.Fields = append(s.Fields, f)
 				}
 			default:
 				return fmt.Errorf("unsupported card component %q", tag)
 			}
-			for _, key := range []string{"elements", "columns"} {
+			if key := decisionChildrenKey(tag); key != "" {
 				if child, exists := node[key]; exists {
 					list, ok := child.([]any)
 					if !ok {
@@ -159,6 +140,14 @@ func (p *Platform) PrepareDecisionSpec(s *core.DecisionSpec) error {
 	}
 	if forms > 0 && outside > 0 {
 		return fmt.Errorf("all interactive components must be inside the same form")
+	}
+	if forms == 0 {
+		first, last := decisionInteractiveSpan(elements)
+		for n := first; n >= 0 && n <= last; n++ {
+			if elements[n].(map[string]any)["tag"] == "table" {
+				return fmt.Errorf("table between form controls: put all controls in one explicit root form and keep tables outside")
+			}
+		}
 	}
 	if len(s.Fields) > 0 && len(s.Options) == 0 {
 		return fmt.Errorf("input fields require a submission button")
@@ -219,30 +208,11 @@ func customDecisionCard(v *core.Decision, receipt bool) map[string]any {
 					}
 					continue
 				}
-				if f.Type == "checkbox" {
-					node["tag"] = "checker"
-					delete(node, "required") // Checkbox consent is validated on form submit.
-				} else {
-					node["required"] = f.Required && !skip
-				}
-				if f.Type == "text" || f.Type == "textarea" {
-					node["max_length"] = f.MaxLength
-				}
-				if f.Default != nil {
-					switch f.Type {
-					case "text", "textarea":
-						node["default_value"] = f.Default
-					case "select":
-						node["initial_option"] = f.Default
-					case "checkbox":
-						node["checked"] = f.Default
-					case "multiselect":
-						node["selected_values"] = f.Default
-					}
-				}
+				node["required"] = f.Required && !skip
+				normalizeDecisionInput(node, f)
 			}
 			empty := false
-			for _, key := range []string{"elements", "columns"} {
+			if key := decisionChildrenKey(tag); key != "" {
 				if child, ok := node[key].([]any); ok {
 					node[key] = render(child)
 					if len(node[key].([]any)) == 0 {
@@ -265,7 +235,13 @@ func customDecisionCard(v *core.Decision, receipt bool) map[string]any {
 	}
 	nodes := render(body["elements"].([]any))
 	if !receipt && !hasForm && len(v.Spec.Options) > 0 {
-		nodes = []any{map[string]any{"tag": "form", "name": "decision_form", "elements": nodes}}
+		first, last := decisionInteractiveSpan(nodes)
+		if first >= 0 {
+			wrapped := []any{}
+			wrapped = append(wrapped, nodes[:first]...)
+			wrapped = append(wrapped, map[string]any{"tag": "form", "name": "decision_form", "elements": nodes[first : last+1]})
+			nodes = append(wrapped, nodes[last+1:]...)
+		}
 	}
 	if receipt {
 		label := v.OptionID
@@ -282,6 +258,16 @@ func customDecisionCard(v *core.Decision, receipt bool) map[string]any {
 	if !ok {
 		config = map[string]any{}
 		card["config"] = config
+	}
+	if _, ok := config["width_mode"]; !ok {
+		config["width_mode"] = "default"
+		if config["wide_screen_mode"] == true {
+			config["width_mode"] = "fill"
+		}
+	}
+	delete(config, "wide_screen_mode")
+	if v.Spec.WidthMode != "" {
+		config["width_mode"] = v.Spec.WidthMode
 	}
 	config["update_multi"] = true
 	return card

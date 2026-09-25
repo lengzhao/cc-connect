@@ -109,7 +109,11 @@ func decisionCard(v *core.Decision, answered bool) map[string]any {
 	if answered {
 		title = "⏳ " + title
 	}
-	return map[string]any{"schema": "2.0", "config": map[string]any{"width_mode": "fill", "update_multi": true}, "header": map[string]any{"title": plainText(title), "template": color}, "body": map[string]any{"elements": elements}}
+	widthMode := v.Spec.WidthMode
+	if widthMode == "" {
+		widthMode = "default"
+	}
+	return map[string]any{"schema": "2.0", "config": map[string]any{"width_mode": widthMode, "update_multi": true}, "header": map[string]any{"title": plainText(title), "template": color}, "body": map[string]any{"elements": elements}}
 }
 func (p *Platform) SendDecision(ctx context.Context, v *core.Decision) (string, error) {
 	card, err := json.Marshal(decisionCard(v, false))
