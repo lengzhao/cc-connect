@@ -163,6 +163,7 @@ func cardPlainText(raw any) string {
 }
 
 func customDecisionCard(v *core.Decision, receipt bool) map[string]any {
+	receipt = receipt || v.Status == "closed"
 	var card map[string]any
 	_ = json.Unmarshal(v.Spec.Card, &card)
 	body := card["body"].(map[string]any)
@@ -251,7 +252,11 @@ func customDecisionCard(v *core.Decision, receipt bool) map[string]any {
 			}
 		}
 		i := core.NewI18n(core.DetectLanguage(v.Spec.Title + v.Spec.Markdown))
-		nodes = append(nodes, map[string]any{"tag": "markdown", "content": "**✓ " + escapeDecisionMarkdown(label) + "**\n" + i.T(core.MsgDecisionSaved)})
+		notice := "**✓ " + escapeDecisionMarkdown(label) + "**\n" + decisionReceiptNotice(v, i)
+		if v.Status == "closed" {
+			notice = i.T(core.MsgInteractiveCardClosed)
+		}
+		nodes = append(nodes, map[string]any{"tag": "markdown", "content": notice})
 	}
 	body["elements"] = nodes
 	config, ok := card["config"].(map[string]any)

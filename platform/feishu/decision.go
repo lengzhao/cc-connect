@@ -54,6 +54,11 @@ func (p *Platform) ResolveDecisionRecipient(ctx context.Context, recipient strin
 }
 
 func decisionCard(v *core.Decision, answered bool) map[string]any {
+	if v.Status == "closed" && len(v.Spec.Card) == 0 {
+		i := core.NewI18n(core.DetectLanguage(v.Spec.Title + v.Spec.Markdown))
+		return map[string]any{"schema": "2.0", "header": map[string]any{"title": map[string]any{"tag": "plain_text", "content": v.Spec.Title}, "template": "grey"}, "body": map[string]any{"elements": []any{map[string]any{"tag": "markdown", "content": i.T(core.MsgInteractiveCardClosed)}, map[string]any{"tag": "markdown", "content": sanitizeMarkdownURLs(preprocessFeishuMarkdown(v.Spec.Markdown))}}}}
+	}
+
 	if len(v.Spec.Card) > 0 {
 		return customDecisionCard(v, answered)
 	}
@@ -73,7 +78,7 @@ func decisionCard(v *core.Decision, answered bool) map[string]any {
 		if v.Comment != "" {
 			elements = append(elements, map[string]any{"tag": "markdown", "content": escapeDecisionMarkdown(v.Comment)})
 		}
-		elements = append(elements, map[string]any{"tag": "markdown", "content": i.T(core.MsgDecisionSaved), "text_size": "notation"})
+		elements = append(elements, map[string]any{"tag": "markdown", "content": decisionReceiptNotice(v, i), "text_size": "notation"})
 	} else {
 		fields := append([]core.DecisionField(nil), v.Spec.Fields...)
 		for _, o := range v.Spec.Options {
@@ -204,12 +209,15 @@ func (p *Platform) handleDecisionAction(event *callback.CardActionTriggerEvent) 
 	// A click only records the choice. One worker writes the receipt before
 	// starting the Agent; never race that writer with a callback replacement.
 	if v.Status == "recorded" {
+		if v.ReturnMode == "none" {
+			return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "info", Content: decisionReceiptNotice(v, i)}}, true
+		}
 		return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "info", Content: "已收到，正在处理"}}, true
 	}
 	if v.Error != "" {
 		return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "info", Content: "选择已保存，卡片展示更新失败"}}, true
 	}
-	return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "success", Content: i.T(core.MsgDecisionSaved)}}, true
+	return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "success", Content: decisionReceiptNotice(v, i)}}, true
 
 }
 
@@ -240,4 +248,11 @@ func (p *Platform) patchDecisionCard(ctx context.Context, messageID string, card
 		return nil
 	})
 	return err
+}
+
+func decisionReceiptNotice(v *core.Decision, i *core.I18n) string {
+	if v.ReturnMode == "none" {
+		return i.T(core.MsgInteractiveCardRecorded)
+	}
+	return i.T(core.MsgDecisionSaved)
 }

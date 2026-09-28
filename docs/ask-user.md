@@ -36,3 +36,18 @@ retain the answer and do not automatically replay potentially executed work.
 Each normal native card send has a deterministic Lark UUID. Failed sends surface
 an error; no hot retry loop is added. No new reminder, LTS work item, audit or
 production data update is performed. Expiry never means approval.
+
+## Independent notification cards
+
+Runtime may expose `interactive_card` using the same renderer and durable card ID.
+Cards created there have `return_mode=none`: clicks record values and update the card
+but never resume a conversation. Managed updates preserve the original return mode,
+so `ask_user` cards remain session-returning. The authenticated Runtime project owns
+the resource; a new session of that project can query/update it with optimistic
+revision checking. Closed cards reject callbacks even if a Lark PATCH failed.
+
+`CC_CARD_STORE_URL` and `CC_CARD_STORE_TOKEN` enable the shared LTS card store.
+The server token must be scoped to this project's configured name. Without this
+configuration, `/interactive-card` fails closed and legacy ask_user remains local.
+Persisted local cards are imported when shared storage is enabled; old empty return
+modes mean session return. Unknown send/update outcomes are not blindly resent.

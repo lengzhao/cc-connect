@@ -77,7 +77,31 @@ type DecisionOrigin struct {
 	MessageID      string `json:"message_id"`
 }
 
+type DecisionInteraction struct {
+	Revision int            `json:"revision"`
+	OptionID string         `json:"option_id"`
+	Values   map[string]any `json:"values,omitempty"`
+	Comment  string         `json:"comment,omitempty"`
+	Operator string         `json:"operator"`
+	At       time.Time      `json:"at"`
+}
+
+type DecisionChange struct {
+	Revision  int       `json:"revision"`
+	Action    string    `json:"action"`
+	Actor     string    `json:"actor"`
+	SessionID string    `json:"session_id,omitempty"`
+	At        time.Time `json:"at"`
+}
 type Decision struct {
+	Changes []DecisionChange `json:"changes,omitempty"`
+
+	StoreRevision int64  `json:"store_revision,omitempty"`
+	OwnerAutomon  string `json:"owner_automon"`
+	// Empty on legacy cards means session: preserve ask_user continuation.
+	ReturnMode   string                `json:"return_mode,omitempty"`
+	Interactions []DecisionInteraction `json:"interactions,omitempty"`
+
 	ReceiptAttempts int            `json:"receipt_attempts,omitempty"`
 	Revision        int            `json:"revision"`
 	UpdateFrom      int            `json:"update_from,omitempty"`
@@ -105,17 +129,24 @@ type decisionOriginBinding struct {
 	origin DecisionOrigin
 }
 type decisionService struct {
-	wake    chan struct{}
-	mu      sync.Mutex
-	engine  *Engine
-	path    string
-	loadErr error
-	origins map[string]decisionOriginBinding
-	items   map[string]*Decision
+	store           *cardStore
+	lastCommandPoll time.Time
+	wake            chan struct{}
+	mu              sync.Mutex
+	engine          *Engine
+	path            string
+	loadErr         error
+	origins         map[string]decisionOriginBinding
+	items           map[string]*Decision
 }
 
 func newDecisionService(e *Engine, sessionPath string) *decisionService {
 	d := &decisionService{wake: make(chan struct{}, 1), engine: e, origins: map[string]decisionOriginBinding{}, items: map[string]*Decision{}}
+	defer func() {
+		if d.loadErr == nil {
+			d.loadErr = d.loadRemote()
+		}
+	}()
 	if sessionPath == "" {
 		return d
 	}
@@ -154,6 +185,9 @@ func newDecisionService(e *Engine, sessionPath string) *decisionService {
 		if v.Status == "sending" {
 			v.Status = "send_unknown"
 			v.Error = "Runtime restarted during card send; no automatic duplicate send"
+		}
+		if v.OwnerAutomon == "" {
+			v.OwnerAutomon = e.name
 		}
 		d.items[v.ID] = &v
 	}
@@ -197,6 +231,9 @@ func (d *decisionService) tokenFor(key, id string) string {
 func (d *decisionService) persistLocked(item *Decision) error {
 	if d.loadErr != nil {
 		return d.loadErr
+	}
+	if d.store != nil {
+		return d.persistRemote(item)
 	}
 	if d.path == "" {
 		return fmt.Errorf("decision persistence requires a session store path")
@@ -272,6 +309,9 @@ func validateDecision(s *DecisionSpec) error {
 	return nil
 }
 func (d *decisionService) create(ctx context.Context, token string, spec DecisionSpec) (*Decision, error) {
+	return d.createMode(ctx, token, spec, "session")
+}
+func (d *decisionService) createMode(ctx context.Context, token string, spec DecisionSpec, mode string) (*Decision, error) {
 	d.mu.Lock()
 	var origin DecisionOrigin
 	for _, b := range d.origins {
@@ -326,6 +366,9 @@ func (d *decisionService) create(ctx context.Context, token string, spec Decisio
 		return nil, err
 	}
 	if spec.RequestID != "" {
+		if mode == "none" {
+			return d.updateManaged(ctx, origin, spec)
+		}
 		return d.update(ctx, origin, spec)
 	}
 	recipient := spec.Recipient
@@ -337,9 +380,15 @@ func (d *decisionService) create(ctx context.Context, token string, spec Decisio
 		return nil, err
 	}
 	raw, _ := json.Marshal(struct {
-		Project, SessionID, SessionKey, Workspace, MessageID string
-		Spec                                                 DecisionSpec
-	}{d.engine.name, origin.SessionID, origin.SessionKey, origin.Workspace, origin.MessageID, spec})
+		Project, SessionID, SessionKey, Workspace, MessageID, Mode string
+		Spec                                                       DecisionSpec
+	}{d.engine.name, origin.SessionID, origin.SessionKey, origin.Workspace, origin.MessageID, mode, spec})
+	if mode == "session" {
+		raw, _ = json.Marshal(struct {
+			Project, SessionID, SessionKey, Workspace, MessageID string
+			Spec                                                 DecisionSpec
+		}{d.engine.name, origin.SessionID, origin.SessionKey, origin.Workspace, origin.MessageID, spec})
+	}
 	hash := sha256.Sum256(raw)
 	id := hex.EncodeToString(hash[:16])
 	d.mu.Lock()
@@ -357,7 +406,7 @@ func (d *decisionService) create(ctx context.Context, token string, spec Decisio
 	}
 	// Bounded disk state: retain terminal requests for 30 days; pending requests expire.
 	for k, v := range d.items {
-		if time.Since(v.ExpiresAt) > 30*24*time.Hour {
+		if d.store == nil && time.Since(v.ExpiresAt) > 30*24*time.Hour {
 			if err := os.Remove(filepath.Join(d.path, k+".json")); err == nil || errors.Is(err, os.ErrNotExist) {
 				delete(d.items, k)
 			}
@@ -367,7 +416,7 @@ func (d *decisionService) create(ctx context.Context, token string, spec Decisio
 		d.mu.Unlock()
 		return nil, fmt.Errorf("decision store capacity reached")
 	}
-	item := &Decision{ID: id, Spec: spec, Origin: origin, Platform: p.Name(), RecipientID: recipientID, Status: "sending", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Duration(spec.ExpiresInHours) * time.Hour)}
+	item := &Decision{OwnerAutomon: d.engine.name, ReturnMode: mode, ID: id, Spec: spec, Origin: origin, Platform: p.Name(), RecipientID: recipientID, Status: "sending", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Duration(spec.ExpiresInHours) * time.Hour)}
 	if spec.Recipient == "" && origin.Platform == p.Name() {
 		item.DeliverySessionKey = origin.SessionKey
 	}
@@ -404,6 +453,14 @@ func (d *decisionService) create(ctx context.Context, token string, spec Decisio
 
 // answer is invoked only by the authenticated platform callback, never a model tool.
 func (d *decisionService) answer(id, operator, option, comment, messageID string, submitted ...map[string]any) (*Decision, error) {
+	// A prior commit may have succeeded even if the HTTP response was lost.
+	// Re-read authoritative state before deduplicating a retried platform event.
+	if d.store != nil {
+		if _, err := d.managedCard(id); err != nil {
+			return nil, err
+		}
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	v := d.items[id]
@@ -437,7 +494,8 @@ func (d *decisionService) answer(id, operator, option, comment, messageID string
 			}
 		}
 	}
-	if revision != v.Revision {
+	receiptReplay := v.ReturnMode == "none" && v.Revision == revision+1 && (v.Status == "recorded" || v.Status == "answered") && len(v.Interactions) > 0 && v.Interactions[len(v.Interactions)-1].Revision == revision
+	if revision != v.Revision && !receiptReplay {
 		return nil, fmt.Errorf("card has changed; use the latest form")
 	}
 	values, err := validateDecisionValues(v.Spec, option, []map[string]any{rawFields})
@@ -477,6 +535,10 @@ func (d *decisionService) answer(id, operator, option, comment, messageID string
 		return nil, fmt.Errorf("invalid comment")
 	}
 	old := *v
+	v.Interactions = append(append([]DecisionInteraction(nil), v.Interactions...), DecisionInteraction{Revision: v.Revision, OptionID: option, Values: values, Comment: comment, Operator: operator, At: time.Now().UTC()})
+	if v.ReturnMode == "none" {
+		v.Revision++
+	}
 	v.Values = values
 	v.OptionID = option
 	v.Comment = comment
@@ -535,6 +597,9 @@ func (d *decisionService) sent(messageID string, err error) {
 	}
 }
 func (d *decisionService) run() {
+	if d.store != nil {
+		go d.runCardCommands()
+	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -576,7 +641,7 @@ func (d *decisionService) drainOne() {
 			copy := *v
 			receipts = append(receipts, &copy)
 		}
-		if v.Status == "answered" {
+		if v.Status == "answered" && v.ReturnMode != "none" {
 			copy := *v
 			items = append(items, &copy)
 		}
@@ -594,6 +659,9 @@ func (d *decisionService) drainOne() {
 	}
 }
 func (d *decisionService) dispatch(item *Decision) bool {
+	if item.ReturnMode == "none" {
+		return false
+	}
 	e := d.engine
 	o := item.Origin
 	p := e.platformForName(o.Platform)

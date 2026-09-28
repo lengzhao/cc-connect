@@ -97,6 +97,7 @@ func NewAPIServer(dataDir string) (*APIServer, error) {
 	}
 	s.mux.HandleFunc("/send", s.handleSend)
 	s.mux.HandleFunc("/ask-user", s.handleAskUser)
+	s.mux.HandleFunc("/interactive-card", s.handleInteractiveCard)
 	s.mux.HandleFunc("/sessions", s.handleSessions)
 	s.mux.HandleFunc("/cron/add", s.handleCronAdd)
 	s.mux.HandleFunc("/cron/list", s.handleCronList)

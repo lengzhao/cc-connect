@@ -36,6 +36,12 @@ func decisionTurnID(v *Decision) string {
 // durable revision fences old callbacks; uncertain PATCHes are retried only
 // with the exact same spec and expected revision.
 func (d *decisionService) update(ctx context.Context, origin DecisionOrigin, spec DecisionSpec) (*Decision, error) {
+	return d.updateWithScope(ctx, origin, spec, false)
+}
+func (d *decisionService) updateManaged(ctx context.Context, origin DecisionOrigin, spec DecisionSpec) (*Decision, error) {
+	return d.updateWithScope(ctx, origin, spec, true)
+}
+func (d *decisionService) updateWithScope(ctx context.Context, origin DecisionOrigin, spec DecisionSpec, managed bool) (*Decision, error) {
 	raw, _ := json.Marshal(spec)
 	digest := sha256.Sum256(raw)
 	hash := hex.EncodeToString(digest[:])
@@ -45,7 +51,11 @@ func (d *decisionService) update(ctx context.Context, origin DecisionOrigin, spe
 		d.mu.Unlock()
 		return nil, ErrDecisionNotFound
 	}
-	if origin.SessionID != v.Origin.SessionID || origin.SessionKey != v.Origin.SessionKey || origin.Workspace != v.Origin.Workspace || origin.UserID != v.Origin.UserID || origin.Platform != v.Origin.Platform || (v.Origin.AgentSessionID != "" && origin.AgentSessionID != v.Origin.AgentSessionID) {
+	if managed && v.OwnerAutomon != d.engine.name {
+		d.mu.Unlock()
+		return nil, fmt.Errorf("card owner mismatch")
+	}
+	if !managed && (origin.SessionID != v.Origin.SessionID || origin.SessionKey != v.Origin.SessionKey || origin.Workspace != v.Origin.Workspace || origin.UserID != v.Origin.UserID || origin.Platform != v.Origin.Platform || (v.Origin.AgentSessionID != "" && origin.AgentSessionID != v.Origin.AgentSessionID)) {
 		d.mu.Unlock()
 		return nil, fmt.Errorf("only the original active conversation can update this card")
 	}
@@ -77,7 +87,7 @@ func (d *decisionService) update(ctx context.Context, origin DecisionOrigin, spe
 			d.mu.Unlock()
 			return nil, fmt.Errorf("card revision changed")
 		}
-		if v.Status != "dispatching" && v.Status != "delivered" && v.Status != "delivery_unknown" && v.Status != "pending" && v.Status != "displayed" {
+		if !(managed && (v.Status == "answered" || v.Status == "session_unavailable")) && v.Status != "dispatching" && v.Status != "delivered" && v.Status != "delivery_unknown" && v.Status != "pending" && v.Status != "displayed" {
 			d.mu.Unlock()
 			return nil, fmt.Errorf("card is still recording an interaction; retry after continuation")
 		}
@@ -96,6 +106,7 @@ func (d *decisionService) update(ctx context.Context, origin DecisionOrigin, spe
 			}
 		}
 		spec.Recipient = v.Spec.Recipient
+		v.Changes = append(append([]DecisionChange(nil), v.Changes...), DecisionChange{Revision: v.Revision + 1, Action: "update", Actor: origin.UserID, SessionID: origin.SessionID, At: time.Now().UTC()})
 		v.Spec = spec
 		v.Revision++
 		v.UpdateFrom = spec.ExpectedRevision
