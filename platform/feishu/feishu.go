@@ -140,6 +140,11 @@ type Platform struct {
 	respondToAtEveryoneAndHere bool
 	shareSessionInChannel      bool
 	threadIsolation            bool
+	// Jev channel admission (unmentioned group messages in allowlisted chats).
+	jevChannelAdmission bool
+	jevAdmissionURL     string
+	jevChannelChats     jevChatAllowlist
+	jevAdmissionHTTP    *http.Client
 	// noReplyToTrigger: when true, send via Create instead of Im.Message.Reply (no quote to the user's message).
 	noReplyToTrigger      bool
 	resolveMentions       bool
@@ -332,6 +337,19 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	respondToAtEveryoneAndHere, _ := opts["respond_to_at_everyone_and_here"].(bool)
 	shareSessionInChannel, _ := opts["share_session_in_channel"].(bool)
 	threadIsolation, _ := opts["thread_isolation"].(bool)
+	jevChannelAdmission, _ := opts["jev_channel_admission"].(bool)
+	jevAdmissionURL, _ := opts["jev_admission_url"].(string)
+	jevChannelChatsRaw, _ := opts["jev_channel_chats"].(string)
+	jevChannelChats := parseJevChatAllowlist(jevChannelChatsRaw)
+	if !jevChannelChats.on {
+		jevChannelAdmission = false
+	}
+	jevAdmissionTimeout := 8 * time.Second
+	if raw, ok := opts["jev_admission_timeout_ms"]; ok {
+		if ms, err := coerceMilliseconds(raw); err == nil && ms > 0 {
+			jevAdmissionTimeout = time.Duration(ms) * time.Millisecond
+		}
+	}
 	resolveMentionsOpt, _ := opts["resolve_mentions"].(bool)
 	includeUserEmail, _ := opts["include_user_email"].(bool)
 	automonJWTDelegations, err := parseAutomonJWTDelegations(opts["automon_jwt_delegations"])
@@ -429,6 +447,10 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		respondToAtEveryoneAndHere: respondToAtEveryoneAndHere,
 		shareSessionInChannel:      shareSessionInChannel,
 		threadIsolation:            threadIsolation,
+		jevChannelAdmission:        jevChannelAdmission,
+		jevAdmissionURL:            strings.TrimSpace(jevAdmissionURL),
+		jevChannelChats:            jevChannelChats,
+		jevAdmissionHTTP:           &http.Client{Timeout: jevAdmissionTimeout},
 		resolveMentions:            resolveMentionsOpt,
 		includeUserEmail:           includeUserEmail,
 		automonJWTDelegations:      automonJWTDelegations,
@@ -1436,24 +1458,37 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	// thread set; sessionKey is also used downstream for dispatch.
 	sessionKey := p.makeSessionKey(msg, chatID, userID)
 
-	if chatType == "group" && !p.groupReplyAll && p.getBotOpenID() != "" {
-		if !isBotMentioned(msg.Mentions, p.getBotOpenID()) {
-			switch {
-			// Feishu @all sends {"text":"@_all"} with 0 mentions.
-			case p.respondToAtEveryoneAndHere && msg.Content != nil && strings.Contains(*msg.Content, "@_all"):
-				slog.Debug(p.tag()+": responding to @all message", "chat_id", chatID)
-			// Once a thread has been engaged via @bot, allow follow-up
-			// attachment-only messages (image/file/audio) in the same thread
-			// through without re-mentioning the bot. Plain text and rich-text
-			// posts still require an explicit @bot to avoid pulling in
-			// unrelated chatter.
-			case p.threadIsolation && isAttachmentMsgType(msgType) && p.isActiveThreadSession(sessionKey):
-				slog.Debug(p.tag()+": passing attachment through active thread without mention",
-					"chat_id", chatID, "session_key", sessionKey, "msg_type", msgType, "message_id", messageID)
-			default:
-				slog.Debug(p.tag()+": ignoring group message without bot mention", "chat_id", chatID)
+	botOpenID := p.getBotOpenID()
+	botMentioned := botOpenID != "" && isBotMentioned(msg.Mentions, botOpenID)
+	inJevChat := p.jevChannelAdmission && p.jevChannelChats.matches(chatID)
+
+	if chatType == "group" && !botMentioned {
+		rawContent := ""
+		if msg.Content != nil {
+			rawContent = *msg.Content
+		}
+		switch {
+		// Feishu @all sends {"text":"@_all"} with 0 mentions.
+		case p.respondToAtEveryoneAndHere && strings.Contains(rawContent, "@_all"):
+			slog.Debug(p.tag()+": responding to @all message", "chat_id", chatID)
+		// Once a thread has been engaged via @bot, allow follow-up
+		// attachment-only messages (image/file/audio) in the same thread
+		// through without re-mentioning the bot. Plain text and rich-text
+		// posts still require an explicit @bot to avoid pulling in
+		// unrelated chatter.
+		case p.threadIsolation && isAttachmentMsgType(msgType) && p.isActiveThreadSession(sessionKey):
+			slog.Debug(p.tag()+": passing attachment through active thread without mention",
+				"chat_id", chatID, "session_key", sessionKey, "msg_type", msgType, "message_id", messageID)
+		case inJevChat:
+			// Allowlisted chat: JUDGE instead of hard-dropping (and instead of
+			// answering everything when require_mention=false).
+			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID) {
+				slog.Debug(p.tag()+": jev admission dropped unmentioned group message", "chat_id", chatID)
 				return nil
 			}
+		case !p.groupReplyAll && botOpenID != "":
+			slog.Debug(p.tag()+": ignoring group message without bot mention", "chat_id", chatID)
+			return nil
 		}
 	}
 
@@ -1484,8 +1519,6 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	}
 	mentions := msg.Mentions
 	parentID := stringValue(msg.ParentId)
-
-	botMentioned := p.getBotOpenID() != "" && isBotMentioned(msg.Mentions, p.getBotOpenID())
 
 	rctx := replyContext{
 		messageID:  messageID,
