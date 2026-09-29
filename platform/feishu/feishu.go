@@ -140,11 +140,14 @@ type Platform struct {
 	respondToAtEveryoneAndHere bool
 	shareSessionInChannel      bool
 	threadIsolation            bool
-	// Jev channel admission (unmentioned group messages in allowlisted chats).
+	// Jev thread admission: after @ activates a topic, unmentioned follow-ups
+	// in that engaged thread are judged; @ in the thread always answers.
+	// Top-level group messages still require @ (require_mention).
 	jevChannelAdmission bool
 	jevAdmissionURL     string
 	jevChannelChats     jevChatAllowlist
 	jevAdmissionHTTP    *http.Client
+	jevEngagedRoots     sync.Map // "chatID:rootID" -> time.Time
 	// noReplyToTrigger: when true, send via Create instead of Im.Message.Reply (no quote to the user's message).
 	noReplyToTrigger      bool
 	resolveMentions       bool
@@ -1461,6 +1464,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	botOpenID := p.getBotOpenID()
 	botMentioned := botOpenID != "" && isBotMentioned(msg.Mentions, botOpenID)
 	inJevChat := p.jevChannelAdmission && p.jevChannelChats.matches(chatID)
+	inThread := stringValue(msg.ThreadId) != "" || stringValue(msg.RootId) != ""
 
 	if chatType == "group" && !botMentioned {
 		rawContent := ""
@@ -1474,16 +1478,16 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 		// Once a thread has been engaged via @bot, allow follow-up
 		// attachment-only messages (image/file/audio) in the same thread
 		// through without re-mentioning the bot. Plain text and rich-text
-		// posts still require an explicit @bot to avoid pulling in
-		// unrelated chatter.
+		// posts still require an explicit @bot (or Jev admit below).
 		case p.threadIsolation && isAttachmentMsgType(msgType) && p.isActiveThreadSession(sessionKey):
 			slog.Debug(p.tag()+": passing attachment through active thread without mention",
 				"chat_id", chatID, "session_key", sessionKey, "msg_type", msgType, "message_id", messageID)
-		case inJevChat:
-			// Allowlisted chat: JUDGE instead of hard-dropping (and instead of
-			// answering everything when require_mention=false).
+		// Allowlisted chat + bot-engaged topic: JUDGE unmentioned follow-ups.
+		// Top-level group chatter (no thread/root) still requires @.
+		case inJevChat && inThread && p.isJevThreadEngaged(chatID, stringValue(msg.RootId), stringValue(msg.ThreadId)):
 			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID) {
-				slog.Debug(p.tag()+": jev admission dropped unmentioned group message", "chat_id", chatID)
+				slog.Debug(p.tag()+": jev admission dropped unmentioned thread follow-up",
+					"chat_id", chatID, "root_id", stringValue(msg.RootId), "thread_id", stringValue(msg.ThreadId))
 				return nil
 			}
 		case !p.groupReplyAll && botOpenID != "":
@@ -1535,6 +1539,15 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	// Mark this thread as bot-engaged so subsequent attachment-only messages
 	// in the same thread can pass through without re-mentioning the bot.
 	p.markThreadSessionActive(sessionKey)
+	// Only @ engages a topic for Jev follow-up admission. Prefer root_id;
+	// top-level @ uses message_id so later topic replies (same root) match.
+	if chatType == "group" && inJevChat && botMentioned {
+		root := stringValue(msg.RootId)
+		if root == "" {
+			root = messageID
+		}
+		p.markJevThreadEngaged(chatID, root)
+	}
 
 	// Dispatch message handling asynchronously so the SDK event loop is not
 	// blocked by IO-heavy operations (image/audio download, handler HTTP calls).

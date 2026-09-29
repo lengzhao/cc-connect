@@ -63,6 +63,26 @@ func TestExtractTextForJev(t *testing.T) {
 	}
 }
 
+func TestJevThreadEngagement(t *testing.T) {
+	p := &Platform{}
+	if p.isJevThreadEngaged("oc_a", "om_root", "") {
+		t.Fatal("expected not engaged before mark")
+	}
+	p.markJevThreadEngaged("oc_a", "om_root")
+	if !p.isJevThreadEngaged("oc_a", "om_root", "") {
+		t.Fatal("expected engaged by root_id")
+	}
+	if !p.isJevThreadEngaged("oc_a", "", "om_root") {
+		t.Fatal("expected engaged by thread_id fallback")
+	}
+	if p.isJevThreadEngaged("oc_a", "om_other", "om_other") {
+		t.Fatal("other root must not match")
+	}
+	if p.isJevThreadEngaged("oc_b", "om_root", "") {
+		t.Fatal("other chat must not match")
+	}
+}
+
 func TestNewPlatformParsesJevOptions(t *testing.T) {
 	p, err := newPlatform("feishu", "https://open.feishu.cn", map[string]any{
 		"app_id":                   "cli_test",

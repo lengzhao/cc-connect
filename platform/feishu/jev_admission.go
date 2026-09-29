@@ -125,6 +125,43 @@ func callJevAdmission(ctx context.Context, client *http.Client, url, message, ch
 	return out.Admitted
 }
 
+func jevEngagedRootKey(chatID, rootID string) string {
+	return strings.TrimSpace(chatID) + ":" + strings.TrimSpace(rootID)
+}
+
+// markJevThreadEngaged records that the bot was activated (@) under this topic root.
+func (p *Platform) markJevThreadEngaged(chatID, rootID string) {
+	chatID = strings.TrimSpace(chatID)
+	rootID = strings.TrimSpace(rootID)
+	if chatID == "" || rootID == "" {
+		return
+	}
+	p.jevEngagedRoots.Store(jevEngagedRootKey(chatID, rootID), time.Now())
+}
+
+// isJevThreadEngaged reports whether this topic was previously activated by @bot.
+// Follow-ups carry root_id of the activating message; thread_id alone is not enough.
+func (p *Platform) isJevThreadEngaged(chatID, rootID, threadID string) bool {
+	chatID = strings.TrimSpace(chatID)
+	rootID = strings.TrimSpace(rootID)
+	if chatID == "" {
+		return false
+	}
+	if rootID != "" {
+		if _, ok := p.jevEngagedRoots.Load(jevEngagedRootKey(chatID, rootID)); ok {
+			return true
+		}
+	}
+	// Some Feishu deliveries put the activating message id in thread_id.
+	threadID = strings.TrimSpace(threadID)
+	if threadID != "" {
+		if _, ok := p.jevEngagedRoots.Load(jevEngagedRootKey(chatID, threadID)); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // admitUnmentionedGroup runs sync HTTP admission against Runtime.
 // Returns true only when Jev explicitly admits the message.
 func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, chatID, userID string) bool {
