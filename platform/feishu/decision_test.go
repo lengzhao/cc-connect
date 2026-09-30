@@ -254,3 +254,37 @@ func TestDecisionIntermediateDoesNotOverwriteNextCard(t *testing.T) {
 		t.Fatal("intermediate callback must not overwrite the next revision")
 	}
 }
+
+func TestNotificationCardExplicitChatFromWebhook(t *testing.T) {
+	sent := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/open-apis/auth/v3/tenant_access_token/internal" {
+			_, _ = w.Write([]byte(`{"code":0,"expire":7200,"tenant_access_token":"test"}`))
+			return
+		}
+		if r.URL.Path != "/open-apis/im/v1/messages" {
+			t.Errorf("unexpected endpoint %s", r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r.URL.Query().Get("receive_id_type") != "chat_id" || body["receive_id"] != "oc_target" {
+			t.Errorf("wrong destination: %v %s", body, r.URL.RawQuery)
+		}
+		sent = true
+		_, _ = w.Write([]byte(`{"code":0,"data":{"message_id":"om_group"}}`))
+	}))
+	defer srv.Close()
+	p := &Platform{platformName: "lark", client: lark.NewClient("group-test-app", "secret", lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client()))}
+	if _, err := p.ResolveDecisionChat(context.Background(), "ou_person"); err == nil {
+		t.Fatal("accepted user as chat")
+	}
+	chat, err := p.ResolveDecisionChat(context.Background(), "oc_target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := p.SendDecision(context.Background(), &core.Decision{ID: "group-card", ReturnMode: "none", Spec: core.DecisionSpec{ChatID: chat, Title: "Test", Markdown: "body"}})
+	if err != nil || id != "om_group" || !sent {
+		t.Fatalf("send: %s %v", id, err)
+	}
+}

@@ -271,3 +271,36 @@ func (p *decisionTestPlatform) UpdateDecision(_ context.Context, v *Decision) er
 	}
 	return nil
 }
+
+func (p *decisionTestPlatform) ResolveDecisionChat(_ context.Context, id string) (string, error) {
+	return id, nil
+}
+
+func TestNotificationChatTargetAndCallbackScope(t *testing.T) {
+	e, p, _, token := decisionFixture(t)
+	spec := decisionSpec()
+	spec.ChatID = "group-123"
+	if _, err := e.decisions.create(context.Background(), token, spec); err == nil {
+		t.Fatal("ask_user accepted group target")
+	}
+	v, err := e.decisions.createMode(context.Background(), token, spec, "none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.DeliverySessionKey != "" || v.RecipientID != "" || p.cards[0].Spec.ChatID != spec.ChatID {
+		t.Fatalf("wrong destination: %+v", v)
+	}
+	if _, err := p.handler(v.ID, "bob", "yes", "", v.MessageID, map[string]any{"_chat_id": "other"}); err == nil {
+		t.Fatal("accepted wrong chat")
+	}
+	if _, err := p.handler(v.ID, "bob", "yes", "", "other-message", map[string]any{"_chat_id": spec.ChatID}); err == nil {
+		t.Fatal("accepted wrong message")
+	}
+	if _, err := p.handler(v.ID, "bob", "yes", "noted", v.MessageID, map[string]any{"_chat_id": spec.ChatID}); err != nil {
+		t.Fatal(err)
+	}
+	spec.Recipient = "alice"
+	if _, err := e.decisions.createMode(context.Background(), token, spec, "none"); err == nil {
+		t.Fatal("accepted ambiguous destination")
+	}
+}

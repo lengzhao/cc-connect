@@ -59,7 +59,7 @@ func (d *decisionService) updateWithScope(ctx context.Context, origin DecisionOr
 		d.mu.Unlock()
 		return nil, fmt.Errorf("only the original active conversation can update this card")
 	}
-	if spec.Recipient != "" && spec.Recipient != v.Spec.Recipient {
+	if (spec.ChatID != "" && spec.ChatID != v.Spec.ChatID) || (spec.Recipient != "" && spec.Recipient != v.Spec.Recipient) {
 		d.mu.Unlock()
 		return nil, fmt.Errorf("card recipient cannot change")
 	}
@@ -106,6 +106,7 @@ func (d *decisionService) updateWithScope(ctx context.Context, origin DecisionOr
 			}
 		}
 		spec.Recipient = v.Spec.Recipient
+		spec.ChatID = v.Spec.ChatID
 		v.Changes = append(append([]DecisionChange(nil), v.Changes...), DecisionChange{Revision: v.Revision + 1, Action: "update", Actor: origin.UserID, SessionID: origin.SessionID, At: time.Now().UTC()})
 		v.Spec = spec
 		v.Revision++

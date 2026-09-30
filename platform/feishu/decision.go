@@ -21,11 +21,22 @@ import (
 func (p *Platform) SetDecisionHandler(h func(string, string, string, string, string, ...map[string]any) (*core.Decision, error)) {
 	p.decisionHandler = h
 }
+
+// ResolveDecisionChat keeps chat IDs separate from user identities.
+func (p *Platform) ResolveDecisionChat(_ context.Context, id string) (string, error) {
+	if !strings.HasPrefix(id, "oc_") || len(id) <= 3 || strings.ContainsAny(id, " @,;\n\t\r") {
+		return "", fmt.Errorf("chat_id must be a Lark oc_ chat ID")
+	}
+	return id, nil
+}
 func (p *Platform) ResolveDecisionRecipient(ctx context.Context, recipient string) (string, error) {
 	if strings.HasPrefix(recipient, "ou_") && !strings.ContainsAny(recipient, " @,;\n\t") {
 		return recipient, nil
 	}
-	if strings.HasPrefix(recipient, "ou_") || strings.HasPrefix(recipient, "oc_") || strings.HasPrefix(recipient, "cli_") {
+	if strings.HasPrefix(recipient, "oc_") {
+		return "", fmt.Errorf("oc_ identifies a chat, not a user: use interactive_card spec.chat_id and omit recipient")
+	}
+	if strings.HasPrefix(recipient, "ou_") || strings.HasPrefix(recipient, "cli_") {
 		return "", fmt.Errorf("invalid app-scoped recipient; never append an email domain to an open_id")
 	}
 	a, err := mail.ParseAddress(recipient)
@@ -127,6 +138,9 @@ func (p *Platform) SendDecision(ctx context.Context, v *core.Decision) (string, 
 	}
 	var id string
 	err = p.withFreshTenantAccessTokenRetry(ctx, "send decision card", func(client *lark.Client, opts ...larkcore.RequestOptionFunc) error {
+		if v.Spec.ChatID != "" {
+			return p.createDecisionMessage(ctx, client, opts, "chat_id", v.Spec.ChatID, v.ID, string(card), &id)
+		}
 		if v.DeliverySessionKey != "" {
 			raw, err := p.ReconstructReplyCtx(v.DeliverySessionKey)
 			if err != nil {
@@ -191,6 +205,7 @@ func (p *Platform) handleDecisionAction(event *callback.CardActionTriggerEvent) 
 			values[k] = value
 		}
 	}
+	values["_chat_id"] = ev.Context.OpenChatID // Trusted callback context, never form input.
 	v, err := p.decisionHandler(id, ev.Operator.OpenID, option, comment, ev.Context.OpenMessageID, values)
 	if errors.Is(err, core.ErrDecisionNotFound) {
 		slog.Warn(p.tag()+": decision request not found", "request_id", id, "message_id", ev.Context.OpenMessageID)

@@ -47,7 +47,14 @@ type DecisionField struct {
 	MaxLength   int              `json:"max_length,omitempty"`
 	Options     []DecisionOption `json:"options,omitempty"`
 }
+
+// DecisionChatResolver validates an explicit notification-card destination.
+type DecisionChatResolver interface {
+	ResolveDecisionChat(context.Context, string) (string, error)
+}
+
 type DecisionSpec struct {
+	ChatID           string           `json:"chat_id,omitempty"`
 	WidthMode        string           `json:"width_mode,omitempty"`
 	Card             json.RawMessage  `json:"card,omitempty"`
 	RequestID        string           `json:"request_id,omitempty"`
@@ -341,8 +348,8 @@ func (d *decisionService) createMode(ctx context.Context, token string, spec Dec
 	p := d.engine.platformForName(origin.Platform)
 	dp, ok := p.(DecisionPlatform)
 	if !ok {
-		if spec.Recipient == "" {
-			return nil, fmt.Errorf("recipient email or app-scoped user ID is required outside the messaging platform")
+		if spec.Recipient == "" && spec.ChatID == "" {
+			return nil, fmt.Errorf("recipient or chat_id is required outside the messaging platform")
 		}
 		for _, candidate := range d.engine.platforms {
 			if cap, yes := candidate.(DecisionPlatform); yes {
@@ -375,7 +382,20 @@ func (d *decisionService) createMode(ctx context.Context, token string, spec Dec
 	if recipient == "" {
 		recipient = origin.UserID
 	}
-	recipientID, err := dp.ResolveDecisionRecipient(ctx, recipient)
+	var recipientID string
+	var err error
+	if spec.ChatID != "" {
+		if mode != "none" || spec.Recipient != "" {
+			return nil, fmt.Errorf("chat_id requires interactive_card and must not be combined with recipient")
+		}
+		resolver, ok := dp.(DecisionChatResolver)
+		if !ok {
+			return nil, fmt.Errorf("platform does not support explicit chat cards")
+		}
+		spec.ChatID, err = resolver.ResolveDecisionChat(ctx, spec.ChatID)
+	} else {
+		recipientID, err = dp.ResolveDecisionRecipient(ctx, recipient)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +437,7 @@ func (d *decisionService) createMode(ctx context.Context, token string, spec Dec
 		return nil, fmt.Errorf("decision store capacity reached")
 	}
 	item := &Decision{OwnerAutomon: d.engine.name, ReturnMode: mode, ID: id, Spec: spec, Origin: origin, Platform: p.Name(), RecipientID: recipientID, Status: "sending", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Duration(spec.ExpiresInHours) * time.Hour)}
-	if spec.Recipient == "" && origin.Platform == p.Name() {
+	if spec.Recipient == "" && spec.ChatID == "" && origin.Platform == p.Name() {
 		item.DeliverySessionKey = origin.SessionKey
 	}
 	d.items[id] = item
@@ -470,7 +490,12 @@ func (d *decisionService) answer(id, operator, option, comment, messageID string
 	if messageID == "" {
 		return nil, fmt.Errorf("missing card message ID")
 	}
-	if operator == "" || operator != v.RecipientID {
+	chatMatches := false
+	if v.Spec.ChatID != "" && v.ReturnMode == "none" && len(submitted) > 0 {
+		chat, _ := submitted[0]["_chat_id"].(string)
+		chatMatches = chat == v.Spec.ChatID
+	}
+	if operator == "" || (!chatMatches && (v.Spec.ChatID != "" || operator != v.RecipientID)) {
 		return nil, fmt.Errorf("only the designated recipient can answer")
 	}
 	if v.MessageID != "" && v.MessageID != messageID {
@@ -483,6 +508,9 @@ func (d *decisionService) answer(id, operator, option, comment, messageID string
 	revision := 0
 	if len(submitted) > 0 {
 		for k, value := range submitted[0] {
+			if k == "_chat_id" {
+				continue
+			}
 			if k == "_revision" {
 				n, err := strconv.Atoi(fmt.Sprint(value))
 				if err != nil {
