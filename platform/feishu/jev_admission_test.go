@@ -131,7 +131,7 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 		wantThread bool
 	}{
 		{name: "channel top level", scope: "channel", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test"},
-		{name: "channel unengaged thread", scope: "channel", rootID: "om_root", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test"},
+		{name: "channel unengaged thread", scope: "channel", rootID: "om_root", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_root", wantThread: true},
 		{name: "channel rejected despite group reply all", scope: "channel", admit: false, wantCalls: 1},
 		{name: "thread top level", scope: "thread", admit: true},
 		{name: "thread unengaged", scope: "thread", rootID: "om_root", admit: true},
@@ -206,5 +206,44 @@ func TestJevResponseScopeRejectsInvalidValue(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("invalid Jev response scope must not start")
+	}
+}
+
+func TestJevChannelPreservesTopicWithIsolationDisabled(t *testing.T) {
+	pAny, err := newPlatform("lark", "https://open.larksuite.com", map[string]any{
+		"app_id": "cli_test", "app_secret": "secret", "jev_channel_admission": true,
+		"jev_channel_chats": "oc_test", "jev_response_scope": "channel",
+		"thread_isolation": false, "no_reply_to_trigger": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := pAny.(*interactivePlatform)
+	chatType, root, thread := "group", "om_root", "omt_topic"
+	for _, tc := range []struct {
+		name string
+		msg  *larkim.EventMessage
+		want string
+	}{
+		{"root", &larkim.EventMessage{ChatType: &chatType, RootId: &root, ThreadId: &thread}, "lark:oc_test:root:om_root"},
+		{"thread only", &larkim.EventMessage{ChatType: &chatType, ThreadId: &thread}, "lark:oc_test:thread:omt_topic"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := p.makeSessionKey(tc.msg, "oc_test", "ou_user")
+			if key != tc.want {
+				t.Fatalf("key=%s want=%s", key, tc.want)
+			}
+			rc := replyContext{messageID: "om_incoming", chatID: "oc_test", chatType: "group", threadID: thread, sessionKey: key}
+			if !p.shouldReplyInThread(rc) || !p.shouldUseThreadOrReplyAPI(rc) || p.jevChannelResponse(rc) {
+				t.Fatal("topic reply escaped to channel")
+			}
+			body := p.buildReplyMessageReqBody(rc, "text", `{"text":"answer"}`)
+			if body.ReplyInThread == nil || !*body.ReplyInThread {
+				t.Fatal("outbound API request must target topic")
+			}
+			if got := p.sessionKeyFromCardAction("oc_test", "ou_user", map[string]any{"session_key": key}); got != key {
+				t.Fatal("card action lost topic")
+			}
+		})
 	}
 }

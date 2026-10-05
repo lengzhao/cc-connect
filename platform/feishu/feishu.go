@@ -3598,6 +3598,14 @@ func stripMentions(text string, mentions []*larkim.MentionEvent, botOpenID strin
 // Should revisit thread/root handling without changing thread_isolation=false behavior.
 func (p *Platform) makeSessionKey(msg *larkim.EventMessage, chatID, userID string) string {
 	if msg != nil && stringValue(msg.ChatType) == "group" && p.jevChannelAdmission && p.jevResponseScope == "channel" && p.jevChannelChats.matches(chatID) {
+		// Admission spans the group, but a topic keeps its own conversation
+		// and reply destination even when general thread isolation is disabled.
+		if rootID := stringValue(msg.RootId); rootID != "" {
+			return fmt.Sprintf("%s:%s:root:%s", p.tag(), chatID, rootID)
+		}
+		if threadID := stringValue(msg.ThreadId); threadID != "" {
+			return fmt.Sprintf("%s:%s:thread:%s", p.tag(), chatID, threadID)
+		}
 		return fmt.Sprintf("%s:%s", p.tag(), chatID)
 	}
 	if p.threadIsolation && msg != nil && stringValue(msg.ChatType) == "group" {
@@ -3634,6 +3642,9 @@ func (p *Platform) shouldReplyInThread(rc replyContext) bool {
 	if rc.messageID == "" {
 		return false
 	}
+	if p.jevChannelAdmission && p.jevResponseScope == "channel" && p.jevChannelChats.matches(rc.chatID) && isThreadSessionKey(rc.sessionKey) {
+		return true
+	}
 	if p.jevChannelResponse(rc) {
 		return false
 	}
@@ -3641,13 +3652,16 @@ func (p *Platform) shouldReplyInThread(rc replyContext) bool {
 }
 
 func (p *Platform) jevChannelResponse(rc replyContext) bool {
-	return rc.chatType == "group" && p.jevChannelAdmission && p.jevResponseScope == "channel" && p.jevChannelChats.matches(rc.chatID)
+	return rc.chatType == "group" && rc.threadID == "" && !isThreadSessionKey(rc.sessionKey) && p.jevChannelAdmission && p.jevResponseScope == "channel" && p.jevChannelChats.matches(rc.chatID)
 }
 
 // shouldUseThreadOrReplyAPI is true when we should call Im.Message.Reply (optionally with ReplyInThread).
 func (p *Platform) shouldUseThreadOrReplyAPI(rc replyContext) bool {
 	if rc.messageID == "" {
 		return false
+	}
+	if p.shouldReplyInThread(rc) && p.jevChannelAdmission && p.jevResponseScope == "channel" && p.jevChannelChats.matches(rc.chatID) {
+		return true
 	}
 	if p.jevChannelResponse(rc) {
 		return false
