@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
+
+	"github.com/chenhg5/cc-connect/core"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
 func TestParseJevChatAllowlist(t *testing.T) {
@@ -88,10 +92,10 @@ func TestNewPlatformParsesJevOptions(t *testing.T) {
 		"app_id":                   "cli_test",
 		"app_secret":               "sec",
 		"require_mention":          true,
-		"jev_channel_admission":     true,
-		"jev_admission_url":         "http://127.0.0.1:8020/jev/admit",
+		"jev_channel_admission":    true,
+		"jev_admission_url":        "http://127.0.0.1:8020/jev/admit",
 		"jev_channel_chats":        "oc_test",
-		"jev_admission_timeout_ms":  5000,
+		"jev_admission_timeout_ms": 5000,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -111,5 +115,96 @@ func TestNewPlatformParsesJevOptions(t *testing.T) {
 	}
 	if fp.jevAdmissionHTTP == nil || fp.jevAdmissionHTTP.Timeout != 5*time.Second {
 		t.Fatalf("timeout = %v", fp.jevAdmissionHTTP.Timeout)
+	}
+}
+
+func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		scope      string
+		rootID     string
+		engaged    bool
+		admit      bool
+		wantCalls  int
+		wantRoute  bool
+		wantKey    string
+		wantThread bool
+	}{
+		{name: "channel top level", scope: "channel", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test"},
+		{name: "channel unengaged thread", scope: "channel", rootID: "om_root", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test"},
+		{name: "channel rejected despite group reply all", scope: "channel", admit: false, wantCalls: 1},
+		{name: "thread top level", scope: "thread", admit: true},
+		{name: "thread unengaged", scope: "thread", rootID: "om_root", admit: true},
+		{name: "thread engaged", scope: "thread", rootID: "om_root", engaged: true, admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_root", wantThread: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				_ = json.NewEncoder(w).Encode(jevAdmitResponse{Admitted: tc.admit})
+			}))
+			defer srv.Close()
+			pAny, err := newPlatform("lark", "https://open.larksuite.com", map[string]any{
+				"app_id": "cli_test", "app_secret": "secret",
+				"jev_channel_admission": true, "jev_channel_chats": "oc_test",
+				"jev_admission_url": srv.URL, "jev_response_scope": tc.scope,
+				"require_mention": true, "group_reply_all": true, "thread_isolation": true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := pAny.(*interactivePlatform)
+			p.botOpenID = "ou_bot"
+			if tc.engaged {
+				p.markJevThreadEngaged("oc_test", tc.rootID)
+			}
+			messages := make(chan *core.Message, 1)
+			p.handler = func(_ core.Platform, msg *core.Message) { messages <- msg }
+			messageID, chatID, chatType, msgType, userID := "om_message", "oc_test", "group", "text", "ou_user"
+			content := `{"text":"please help"}`
+			created := strconv.FormatInt(time.Now().UnixMilli(), 10)
+			if err := p.onMessage(context.Background(), &larkim.P2MessageReceiveV1{Event: &larkim.P2MessageReceiveV1Data{
+				Sender: &larkim.EventSender{SenderId: &larkim.UserId{OpenId: &userID}},
+				Message: &larkim.EventMessage{MessageId: &messageID, ChatId: &chatID, ChatType: &chatType,
+					MessageType: &msgType, Content: &content, CreateTime: &created, RootId: &tc.rootID},
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("Jev calls = %d, want %d", calls, tc.wantCalls)
+			}
+			if !tc.wantRoute {
+				select {
+				case msg := <-messages:
+					t.Fatalf("unexpected routed message: %+v", msg)
+				default:
+				}
+				return
+			}
+			select {
+			case msg := <-messages:
+				if msg.SessionKey != tc.wantKey {
+					t.Fatalf("session key = %q, want %q", msg.SessionKey, tc.wantKey)
+				}
+				rc := msg.ReplyCtx.(replyContext)
+				if got := p.shouldReplyInThread(rc); got != tc.wantThread {
+					t.Fatalf("reply in thread = %v, want %v", got, tc.wantThread)
+				}
+				if got := p.shouldUseThreadOrReplyAPI(rc); got != tc.wantThread {
+					t.Fatalf("reply API = %v, want %v", got, tc.wantThread)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("message was not routed")
+			}
+		})
+	}
+}
+
+func TestJevResponseScopeRejectsInvalidValue(t *testing.T) {
+	_, err := newPlatform("lark", "https://open.larksuite.com", map[string]any{
+		"app_id": "cli_test", "app_secret": "secret", "jev_response_scope": "everywhere",
+	})
+	if err == nil {
+		t.Fatal("invalid Jev response scope must not start")
 	}
 }

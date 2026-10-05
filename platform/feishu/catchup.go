@@ -166,6 +166,7 @@ func (p *Platform) injectCatchupMessage(ctx context.Context, msg *larkim.Message
 	rctx := replyContext{
 		messageID:  messageID,
 		chatID:     chatID,
+		chatType:   "group",
 		sessionKey: sessionKey,
 	}
 

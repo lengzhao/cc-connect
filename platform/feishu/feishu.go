@@ -110,6 +110,7 @@ func init() {
 type replyContext struct {
 	messageID  string
 	chatID     string
+	chatType   string
 	threadID   string
 	sessionKey string
 }
@@ -144,6 +145,7 @@ type Platform struct {
 	// in that engaged thread are judged; @ in the thread always answers.
 	// Top-level group messages still require @ (require_mention).
 	jevChannelAdmission bool
+	jevResponseScope    string // "thread" (default) or "channel"
 	jevAdmissionURL     string
 	jevChannelChats     jevChatAllowlist
 	jevAdmissionHTTP    *http.Client
@@ -341,6 +343,14 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	shareSessionInChannel, _ := opts["share_session_in_channel"].(bool)
 	threadIsolation, _ := opts["thread_isolation"].(bool)
 	jevChannelAdmission, _ := opts["jev_channel_admission"].(bool)
+	jevResponseScope, _ := opts["jev_response_scope"].(string)
+	jevResponseScope = strings.ToLower(strings.TrimSpace(jevResponseScope))
+	if jevResponseScope == "" {
+		jevResponseScope = "thread"
+	}
+	if jevResponseScope != "thread" && jevResponseScope != "channel" {
+		return nil, fmt.Errorf("%s: invalid jev_response_scope %q (want thread or channel)", name, jevResponseScope)
+	}
 	jevAdmissionURL, _ := opts["jev_admission_url"].(string)
 	jevChannelChatsRaw, _ := opts["jev_channel_chats"].(string)
 	jevChannelChats := parseJevChatAllowlist(jevChannelChatsRaw)
@@ -451,6 +461,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		shareSessionInChannel:      shareSessionInChannel,
 		threadIsolation:            threadIsolation,
 		jevChannelAdmission:        jevChannelAdmission,
+		jevResponseScope:           jevResponseScope,
 		jevAdmissionURL:            strings.TrimSpace(jevAdmissionURL),
 		jevChannelChats:            jevChannelChats,
 		jevAdmissionHTTP:           &http.Client{Timeout: jevAdmissionTimeout},
@@ -1482,14 +1493,24 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 		case p.threadIsolation && isAttachmentMsgType(msgType) && p.isActiveThreadSession(sessionKey):
 			slog.Debug(p.tag()+": passing attachment through active thread without mention",
 				"chat_id", chatID, "session_key", sessionKey, "msg_type", msgType, "message_id", messageID)
-		// Allowlisted chat + bot-engaged topic: JUDGE unmentioned follow-ups.
-		// Top-level group chatter (no thread/root) still requires @.
+		// Channel mode judges every unmentioned message in the allowlisted group,
+		// including top-level posts and threads that were not @-activated.
+		case inJevChat && p.jevResponseScope == "channel":
+			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID) {
+				slog.Debug(p.tag()+": jev admission dropped unmentioned channel message", "chat_id", chatID)
+				return nil
+			}
+		// Thread mode judges only follow-ups in a bot-engaged topic.
 		case inJevChat && inThread && p.isJevThreadEngaged(chatID, stringValue(msg.RootId), stringValue(msg.ThreadId)):
 			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID) {
 				slog.Debug(p.tag()+": jev admission dropped unmentioned thread follow-up",
 					"chat_id", chatID, "root_id", stringValue(msg.RootId), "thread_id", stringValue(msg.ThreadId))
 				return nil
 			}
+		// A Jev-enabled chat never falls through to group_reply_all. In thread
+		// mode, unengaged threads and top-level chatter stay quiet.
+		case inJevChat:
+			return nil
 		case !p.groupReplyAll && botOpenID != "":
 			slog.Debug(p.tag()+": ignoring group message without bot mention", "chat_id", chatID)
 			return nil
@@ -1527,6 +1548,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	rctx := replyContext{
 		messageID:  messageID,
 		chatID:     chatID,
+		chatType:   chatType,
 		threadID:   stringValue(msg.ThreadId),
 		sessionKey: sessionKey,
 	}
@@ -3575,6 +3597,9 @@ func stripMentions(text string, mentions []*larkim.MentionEvent, botOpenID strin
 // TODO: Session-key derivation and reply-thread behavior are split across multiple code paths here.
 // Should revisit thread/root handling without changing thread_isolation=false behavior.
 func (p *Platform) makeSessionKey(msg *larkim.EventMessage, chatID, userID string) string {
+	if msg != nil && stringValue(msg.ChatType) == "group" && p.jevChannelAdmission && p.jevResponseScope == "channel" && p.jevChannelChats.matches(chatID) {
+		return fmt.Sprintf("%s:%s", p.tag(), chatID)
+	}
 	if p.threadIsolation && msg != nil && stringValue(msg.ChatType) == "group" {
 		rootID := stringValue(msg.RootId)
 		if rootID == "" {
@@ -3596,6 +3621,9 @@ func (p *Platform) sessionKeyFromCardAction(chatID, userID string, value map[str
 			return sessionKey
 		}
 	}
+	if p.jevChannelAdmission && p.jevResponseScope == "channel" && p.jevChannelChats.matches(chatID) {
+		return fmt.Sprintf("%s:%s", p.tag(), chatID)
+	}
 	if p.shareSessionInChannel {
 		return fmt.Sprintf("%s:%s", p.tag(), chatID)
 	}
@@ -3606,12 +3634,22 @@ func (p *Platform) shouldReplyInThread(rc replyContext) bool {
 	if rc.messageID == "" {
 		return false
 	}
+	if p.jevChannelResponse(rc) {
+		return false
+	}
 	return p.threadIsolation && isThreadSessionKey(rc.sessionKey)
+}
+
+func (p *Platform) jevChannelResponse(rc replyContext) bool {
+	return rc.chatType == "group" && p.jevChannelAdmission && p.jevResponseScope == "channel" && p.jevChannelChats.matches(rc.chatID)
 }
 
 // shouldUseThreadOrReplyAPI is true when we should call Im.Message.Reply (optionally with ReplyInThread).
 func (p *Platform) shouldUseThreadOrReplyAPI(rc replyContext) bool {
 	if rc.messageID == "" {
+		return false
+	}
+	if p.jevChannelResponse(rc) {
 		return false
 	}
 	return !p.noReplyToTrigger
