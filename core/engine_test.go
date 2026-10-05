@@ -2460,6 +2460,58 @@ func (p *stubRichCardSilentPlatform) snapshot() (starts, streams, updates []stri
 	return
 }
 
+type stubRichCardDonePlatform struct {
+	*stubRichCardSilentPlatform
+	doneCount int
+	doneCtx   any
+}
+
+func (p *stubRichCardDonePlatform) AddDoneReaction(replyCtx any) {
+	p.doneCount++
+	p.doneCtx = replyCtx
+}
+
+func TestProcessInteractiveEvents_RichCardAddsDoneReactionOnlyOnVisibleSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		event     Event
+		wantDone  int
+		wantState string
+	}{
+		{name: "success", event: Event{Type: EventResult, Content: "finished", Done: true}, wantDone: 1, wantState: "done"},
+		{name: "silent", event: Event{Type: EventResult, Content: "NO_REPLY", Done: true}, wantDone: 0},
+		{name: "failure", event: Event{Type: EventError, Error: errors.New("failed"), Done: true}, wantDone: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &stubRichCardDonePlatform{stubRichCardSilentPlatform: &stubRichCardSilentPlatform{
+				stubPlatformEngine: stubPlatformEngine{n: "feishu"},
+			}}
+			e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+			e.SetDisplayConfig(DisplayCfg{Mode: "full", CardMode: "rich", ThinkingMessages: true})
+			sessionKey := "feishu:user-rich-done-" + tc.name
+			session := e.sessions.GetOrCreateActive(sessionKey)
+			agentSession := newControllableSession("s-rich-done-" + tc.name)
+			state := &interactiveState{agentSession: agentSession, platform: p, replyCtx: "ctx-rich-done-" + tc.name}
+			e.interactiveStates[sessionKey] = state
+			agentSession.events <- tc.event
+			e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-done-"+tc.name, time.Now(), nil, nil, state.replyCtx, turnStages{})
+
+			if p.doneCount != tc.wantDone {
+				t.Fatalf("done reactions = %d, want %d", p.doneCount, tc.wantDone)
+			}
+			if tc.wantDone > 0 && p.doneCtx != state.replyCtx {
+				t.Fatalf("done reaction context = %#v, want %#v", p.doneCtx, state.replyCtx)
+			}
+			if tc.wantState != "" {
+				sent := p.getSent()
+				if len(sent) != 1 || !strings.Contains(sent[0], "status="+tc.wantState) {
+					t.Fatalf("final rich card = %#v, want status=%s", sent, tc.wantState)
+				}
+			}
+		})
+	}
+}
+
 type stubRichCardResolverPlatform struct {
 	*stubRichCardSilentPlatform
 	resolverMu sync.Mutex

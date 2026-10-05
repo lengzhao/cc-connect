@@ -6453,9 +6453,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				}
 			}
 
-			// Add a "done" reaction after the final answer when supported. Skip
-			// silent turns and rich card mode (the card itself shows done status).
-			if !isSilent && !hasRichCard {
+			// Add a "done" reaction to the incoming message after the final
+			// answer, including rich cards. Silent and failed turns do not signal
+			// completion to the user.
+			if !isSilent {
 				if doneTI, ok := p.(TypingIndicatorDone); ok {
 					doneReaction = func() { doneTI.AddDoneReaction(replyCtx) }
 				}
