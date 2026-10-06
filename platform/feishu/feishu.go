@@ -3212,6 +3212,11 @@ func detectMimeType(data []byte) string {
 }
 
 func buildReplyContent(content string) (msgType string, body string) {
+	// A rich-card fallback already is schema 2.0 JSON. Sending it through the
+	// text/markdown path shows the raw card payload in chat.
+	if trimmed := strings.TrimSpace(content); isCardJSON(trimmed) {
+		return larkim.MsgTypeInteractive, trimmed
+	}
 	// Feishu does not generate mention events for <at> tags in card/post
 	// messages sent by bots. Force MsgTypeText when a real mention is present
 	// (resolved to an <at user_id="..."> or <at id=...> tag) so Feishu
