@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/chenhg5/cc-connect/core"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
 func decodeRenderedCard(t *testing.T, card *core.Card) map[string]any {
@@ -310,5 +311,13 @@ func TestBuildCardJSONWithStatusFooter_EmptyFooterFallsThrough(t *testing.T) {
 	// whitespace-only footer also falls through
 	if got := buildCardJSONWithStatusFooter(body, "   \n  "); got != b {
 		t.Errorf("whitespace footer should fall through to buildCardJSON")
+	}
+}
+
+func TestBuildReplyContentKeepsCardJSONInteractive(t *testing.T) {
+	card := `{"schema":"2.0","config":{"update_multi":true},"header":{"template":"green","title":{"content":"Done","tag":"plain_text"}},"body":{"elements":[{"tag":"markdown","element_id":"main-text","content":"| Item | Status |"}]}}`
+	msgType, body := buildReplyContent(card)
+	if msgType != larkim.MsgTypeInteractive || body != card {
+		t.Fatalf("card JSON became %s %s", msgType, body)
 	}
 }
