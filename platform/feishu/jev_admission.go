@@ -59,13 +59,18 @@ func (a jevChatAllowlist) matches(chatID string) bool {
 }
 
 type jevAdmitRequest struct {
-	Message   string `json:"message"`
-	Channel   string `json:"channel,omitempty"`
-	ChannelID string `json:"channel_id,omitempty"`
-	Sender    string `json:"sender,omitempty"`
+	Action        string `json:"action,omitempty"`
+	MessageID     string `json:"message_id,omitempty"`
+	CreatedAtMS   int64  `json:"created_at_ms,omitempty"`
+	MentionsOther bool   `json:"mentions_other,omitempty"`
+	Message       string `json:"message"`
+	Channel       string `json:"channel,omitempty"`
+	ChannelID     string `json:"channel_id,omitempty"`
+	Sender        string `json:"sender,omitempty"`
 }
 
 type jevAdmitResponse struct {
+	Reply    string `json:"reply,omitempty"`
 	Admitted bool   `json:"admitted"`
 	Reason   string `json:"reason"`
 }
@@ -73,20 +78,19 @@ type jevAdmitResponse struct {
 // callJevAdmission POSTs to the Runtime local admission URL.
 // Fail-safe: any transport/decode problem → not admitted (stay quiet).
 func callJevAdmission(ctx context.Context, client *http.Client, url, message, channelID, channelName, sender string) bool {
+	return requestJevAdmission(ctx, client, url, jevAdmitRequest{Message: message, ChannelID: channelID, Channel: channelName, Sender: sender}).Admitted
+}
+
+func requestJevAdmission(ctx context.Context, client *http.Client, url string, payload jevAdmitRequest) jevAdmitResponse {
 	url = strings.TrimSpace(url)
 	if url == "" {
 		slog.Warn("feishu: jev admission url unset; stay quiet")
-		return false
+		return jevAdmitResponse{}
 	}
-	body, err := json.Marshal(jevAdmitRequest{
-		Message:   message,
-		Channel:   channelName,
-		ChannelID: channelID,
-		Sender:    sender,
-	})
+	body, err := json.Marshal(payload)
 	if err != nil {
 		slog.Warn("feishu: jev admission marshal failed; stay quiet", "err", err)
-		return false
+		return jevAdmitResponse{}
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 8 * time.Second}
@@ -94,35 +98,35 @@ func callJevAdmission(ctx context.Context, client *http.Client, url, message, ch
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		slog.Warn("feishu: jev admission request build failed; stay quiet", "err", err)
-		return false
+		return jevAdmitResponse{}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
 		slog.Warn("feishu: jev admission request failed; stay quiet", "err", err, "url", url)
-		return false
+		return jevAdmitResponse{}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		slog.Warn("feishu: jev admission read failed; stay quiet", "err", err)
-		return false
+		return jevAdmitResponse{}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		slog.Warn("feishu: jev admission http error; stay quiet", "status", resp.StatusCode)
-		return false
+		return jevAdmitResponse{}
 	}
 	var out jevAdmitResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		slog.Warn("feishu: jev admission decode failed; stay quiet", "err", err)
-		return false
+		return jevAdmitResponse{}
 	}
 	slog.Info("feishu: jev admission result",
 		"admitted", out.Admitted,
 		"reason", out.Reason,
-		"chat_id", channelID,
+		"chat_id", payload.ChannelID,
 	)
-	return out.Admitted
+	return out
 }
 
 func jevEngagedRootKey(chatID, rootID string) string {
@@ -164,7 +168,7 @@ func (p *Platform) isJevThreadEngaged(chatID, rootID, threadID string) bool {
 
 // admitUnmentionedGroup runs sync HTTP admission against Runtime.
 // Returns true only when Jev explicitly admits the message.
-func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, chatID, userID, messageID string) bool {
+func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, chatID, userID, messageID string, createdAt ...int64) bool {
 	text := extractTextForJev(msgType, content, mentions, p.getBotOpenID())
 	if text == "" {
 		slog.Debug(p.tag()+": jev admission skip — empty extractable text; stay quiet",
@@ -175,7 +179,16 @@ func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content s
 	if p.isMessageRecalled(messageID) {
 		return false
 	}
-	if !callJevAdmission(ctx, p.jevAdmissionHTTP, p.jevAdmissionURL, text, chatID, "", userID) {
+	payload := jevAdmitRequest{Message: text, ChannelID: chatID, Sender: userID, MessageID: messageID}
+	if len(createdAt) > 0 {
+		payload.CreatedAtMS = createdAt[0]
+	}
+	for _, m := range mentions {
+		if m != nil && m.Id != nil && m.Id.OpenId != nil && *m.Id.OpenId != "" && *m.Id.OpenId != p.getBotOpenID() {
+			payload.MentionsOther = true
+		}
+	}
+	if !requestJevAdmission(ctx, p.jevAdmissionHTTP, p.jevAdmissionURL, payload).Admitted {
 		return false
 	}
 	// Recheck after the remote decision: the triggering message may have been

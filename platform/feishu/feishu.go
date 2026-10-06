@@ -1475,12 +1475,35 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	botOpenID := p.getBotOpenID()
 	botMentioned := botOpenID != "" && isBotMentioned(msg.Mentions, botOpenID)
 	inJevChat := p.jevChannelAdmission && p.jevChannelChats.matches(chatID)
+	if chatType == "group" && inJevChat && ((sender.SenderType != nil && *sender.SenderType != "user") || (botOpenID != "" && userID == botOpenID)) {
+		return nil
+	}
 	inThread := stringValue(msg.ThreadId) != "" || stringValue(msg.RootId) != ""
 
 	// Automatic admission must not send unauthorized text to the judge or
 	// allow an unauthorized sender to change the local stop state.
 	if chatType == "group" && !botMentioned && inJevChat && (!core.AllowList(p.allowFrom, userID) || !core.AllowList(p.allowChat, chatID)) {
 		return nil
+	}
+
+	// Explicit mentions notify the local guard of activity without asking the model.
+	// Only authorized users can update cooldown or issue quiet commands.
+	if chatType == "group" && botMentioned && inJevChat && core.AllowList(p.allowFrom, userID) && core.AllowList(p.allowChat, chatID) {
+		raw := ""
+		if msg.Content != nil {
+			raw = *msg.Content
+		}
+		controlCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		out := requestJevAdmission(controlCtx, p.jevAdmissionHTTP, p.jevAdmissionURL, jevAdmitRequest{Action: "activity", Message: extractTextForJev(msgType, raw, msg.Mentions, botOpenID), ChannelID: chatID, Sender: userID})
+		cancel()
+		if out.Reason == "quiet" {
+			if out.Reply != "" {
+				if err := p.Reply(ctx, replyContext{messageID: messageID, chatID: chatID, chatType: chatType, threadID: stringValue(msg.ThreadId)}, out.Reply); err != nil {
+					slog.Warn(p.tag() + ": quiet acknowledgment failed")
+				}
+			}
+			return nil
+		}
 	}
 
 	if chatType == "group" && !botMentioned {
@@ -1503,13 +1526,13 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 		// Channel mode judges every unmentioned message in the allowlisted group,
 		// including top-level posts and threads that were not @-activated.
 		case inJevChat && p.jevResponseScope == "channel":
-			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID, messageID) {
+			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID, messageID, createTimeMs) {
 				slog.Debug(p.tag()+": jev admission dropped unmentioned channel message", "chat_id", chatID)
 				return nil
 			}
 		// Thread mode judges only follow-ups in a bot-engaged topic.
 		case inJevChat && inThread && p.isJevThreadEngaged(chatID, stringValue(msg.RootId), stringValue(msg.ThreadId)):
-			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID, messageID) {
+			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID, messageID, createTimeMs) {
 				slog.Debug(p.tag()+": jev admission dropped unmentioned thread follow-up",
 					"chat_id", chatID, "root_id", stringValue(msg.RootId), "thread_id", stringValue(msg.ThreadId))
 				return nil

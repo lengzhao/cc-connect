@@ -136,12 +136,14 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 		recalled    bool
 		recallError bool
 		deniedChat  bool
+		quiet       bool
 	}{
+		{name: "quiet blocks explicit mention", scope: "channel", mentioned: true, quiet: true, wantCalls: 1},
 		{name: "channel attachment cannot bypass guards", scope: "channel", rootID: "om_root", messageType: "image", admit: true},
 		{name: "channel withdrawn during admission", scope: "channel", admit: true, wantCalls: 1, recalled: true},
 		{name: "channel recall status unavailable", scope: "channel", admit: true, wantCalls: 1, recallError: true},
 		{name: "channel not authorized never reaches Jev", scope: "channel", admit: true, deniedChat: true},
-		{name: "channel mentioned top level", scope: "channel", mentioned: true, wantRoute: true, wantKey: "lark:oc_test:root:om_message", wantThread: true},
+		{name: "channel mentioned top level", scope: "channel", mentioned: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_message", wantThread: true},
 		{name: "channel top level", scope: "channel", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_message", wantThread: true},
 		{name: "channel unengaged thread", scope: "channel", rootID: "om_root", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_root", wantThread: true},
 		{name: "channel rejected despite group reply all", scope: "channel", admit: false, wantCalls: 1},
@@ -193,6 +195,20 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 					return
 				}
 				calls.Add(1)
+				var payload jevAdmitRequest
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+				}
+				if tc.mentioned && payload.Action != "activity" {
+					t.Error("mention must only record activity")
+				}
+				if !tc.mentioned && (payload.CreatedAtMS == 0 || payload.MessageID != "om_message") {
+					t.Error("missing age/dedup metadata")
+				}
+				if tc.quiet {
+					_ = json.NewEncoder(w).Encode(jevAdmitResponse{Reason: "quiet"})
+					return
+				}
 				_ = json.NewEncoder(w).Encode(jevAdmitResponse{Admitted: tc.admit})
 			}))
 			defer srv.Close()
