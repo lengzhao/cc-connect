@@ -12,7 +12,7 @@ import (
 // from a foreign platform) returns ("", false) so core falls back to
 // its legacy "<platform>:<chatID>:relay" default.
 func TestPlatform_RelayGroupVisibilityKey(t *testing.T) {
-	p := &Platform{}
+	p := &Platform{platformName: "feishu"}
 
 	cases := []struct {
 		name       string
@@ -54,5 +54,19 @@ func TestPlatform_RelayGroupVisibilityKey(t *testing.T) {
 					c.sessionKey, gotKey, gotOK, c.wantKey, c.wantOK)
 			}
 		})
+	}
+}
+
+func TestRelayGroupVisibilityKeyLarkRegistration(t *testing.T) {
+	p := &Platform{platformName: "lark"}
+	for _, key := range []string{"lark:oc_chat:root:om_root", "lark:oc_chat:thread:omt_thread"} {
+		if got, ok := p.RelayGroupVisibilityKey(key); !ok || got != key {
+			t.Fatalf("%q: %q %v", key, got, ok)
+		}
+	}
+	for _, key := range []string{"feishu:oc_chat:root:om_root", "lark:oc_chat:root:", "lark:oc_chat:ou_user"} {
+		if _, ok := p.RelayGroupVisibilityKey(key); ok {
+			t.Fatalf("unexpected acceptance: %q", key)
+		}
 	}
 }

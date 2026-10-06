@@ -2867,6 +2867,12 @@ func (e *Engine) startMessageRecallMonitor(sessionKey string) context.CancelFunc
 }
 
 func (e *Engine) handleMessage(p Platform, msg *Message) {
+	e.handleMessageMode(p, msg, false)
+}
+
+// promptOnly shares workspace/session routing and queueing with normal messages,
+// but never interprets an injected prompt as a command or a permission answer.
+func (e *Engine) handleMessageMode(p Platform, msg *Message, promptOnly bool) {
 	if msg.Recalled {
 		e.handleMessageRecall(p, msg)
 		return
@@ -2931,7 +2937,9 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 
 	// Resolve aliases on user text BEFORE merging ExtraContent, so reply
 	// quotes and platform context survive alias resolution (PR #420 fix).
-	content = e.resolveAlias(content)
+	if !promptOnly {
+		content = e.resolveAlias(content)
+	}
 	if msg.ExtraContent != "" {
 		if content == "" {
 			msg.Content = msg.ExtraContent
@@ -2983,9 +2991,13 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 			return
 		}
 		if workspace == "" {
+			if promptOnly {
+				slog.Warn("webhook: no workspace binding", "session_key", msg.SessionKey)
+				return
+			}
 			// No workspace — handle init flow (unless it's a /workspace command)
 			if !strings.HasPrefix(content, "/workspace") && !strings.HasPrefix(content, "/ws ") {
-				if e.handleWorkspaceInitFlow(p, msg, channelName) {
+				if !promptOnly && e.handleWorkspaceInitFlow(p, msg, channelName) {
 					return
 				}
 			} else {
@@ -3032,7 +3044,7 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 		}
 	}
 
-	if len(msg.Images) == 0 && strings.HasPrefix(content, "/") {
+	if !promptOnly && len(msg.Images) == 0 && strings.HasPrefix(content, "/") {
 		if e.handleCommand(p, msg, content) {
 			return
 		}
@@ -3041,13 +3053,13 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 
 	// Permission responses bypass the session lock.
 	// Must be after workspace resolution so interactiveKey is correct.
-	if e.handlePendingPermission(p, msg, content, interactiveKey) {
+	if !promptOnly && e.handlePendingPermission(p, msg, content, interactiveKey) {
 		return
 	}
 
 	// "!" prefix: treat as shell command (same as /shell)
 	// Placed after permission handling so "!yes" doesn't hijack permission responses.
-	if len(msg.Images) == 0 && strings.HasPrefix(content, "!") {
+	if !promptOnly && len(msg.Images) == 0 && strings.HasPrefix(content, "!") {
 		shellCmd := strings.TrimSpace(content[1:])
 		if shellCmd != "" {
 			// Check disabled / admin just like handleCommand does for "shell"
@@ -3077,7 +3089,7 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	}
 
 	// Pending provider add (card-driven multi-step flow)
-	if e.handlePendingProviderAdd(p, msg, content, interactiveKey) {
+	if !promptOnly && e.handlePendingProviderAdd(p, msg, content, interactiveKey) {
 		return
 	}
 
@@ -3086,7 +3098,9 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	}
 
 	session := sessions.GetOrCreateActive(msg.SessionKey)
-	sessions.UpdateUserMeta(msg.SessionKey, msg.UserName, msg.ChatName)
+	if !promptOnly {
+		sessions.UpdateUserMeta(msg.SessionKey, msg.UserName, msg.ChatName)
+	}
 	// Ensure an interactiveState entry exists before taking the session lock.
 	// Without this, concurrent messages can observe the session as busy during
 	// startup but still find no state to queue into.
@@ -3116,14 +3130,18 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	}
 
 sessionLocked:
-	if rotated := e.maybeAutoResetSessionOnIdle(p, msg, sessions, interactiveKey, session); rotated != nil {
-		session = rotated
+	if !promptOnly {
+		if rotated := e.maybeAutoResetSessionOnIdle(p, msg, sessions, interactiveKey, session); rotated != nil {
+			session = rotated
+		}
 	}
 	// Record that a real user message is being processed. This keeps
 	// LastUserActivity separate from UpdatedAt (bumped by every Unlock), so
 	// reset_on_idle_mins is not defeated by heartbeats or unsolicited agent
 	// output running between user messages (#1115).
-	session.TouchUserActivity()
+	if !promptOnly {
+		session.TouchUserActivity()
+	}
 
 	// Ensure an interactiveState entry exists before launching the async
 	// processor so messages arriving during session startup can be queued
@@ -4152,6 +4170,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 	if inj, ok := agent.(SessionEnvInjector); ok {
 		envVars := []string{
 			"CC_PROJECT=" + e.name,
+			"CC_HOOK_PROJECT=" + e.name,
 			"CC_SESSION_KEY=" + ccKey,
 			"CC_ASK_USER_TOKEN=" + e.decisions.tokenFor(sessionKey, session.ID),
 		}
@@ -16445,6 +16464,7 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, sourceSessionKey,
 	if inj, ok := agent.(SessionEnvInjector); ok {
 		envVars := []string{
 			"CC_PROJECT=" + e.name,
+			"CC_HOOK_PROJECT=" + e.name,
 			"CC_SESSION_KEY=" + sourceSessionKey,
 		}
 		if exePath, err := os.Executable(); err == nil {

@@ -3965,14 +3965,14 @@ func (p *Platform) ReconstructReplyCtx(sessionKey string) (any, error) {
 // ("", false) so core falls back to the channel-level ":relay" default.
 func (p *Platform) RelayGroupVisibilityKey(callerSessionKey string) (string, bool) {
 	parts := strings.SplitN(callerSessionKey, ":", 3)
-	if len(parts) < 3 || parts[0] != "feishu" {
+	if len(parts) < 3 || parts[0] != p.tag() {
 		return "", false
 	}
 	chatID := parts[1]
 	third := parts[2]
 	for _, pfx := range []string{"root:", "thread:"} {
 		if after, ok := strings.CutPrefix(third, pfx); ok && after != "" {
-			return "feishu:" + chatID + ":" + third, true
+			return p.tag() + ":" + chatID + ":" + third, true
 		}
 	}
 	return "", false

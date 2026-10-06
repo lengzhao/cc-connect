@@ -26,14 +26,14 @@ type WebhookServer struct {
 
 // WebhookRequest is the JSON body for POST /hook.
 type WebhookRequest struct {
-	Event      string `json:"event,omitempty"`       // event name for logging (e.g. "git:commit")
-	Project    string `json:"project,omitempty"`      // target project; optional if single project
-	SessionKey string `json:"session_key"`            // target session key (required)
-	Prompt     string `json:"prompt,omitempty"`       // agent prompt (mutually exclusive with exec)
-	Exec       string `json:"exec,omitempty"`         // shell command (mutually exclusive with prompt)
-	WorkDir    string `json:"work_dir,omitempty"`     // working dir for exec
-	Silent     bool   `json:"silent,omitempty"`       // suppress notification
-	Payload    any    `json:"payload,omitempty"`      // arbitrary extra data; appended to prompt context
+	Event      string `json:"event,omitempty"`    // event name for logging (e.g. "git:commit")
+	Project    string `json:"project,omitempty"`  // target project; optional if single project
+	SessionKey string `json:"session_key"`        // target session key (required)
+	Prompt     string `json:"prompt,omitempty"`   // agent prompt (mutually exclusive with exec)
+	Exec       string `json:"exec,omitempty"`     // shell command (mutually exclusive with prompt)
+	WorkDir    string `json:"work_dir,omitempty"` // working dir for exec
+	Silent     bool   `json:"silent,omitempty"`   // suppress notification
+	Payload    any    `json:"payload,omitempty"`  // arbitrary extra data; appended to prompt context
 }
 
 func NewWebhookServer(port int, token, path string) *WebhookServer {
@@ -241,17 +241,11 @@ func (ws *WebhookServer) executePrompt(engine *Engine, sessionKey, prompt string
 		ReplyCtx:   replyCtx,
 	}
 
-	session := engine.sessions.GetOrCreateActive(sessionKey)
-	if !session.TryLock() {
-		slog.Warn("webhook: session busy, queued prompt dropped", "event", event, "session_key", sessionKey)
-		if !silent {
-			engine.send(targetPlatform, replyCtx, fmt.Sprintf("🪝 ⚠️ session busy, skipped: %s", event))
-		}
-		return
-	}
+	// Use the normal workspace binding, session store and busy queue. Keep
+	// webhook identity for Runtime's trusted delegation layer; never invent a user.
+	engine.handleMessageMode(targetPlatform, msg, true)
+	slog.Info("webhook: prompt dispatched", "event", event, "session_key", sessionKey)
 
-	engine.processInteractiveMessage(targetPlatform, msg, session)
-	slog.Info("webhook: prompt executed", "event", event, "session_key", sessionKey)
 }
 
 const webhookShellTimeout = 5 * time.Minute
