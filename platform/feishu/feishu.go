@@ -3606,6 +3606,10 @@ func (p *Platform) makeSessionKey(msg *larkim.EventMessage, chatID, userID strin
 		if threadID := stringValue(msg.ThreadId); threadID != "" {
 			return fmt.Sprintf("%s:%s:thread:%s", p.tag(), chatID, threadID)
 		}
+		// A top-level trigger becomes the root of its reply topic too.
+		if messageID := stringValue(msg.MessageId); messageID != "" {
+			return fmt.Sprintf("%s:%s:root:%s", p.tag(), chatID, messageID)
+		}
 		return fmt.Sprintf("%s:%s", p.tag(), chatID)
 	}
 	if p.threadIsolation && msg != nil && stringValue(msg.ChatType) == "group" {

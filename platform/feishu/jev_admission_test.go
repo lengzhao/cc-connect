@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chenhg5/cc-connect/core"
+	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
@@ -129,8 +130,10 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 		wantRoute  bool
 		wantKey    string
 		wantThread bool
+		mentioned  bool
 	}{
-		{name: "channel top level", scope: "channel", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test"},
+		{name: "channel mentioned top level", scope: "channel", mentioned: true, wantRoute: true, wantKey: "lark:oc_test:root:om_message", wantThread: true},
+		{name: "channel top level", scope: "channel", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_message", wantThread: true},
 		{name: "channel unengaged thread", scope: "channel", rootID: "om_root", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_root", wantThread: true},
 		{name: "channel rejected despite group reply all", scope: "channel", admit: false, wantCalls: 1},
 		{name: "thread top level", scope: "thread", admit: true},
@@ -139,7 +142,36 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
+			reactions := make(chan string, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/open-apis/auth/v3/tenant_access_token/internal":
+					_, _ = w.Write([]byte(`{"code":0,"expire":7200,"tenant_access_token":"test"}`))
+					return
+				case "/open-apis/im/v1/messages/om_message/reply":
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					if body["reply_in_thread"] != true {
+						t.Error("reply must stay under trigger")
+					}
+					_, _ = w.Write([]byte(`{"code":0,"data":{"message_id":"om_answer"}}`))
+					return
+				case "/open-apis/im/v1/messages/om_message/reactions":
+					var body struct {
+						ReactionType struct {
+							EmojiType string `json:"emoji_type"`
+						} `json:"reaction_type"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					reactions <- body.ReactionType.EmojiType
+					_, _ = w.Write([]byte(`{"code":0,"data":{"reaction_id":"r_done"}}`))
+					return
+				}
 				calls++
 				_ = json.NewEncoder(w).Encode(jevAdmitResponse{Admitted: tc.admit})
 			}))
@@ -155,6 +187,8 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 			}
 			p := pAny.(*interactivePlatform)
 			p.botOpenID = "ou_bot"
+			p.doneEmoji = "Done"
+			p.client = lark.NewClient("jev-done-"+tc.name, "test", lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client()))
 			if tc.engaged {
 				p.markJevThreadEngaged("oc_test", tc.rootID)
 			}
@@ -163,10 +197,14 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 			messageID, chatID, chatType, msgType, userID := "om_message", "oc_test", "group", "text", "ou_user"
 			content := `{"text":"please help"}`
 			created := strconv.FormatInt(time.Now().UnixMilli(), 10)
+			var mentions []*larkim.MentionEvent
+			if tc.mentioned {
+				mentions = []*larkim.MentionEvent{{Id: &larkim.UserId{OpenId: &p.botOpenID}}}
+			}
 			if err := p.onMessage(context.Background(), &larkim.P2MessageReceiveV1{Event: &larkim.P2MessageReceiveV1Data{
 				Sender: &larkim.EventSender{SenderId: &larkim.UserId{OpenId: &userID}},
 				Message: &larkim.EventMessage{MessageId: &messageID, ChatId: &chatID, ChatType: &chatType,
-					MessageType: &msgType, Content: &content, CreateTime: &created, RootId: &tc.rootID},
+					MessageType: &msgType, Content: &content, CreateTime: &created, RootId: &tc.rootID, Mentions: mentions},
 			}}); err != nil {
 				t.Fatal(err)
 			}
@@ -187,6 +225,22 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 					t.Fatalf("session key = %q, want %q", msg.SessionKey, tc.wantKey)
 				}
 				rc := msg.ReplyCtx.(replyContext)
+				if rc.messageID != messageID {
+					t.Fatal("lost triggering message")
+				}
+				if err := p.replyMessage(context.Background(), rc, "text", `{"text":"finished"}`); err != nil {
+					t.Fatal(err)
+				}
+				// Completion uses the original event context, even without @.
+				p.AddDoneReaction(rc)
+				select {
+				case emoji := <-reactions:
+					if emoji != "Done" {
+						t.Fatalf("reaction=%q", emoji)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("missing Done on Jev trigger")
+				}
 				if got := p.shouldReplyInThread(rc); got != tc.wantThread {
 					t.Fatalf("reply in thread = %v, want %v", got, tc.wantThread)
 				}
@@ -225,6 +279,7 @@ func TestJevChannelPreservesTopicWithIsolationDisabled(t *testing.T) {
 		msg  *larkim.EventMessage
 		want string
 	}{
+		{"top level", &larkim.EventMessage{ChatType: &chatType, MessageId: &root}, "lark:oc_test:root:om_root"},
 		{"root", &larkim.EventMessage{ChatType: &chatType, RootId: &root, ThreadId: &thread}, "lark:oc_test:root:om_root"},
 		{"thread only", &larkim.EventMessage{ChatType: &chatType, ThreadId: &thread}, "lark:oc_test:thread:omt_topic"},
 	} {
