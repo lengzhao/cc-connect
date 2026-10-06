@@ -2533,3 +2533,37 @@ func TestCUJ_A8_BusyQueueExpiresAutomaticFollowUp(t *testing.T) {
 		t.Fatalf("delivered queued prompts: %+v", as.sendCalls)
 	}
 }
+
+// Model overrides must change what the user actually receives in this turn,
+// while another conversation retains its own model and transcript.
+type cujRoutedAgent struct{ cujAgent }
+
+func (a *cujRoutedAgent) StartSessionWithModel(ctx context.Context, id, model string) (AgentSession, error) {
+	s, err := a.cujAgent.StartSession(ctx, id)
+	if err == nil {
+		c := s.(*cujAgentSession)
+		c.mu.Lock()
+		c.reply = "model:" + model
+		c.mu.Unlock()
+	}
+	return s, err
+}
+func TestCUJ_JevModelRouting_CurrentTurnAndTopicIsolation(t *testing.T) {
+	env := newCUJEnv(t)
+	a := &cujRoutedAgent{}
+	env.engine.agent = a
+	env.engine.SetModelRouter(func(_ context.Context, r ModelRouteRequest) (string, error) { return r.Content, nil }, true)
+	for _, step := range []struct{ user, model string }{{"one", "low"}, {"two", "high"}, {"one", "medium"}} {
+		before := len(env.plat.getSent())
+		env.userSends(step.user, step.model)
+		env.waitFor("routed reply "+step.model, 3*time.Second, func() bool {
+			for _, s := range env.plat.getSent()[before:] {
+				if strings.Contains(s, "model:"+step.model) {
+					return true
+				}
+			}
+			return false
+		})
+		env.waitFor("turn completed", 3*time.Second, func() bool { return !env.engine.sessions.GetActive("test:" + step.user).Busy() })
+	}
+}

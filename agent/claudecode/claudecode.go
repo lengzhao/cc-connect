@@ -561,6 +561,11 @@ func validateSessionIDInProject(homeDir, workDir, sessionID string) bool {
 
 // StartSession creates a persistent interactive Claude Code session.
 func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentSession, error) {
+	return a.StartSessionWithModel(ctx, sessionID, "")
+}
+
+// StartSessionWithModel overrides only this subprocess, never the shared agent.
+func (a *Agent) StartSessionWithModel(ctx context.Context, sessionID, override string) (core.AgentSession, error) {
 	a.mu.Lock()
 	tools := make([]string, len(a.allowedTools))
 	copy(tools, a.allowedTools)
@@ -568,7 +573,6 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	copy(disTools, a.disallowedTools)
 	maxTok := a.maxContextTokens
 	model := a.model
-	effort := resolveReasoningEffort(a.reasoningEffort, model)
 	workDir := a.workDir
 	mode := a.mode
 	pluginDirs := make([]string, len(a.pluginDirs))
@@ -583,6 +587,10 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 			model = m
 		}
 	}
+	if override != "" {
+		model = override
+	}
+	effort := resolveReasoningEffort(a.reasoningEffort, model)
 	slog.Debug("claudecode: StartSession provider state",
 		"activeIdx", activeIdx,
 		"activeProvider", activeProviderName,

@@ -18,6 +18,7 @@ const ContinueSession = "__continue__"
 
 // Session tracks one conversation between a user and the agent.
 type Session struct {
+	AutomaticModel      *string  `json:"automatic_model,omitempty"`
 	ID                  string   `json:"id"`
 	Name                string   `json:"name"`
 	CreatedBy           string   `json:"created_by,omitempty"`
@@ -794,6 +795,7 @@ func (sm *SessionManager) saveLocked() {
 			s.AgentSessionID = ""
 		}
 		snapSessions[id] = &Session{
+			AutomaticModel:          s.AutomaticModel,
 			ID:                      s.ID,
 			Name:                    s.Name,
 			CreatedBy:               s.CreatedBy,

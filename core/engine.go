@@ -334,7 +334,10 @@ type RateLimitCfg struct {
 
 // Engine routes messages between platforms and the agent for a single project.
 type Engine struct {
-	decisions *decisionService
+	modelRouter       func(context.Context, ModelRouteRequest) (string, error)
+	modelRoutePerTurn bool
+	manualModelAgents sync.Map
+	decisions         *decisionService
 
 	name                  string
 	agent                 Agent
@@ -520,6 +523,7 @@ type queuedMessage struct {
 
 // interactiveState tracks a running interactive agent session and its permission state.
 type interactiveState struct {
+	routedModel              string
 	agentSession             AgentSession
 	platform                 Platform
 	replyCtx                 any
@@ -3818,7 +3822,8 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	if agent != e.agent {
 		agentOverride = agent
 	}
-	state := e.getOrCreateInteractiveStateWith(interactiveKey, p, msg.ReplyCtx, session, sessions, agentOverride, ccSessionKey)
+	routedModel := e.routeTurnModel(msg, session, sessions, agent, interactiveKey)
+	state := e.getOrCreateInteractiveStateWith(interactiveKey, p, msg.ReplyCtx, session, sessions, agentOverride, ccSessionKey, routedModel)
 
 	// Set workspaceDir on the state for idle reaper identification
 	if workspaceDir != "" {
@@ -4092,7 +4097,11 @@ func adoptPendingFromPlaceholder(existing, newState *interactiveState) {
 
 // When agentOverride is non-nil it is used instead of e.agent to start the session.
 // ccSessionKey, when non-empty, is used for CC_SESSION_KEY env injection; otherwise sessionKey is used.
-func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, replyCtx any, session *Session, sessions *SessionManager, agentOverride Agent, ccSessionKey string) *interactiveState {
+func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, replyCtx any, session *Session, sessions *SessionManager, agentOverride Agent, ccSessionKey string, modelOverride ...string) *interactiveState {
+	routedModel := ""
+	if len(modelOverride) > 0 {
+		routedModel = modelOverride[0]
+	}
 	e.interactiveMu.Lock()
 	defer e.interactiveMu.Unlock()
 
@@ -4109,7 +4118,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 		// - the process has not reported an ID yet (startup; empty want is OK).
 		// If wantID is empty (/new, cleared session) but the process already has
 		// a concrete ID, reusing would keep --resume context — recycle (#238).
-		needRecycle := currentID != "" && (wantID == "" || wantID != currentID)
+		needRecycle := state.routedModel != routedModel || (currentID != "" && (wantID == "" || wantID != currentID))
 		if !needRecycle {
 			return state
 		}
@@ -4210,7 +4219,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 	}
 	isResume := startSessionID != ""
 	startAt := time.Now()
-	agentSession, err := agent.StartSession(e.ctx, startSessionID)
+	agentSession, err := startRoutedSession(e.ctx, agent, startSessionID, routedModel)
 	startElapsed := time.Since(startAt)
 	if err != nil {
 		// If resume/continue failed, try a fresh session as fallback.
@@ -4223,7 +4232,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 			session.SetAgentSessionID("", agent.Name())
 			sessions.Save()
 			startAt = time.Now()
-			agentSession, err = agent.StartSession(e.ctx, "")
+			agentSession, err = startRoutedSession(e.ctx, agent, "", routedModel)
 			startElapsed = time.Since(startAt)
 			if err == nil {
 				slog.Info("fresh session started after resume failure",
@@ -4276,6 +4285,7 @@ func (e *Engine) getOrCreateInteractiveStateWith(sessionKey string, p Platform, 
 	}
 
 	newState := &interactiveState{
+		routedModel:      routedModel,
 		agentSession:     agentSession,
 		platform:         p,
 		replyCtx:         replyCtx,
@@ -12661,6 +12671,13 @@ func (e *Engine) handleModelCardAction(args, sessionKey string) *Card {
 }
 
 func (e *Engine) persistWorkspaceModelOverride(interactiveKey, sessionKey string, agent Agent, model string) {
+	if model != "" {
+		e.manualModelAgents.Store(agent, true)
+	}
+	if e.projectState != nil && !e.multiWorkspace && model != "" {
+		e.projectState.SetWorkspaceModelOverride("__project_model_pin__", model)
+		e.projectState.Save()
+	}
 	if e.projectState == nil || !e.multiWorkspace || model == "" {
 		return
 	}
