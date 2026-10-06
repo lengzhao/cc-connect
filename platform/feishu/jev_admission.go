@@ -109,7 +109,7 @@ func callJevAdmission(ctx context.Context, client *http.Client, url, message, ch
 		return false
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		slog.Warn("feishu: jev admission http error; stay quiet", "status", resp.StatusCode, "body", string(raw))
+		slog.Warn("feishu: jev admission http error; stay quiet", "status", resp.StatusCode)
 		return false
 	}
 	var out jevAdmitResponse
@@ -164,7 +164,7 @@ func (p *Platform) isJevThreadEngaged(chatID, rootID, threadID string) bool {
 
 // admitUnmentionedGroup runs sync HTTP admission against Runtime.
 // Returns true only when Jev explicitly admits the message.
-func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, chatID, userID string) bool {
+func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, chatID, userID, messageID string) bool {
 	text := extractTextForJev(msgType, content, mentions, p.getBotOpenID())
 	if text == "" {
 		slog.Debug(p.tag()+": jev admission skip — empty extractable text; stay quiet",
@@ -172,7 +172,22 @@ func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content s
 		return false
 	}
 	// Keep this synchronous and bounded so onMessage can drop before dispatch.
-	return callJevAdmission(ctx, p.jevAdmissionHTTP, p.jevAdmissionURL, text, chatID, "", userID)
+	if p.isMessageRecalled(messageID) {
+		return false
+	}
+	if !callJevAdmission(ctx, p.jevAdmissionHTTP, p.jevAdmissionURL, text, chatID, "", userID) {
+		return false
+	}
+	// Recheck after the remote decision: the triggering message may have been
+	// withdrawn while Jev was running. An unavailable check also stays quiet.
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	recalled, err := p.IsMessageRecalled(checkCtx, replyContext{messageID: messageID, chatID: chatID})
+	if err != nil {
+		slog.Warn(p.tag() + ": jev recall check unavailable; stay quiet")
+		return false
+	}
+	return !recalled
 }
 
 // extractTextForJev returns text suitable for admission. Empty → caller stays quiet.

@@ -1477,6 +1477,12 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	inJevChat := p.jevChannelAdmission && p.jevChannelChats.matches(chatID)
 	inThread := stringValue(msg.ThreadId) != "" || stringValue(msg.RootId) != ""
 
+	// Automatic admission must not send unauthorized text to the judge or
+	// allow an unauthorized sender to change the local stop state.
+	if chatType == "group" && !botMentioned && inJevChat && (!core.AllowList(p.allowFrom, userID) || !core.AllowList(p.allowChat, chatID)) {
+		return nil
+	}
+
 	if chatType == "group" && !botMentioned {
 		rawContent := ""
 		if msg.Content != nil {
@@ -1490,19 +1496,20 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 		// attachment-only messages (image/file/audio) in the same thread
 		// through without re-mentioning the bot. Plain text and rich-text
 		// posts still require an explicit @bot (or Jev admit below).
-		case p.threadIsolation && isAttachmentMsgType(msgType) && p.isActiveThreadSession(sessionKey):
+		// Jev-enabled chats cannot bypass observe/stop/rate gates with attachments.
+		case !inJevChat && p.threadIsolation && isAttachmentMsgType(msgType) && p.isActiveThreadSession(sessionKey):
 			slog.Debug(p.tag()+": passing attachment through active thread without mention",
 				"chat_id", chatID, "session_key", sessionKey, "msg_type", msgType, "message_id", messageID)
 		// Channel mode judges every unmentioned message in the allowlisted group,
 		// including top-level posts and threads that were not @-activated.
 		case inJevChat && p.jevResponseScope == "channel":
-			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID) {
+			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID, messageID) {
 				slog.Debug(p.tag()+": jev admission dropped unmentioned channel message", "chat_id", chatID)
 				return nil
 			}
 		// Thread mode judges only follow-ups in a bot-engaged topic.
 		case inJevChat && inThread && p.isJevThreadEngaged(chatID, stringValue(msg.RootId), stringValue(msg.ThreadId)):
-			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID) {
+			if !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID, messageID) {
 				slog.Debug(p.tag()+": jev admission dropped unmentioned thread follow-up",
 					"chat_id", chatID, "root_id", stringValue(msg.RootId), "thread_id", stringValue(msg.ThreadId))
 				return nil

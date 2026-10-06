@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -121,17 +122,25 @@ func TestNewPlatformParsesJevOptions(t *testing.T) {
 
 func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		scope      string
-		rootID     string
-		engaged    bool
-		admit      bool
-		wantCalls  int
-		wantRoute  bool
-		wantKey    string
-		wantThread bool
-		mentioned  bool
+		name        string
+		messageType string
+		scope       string
+		rootID      string
+		engaged     bool
+		admit       bool
+		wantCalls   int
+		wantRoute   bool
+		wantKey     string
+		wantThread  bool
+		mentioned   bool
+		recalled    bool
+		recallError bool
+		deniedChat  bool
 	}{
+		{name: "channel attachment cannot bypass guards", scope: "channel", rootID: "om_root", messageType: "image", admit: true},
+		{name: "channel withdrawn during admission", scope: "channel", admit: true, wantCalls: 1, recalled: true},
+		{name: "channel recall status unavailable", scope: "channel", admit: true, wantCalls: 1, recallError: true},
+		{name: "channel not authorized never reaches Jev", scope: "channel", admit: true, deniedChat: true},
 		{name: "channel mentioned top level", scope: "channel", mentioned: true, wantRoute: true, wantKey: "lark:oc_test:root:om_message", wantThread: true},
 		{name: "channel top level", scope: "channel", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_message", wantThread: true},
 		{name: "channel unengaged thread", scope: "channel", rootID: "om_root", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_root", wantThread: true},
@@ -141,13 +150,20 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 		{name: "thread engaged", scope: "thread", rootID: "om_root", engaged: true, admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_root", wantThread: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
+			var calls atomic.Int32
 			reactions := make(chan string, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
 				case "/open-apis/auth/v3/tenant_access_token/internal":
 					_, _ = w.Write([]byte(`{"code":0,"expire":7200,"tenant_access_token":"test"}`))
+					return
+				case "/open-apis/im/v1/messages/om_message":
+					if tc.recallError {
+						_, _ = w.Write([]byte(`{"code":99991672,"msg":"permission denied"}`))
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"items": []any{map[string]any{"message_id": "om_message", "deleted": tc.recalled}}}})
 					return
 				case "/open-apis/im/v1/messages/om_message/reply":
 					var body map[string]any
@@ -172,7 +188,11 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 					_, _ = w.Write([]byte(`{"code":0,"data":{"reaction_id":"r_done"}}`))
 					return
 				}
-				calls++
+				if r.URL.Path != "/" {
+					_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
+					return
+				}
+				calls.Add(1)
 				_ = json.NewEncoder(w).Encode(jevAdmitResponse{Admitted: tc.admit})
 			}))
 			defer srv.Close()
@@ -187,6 +207,12 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 			}
 			p := pAny.(*interactivePlatform)
 			p.botOpenID = "ou_bot"
+			if tc.messageType == "image" {
+				p.markThreadSessionActive("lark:oc_test:root:om_root")
+			}
+			if tc.deniedChat {
+				p.allowChat = "oc_other"
+			}
 			p.doneEmoji = "Done"
 			p.client = lark.NewClient("jev-done-"+tc.name, "test", lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client()))
 			if tc.engaged {
@@ -195,6 +221,9 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 			messages := make(chan *core.Message, 1)
 			p.handler = func(_ core.Platform, msg *core.Message) { messages <- msg }
 			messageID, chatID, chatType, msgType, userID := "om_message", "oc_test", "group", "text", "ou_user"
+			if tc.messageType != "" {
+				msgType = tc.messageType
+			}
 			content := `{"text":"please help"}`
 			created := strconv.FormatInt(time.Now().UnixMilli(), 10)
 			var mentions []*larkim.MentionEvent
@@ -208,8 +237,8 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 			}}); err != nil {
 				t.Fatal(err)
 			}
-			if calls != tc.wantCalls {
-				t.Fatalf("Jev calls = %d, want %d", calls, tc.wantCalls)
+			if int(calls.Load()) != tc.wantCalls {
+				t.Fatalf("Jev calls = %d, want %d", calls.Load(), tc.wantCalls)
 			}
 			if !tc.wantRoute {
 				select {
