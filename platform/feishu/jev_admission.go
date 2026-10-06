@@ -58,7 +58,19 @@ func (a jevChatAllowlist) matches(chatID string) bool {
 	return ok
 }
 
+type jevNativeContextKey struct{}
+type jevQueueDeadlineKey struct{}
+
+func jevPayloadContext(ctx context.Context) jevAdmitRequest {
+	p, _ := ctx.Value(jevNativeContextKey{}).(jevAdmitRequest)
+	return p
+}
+
 type jevAdmitRequest struct {
+	SessionKey    string `json:"session_key,omitempty"`
+	RootID        string `json:"root_id,omitempty"`
+	ThreadID      string `json:"thread_id,omitempty"`
+	MessageType   string `json:"message_type,omitempty"`
 	Action        string `json:"action,omitempty"`
 	MessageID     string `json:"message_id,omitempty"`
 	CreatedAtMS   int64  `json:"created_at_ms,omitempty"`
@@ -70,9 +82,10 @@ type jevAdmitRequest struct {
 }
 
 type jevAdmitResponse struct {
-	Reply    string `json:"reply,omitempty"`
-	Admitted bool   `json:"admitted"`
-	Reason   string `json:"reason"`
+	QueueDeadlineMS int64  `json:"queue_deadline_ms,omitempty"`
+	Reply           string `json:"reply,omitempty"`
+	Admitted        bool   `json:"admitted"`
+	Reason          string `json:"reason"`
 }
 
 // callJevAdmission POSTs to the Runtime local admission URL.
@@ -170,7 +183,7 @@ func (p *Platform) isJevThreadEngaged(chatID, rootID, threadID string) bool {
 // Returns true only when Jev explicitly admits the message.
 func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, chatID, userID, messageID string, createdAt ...int64) bool {
 	text := extractTextForJev(msgType, content, mentions, p.getBotOpenID())
-	if text == "" {
+	if text == "" && !p.jevNativeSRE {
 		slog.Debug(p.tag()+": jev admission skip — empty extractable text; stay quiet",
 			"chat_id", chatID, "msg_type", msgType)
 		return false
@@ -179,7 +192,11 @@ func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content s
 	if p.isMessageRecalled(messageID) {
 		return false
 	}
-	payload := jevAdmitRequest{Message: text, ChannelID: chatID, Sender: userID, MessageID: messageID}
+	payload := jevPayloadContext(ctx)
+	payload.Message = text
+	payload.ChannelID = chatID
+	payload.Sender = userID
+	payload.MessageID = messageID
 	if len(createdAt) > 0 {
 		payload.CreatedAtMS = createdAt[0]
 	}
@@ -188,7 +205,8 @@ func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content s
 			payload.MentionsOther = true
 		}
 	}
-	if !requestJevAdmission(ctx, p.jevAdmissionHTTP, p.jevAdmissionURL, payload).Admitted {
+	out := requestJevAdmission(ctx, p.jevAdmissionHTTP, p.jevAdmissionURL, payload)
+	if !out.Admitted {
 		return false
 	}
 	// Recheck after the remote decision: the triggering message may have been
@@ -199,6 +217,9 @@ func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content s
 	if err != nil {
 		slog.Warn(p.tag() + ": jev recall check unavailable; stay quiet")
 		return false
+	}
+	if deadline, ok := ctx.Value(jevQueueDeadlineKey{}).(*int64); ok {
+		*deadline = out.QueueDeadlineMS
 	}
 	return !recalled
 }

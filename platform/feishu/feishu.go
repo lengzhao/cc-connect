@@ -108,11 +108,12 @@ func init() {
 }
 
 type replyContext struct {
-	messageID  string
-	chatID     string
-	chatType   string
-	threadID   string
-	sessionKey string
+	queueDeadlineMS int64
+	messageID       string
+	chatID          string
+	chatType        string
+	threadID        string
+	sessionKey      string
 }
 
 type feishuUserInfo struct {
@@ -144,6 +145,7 @@ type Platform struct {
 	// Jev thread admission: after @ activates a topic, unmentioned follow-ups
 	// in that engaged thread are judged; @ in the thread always answers.
 	// Top-level group messages still require @ (require_mention).
+	jevNativeSRE        bool
 	jevChannelAdmission bool
 	jevResponseScope    string // "thread" (default) or "channel"
 	jevAdmissionURL     string
@@ -342,6 +344,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	respondToAtEveryoneAndHere, _ := opts["respond_to_at_everyone_and_here"].(bool)
 	shareSessionInChannel, _ := opts["share_session_in_channel"].(bool)
 	threadIsolation, _ := opts["thread_isolation"].(bool)
+	jevNativeSRE, _ := opts["jev_native_sre"].(bool)
 	jevChannelAdmission, _ := opts["jev_channel_admission"].(bool)
 	jevResponseScope, _ := opts["jev_response_scope"].(string)
 	jevResponseScope = strings.ToLower(strings.TrimSpace(jevResponseScope))
@@ -460,6 +463,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		respondToAtEveryoneAndHere: respondToAtEveryoneAndHere,
 		shareSessionInChannel:      shareSessionInChannel,
 		threadIsolation:            threadIsolation,
+		jevNativeSRE:               jevNativeSRE,
 		jevChannelAdmission:        jevChannelAdmission,
 		jevResponseScope:           jevResponseScope,
 		jevAdmissionURL:            strings.TrimSpace(jevAdmissionURL),
@@ -1203,6 +1207,9 @@ func (p *Platform) dispatchCoreMessage(msg *core.Message) {
 		slog.Debug(p.tag()+": recalled message dispatch dropped", "message_id", msg.MessageID)
 		return
 	}
+	if rc, ok := msg.ReplyCtx.(replyContext); ok {
+		msg.QueueDeadlineMS = rc.queueDeadlineMS
+	}
 	if msg.ChannelKey == "" {
 		if rc, ok := msg.ReplyCtx.(replyContext); ok && rc.chatID != "" {
 			msg.ChannelKey = rc.chatID
@@ -1478,6 +1485,11 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	if chatType == "group" && inJevChat && ((sender.SenderType != nil && *sender.SenderType != "user") || (botOpenID != "" && userID == botOpenID)) {
 		return nil
 	}
+	var queueDeadlineMS int64
+	if p.jevNativeSRE {
+		ctx = context.WithValue(ctx, jevQueueDeadlineKey{}, &queueDeadlineMS)
+		ctx = context.WithValue(ctx, jevNativeContextKey{}, jevAdmitRequest{SessionKey: sessionKey, RootID: stringValue(msg.RootId), ThreadID: stringValue(msg.ThreadId), MessageType: msgType})
+	}
 	inThread := stringValue(msg.ThreadId) != "" || stringValue(msg.RootId) != ""
 
 	// Automatic admission must not send unauthorized text to the judge or
@@ -1494,7 +1506,13 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 			raw = *msg.Content
 		}
 		controlCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		out := requestJevAdmission(controlCtx, p.jevAdmissionHTTP, p.jevAdmissionURL, jevAdmitRequest{Action: "activity", Message: extractTextForJev(msgType, raw, msg.Mentions, botOpenID), ChannelID: chatID, Sender: userID})
+		payload := jevPayloadContext(ctx)
+		payload.Action = "activity"
+		payload.Message = extractTextForJev(msgType, raw, msg.Mentions, botOpenID)
+		payload.ChannelID = chatID
+		payload.Sender = userID
+		payload.MessageID = messageID
+		out := requestJevAdmission(controlCtx, p.jevAdmissionHTTP, p.jevAdmissionURL, payload)
 		cancel()
 		if out.Reason == "quiet" {
 			if out.Reply != "" {
@@ -1513,7 +1531,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 		}
 		switch {
 		// Feishu @all sends {"text":"@_all"} with 0 mentions.
-		case p.respondToAtEveryoneAndHere && strings.Contains(rawContent, "@_all"):
+		case !p.jevNativeSRE && p.respondToAtEveryoneAndHere && strings.Contains(rawContent, "@_all"):
 			slog.Debug(p.tag()+": responding to @all message", "chat_id", chatID)
 		// Once a thread has been engaged via @bot, allow follow-up
 		// attachment-only messages (image/file/audio) in the same thread
@@ -1576,11 +1594,12 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	parentID := stringValue(msg.ParentId)
 
 	rctx := replyContext{
-		messageID:  messageID,
-		chatID:     chatID,
-		chatType:   chatType,
-		threadID:   stringValue(msg.ThreadId),
-		sessionKey: sessionKey,
+		queueDeadlineMS: queueDeadlineMS,
+		messageID:       messageID,
+		chatID:          chatID,
+		chatType:        chatType,
+		threadID:        stringValue(msg.ThreadId),
+		sessionKey:      sessionKey,
 	}
 	slog.Debug(p.tag()+": routed inbound message",
 		"message_id", messageID,
@@ -1630,6 +1649,10 @@ func (p *Platform) dispatchMessage(ctx context.Context, msgType, content string,
 
 	// Resolve user and chat names asynchronously so SDK dispatcher is not blocked.
 	userName, userEmail := p.resolveUserNameAndEmail(userID)
+	if p.jevNativeSRE && !botMentioned && rctx.chatType == "group" && userEmail == "" {
+		slog.Warn(p.tag() + ": native SRE automatic turn has no sender identity; stay quiet")
+		return
+	}
 	chatName := p.resolveChatName(chatID)
 
 	// If this message is a reply to another message, fetch the quoted content

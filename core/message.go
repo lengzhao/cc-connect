@@ -209,6 +209,9 @@ type LocationAttachment struct {
 
 // Message represents a unified incoming message from any platform.
 type Message struct {
+	// QueueDeadlineMS bounds waiting in a busy session; zero preserves unlimited wait.
+	QueueDeadlineMS int64
+
 	SessionKey   string // unique key for conversation context, e.g. "feishu:{chatID}:{userID}" or opaque API conversation ID
 	Platform     string
 	MessageID    string // platform message ID for tracing

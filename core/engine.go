@@ -497,6 +497,7 @@ type workspaceInitFlow struct {
 // The message is NOT sent to agent stdin at queue time; the event loop
 // sends it after the current turn completes to avoid mid-turn interference.
 type queuedMessage struct {
+	queueDeadlineMS   int64
 	messageID         string
 	platform          Platform
 	replyCtx          any
@@ -3240,6 +3241,7 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 		return true // handled: queue-full reply sent
 	}
 	state.pendingMessages = append(state.pendingMessages, queuedMessage{
+		queueDeadlineMS:   msg.QueueDeadlineMS,
 		messageID:         msg.MessageID,
 		platform:          p,
 		replyCtx:          msg.ReplyCtx,
@@ -6294,7 +6296,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			// for the next turn instead of returning.
 			state.mu.Lock()
 			droppedStale := 0
-			for len(state.pendingMessages) > 0 && e.isQueuedUserMessageStaleForDrainLocked(state, state.pendingMessages[0].userMessageTimeMs) {
+			for len(state.pendingMessages) > 0 && (queueExpired(state.pendingMessages[0], time.Now()) || e.isQueuedUserMessageStaleForDrainLocked(state, state.pendingMessages[0].userMessageTimeMs)) {
 				state.pendingMessages = state.pendingMessages[1:]
 				droppedStale++
 			}
@@ -6683,7 +6685,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 			return true
 		}
 		droppedStale := 0
-		for len(state.pendingMessages) > 0 && e.isQueuedUserMessageStaleForDrainLocked(state, state.pendingMessages[0].userMessageTimeMs) {
+		for len(state.pendingMessages) > 0 && (queueExpired(state.pendingMessages[0], time.Now()) || e.isQueuedUserMessageStaleForDrainLocked(state, state.pendingMessages[0].userMessageTimeMs)) {
 			state.pendingMessages = state.pendingMessages[1:]
 			droppedStale++
 		}
@@ -17759,4 +17761,9 @@ func restoreActiveProviderFromSession(agent Agent, session *Session) {
 	}
 	slog.Info("restored active provider from session",
 		"session_id", session.ID, "provider", want)
+}
+
+// queueExpired applies only to queued turns, never interrupts a running turn.
+func queueExpired(q queuedMessage, now time.Time) bool {
+	return q.queueDeadlineMS > 0 && now.UnixMilli() >= q.queueDeadlineMS
 }

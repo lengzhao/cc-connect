@@ -347,3 +347,48 @@ func TestJevChannelPreservesTopicWithIsolationDisabled(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeJevPassesOriginalTopicAndQueueDeadline(t *testing.T) {
+	deadline := time.Now().Add(time.Minute).UnixMilli()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/admit" {
+			var req jevAdmitRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.SessionKey != "lark:oc_test:root:om_root" || req.RootID != "om_root" || req.MessageType != "text" || req.MessageID != "om_message" {
+				t.Errorf("lost native context: %+v", req)
+			}
+			_ = json.NewEncoder(w).Encode(jevAdmitResponse{Admitted: true, Reason: "followup", QueueDeadlineMS: deadline})
+			return
+		}
+		if r.URL.Path == "/open-apis/auth/v3/tenant_access_token/internal" {
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"t","expire":7200}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":0,"data":{"items":[{"message_id":"om_message","deleted":false}]}}`))
+	}))
+	defer srv.Close()
+	pp, err := newPlatform("lark", "https://open.larksuite.com", map[string]any{"app_id": "native-test", "app_secret": "secret", "jev_native_sre": true, "jev_channel_admission": true, "jev_channel_chats": "all", "jev_response_scope": "channel", "jev_admission_url": srv.URL + "/admit", "include_user_email": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := pp.(*interactivePlatform)
+	p.botOpenID = "ou_bot"
+	p.client = lark.NewClient("native-test", "secret", lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client()))
+	p.userNameCache.Store("ou_user", feishuUserInfo{name: "Alice", email: "alice@example.test"})
+	messages := make(chan *core.Message, 1)
+	p.handler = func(_ core.Platform, m *core.Message) { messages <- m }
+	id, chat, typ, mt, user, root, content := "om_message", "oc_test", "group", "text", "ou_user", "om_root", `{"text":"可以"}`
+	err = p.onMessage(context.Background(), &larkim.P2MessageReceiveV1{Event: &larkim.P2MessageReceiveV1Data{Sender: &larkim.EventSender{SenderId: &larkim.UserId{OpenId: &user}}, Message: &larkim.EventMessage{MessageId: &id, ChatId: &chat, ChatType: &typ, MessageType: &mt, RootId: &root, Content: &content}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case m := <-messages:
+		if m.QueueDeadlineMS != deadline || m.UserEmail != "alice@example.test" || m.ReplyCtx.(replyContext).messageID != id {
+			t.Fatalf("delivery: %+v", m)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("native turn not delivered")
+	}
+}

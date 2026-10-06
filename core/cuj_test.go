@@ -2487,3 +2487,49 @@ func TestCUJ_DecisionReturnsToOriginalSession(t *testing.T) {
 		t.Fatalf("decision appears %d times in history", count)
 	}
 }
+
+// A busy conversation must discard an expired automatic follow-up while still
+// delivering a later ordinary message with its original reply context.
+func TestCUJ_A8_BusyQueueExpiresAutomaticFollowUp(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	as := newQueuingSession("expiry")
+	e := NewEngine("test", &controllableAgent{nextSession: as}, []Platform{p}, "", LangEnglish)
+	key := "test:alice"
+	session := e.sessions.GetOrCreateActive(key)
+	state := &interactiveState{agentSession: as, platform: p, replyCtx: "first", pendingMessages: []queuedMessage{
+		{platform: p, replyCtx: "expired", content: "expired-auto", queueDeadlineMS: time.Now().Add(-time.Second).UnixMilli()},
+		{platform: p, replyCtx: "fresh", content: "fresh-message", skipPromptMeta: true},
+	}}
+	e.interactiveStates[key] = state
+	go func() {
+		as.events <- Event{Type: EventResult, Content: "first answer", Done: true}
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			as.sendMu.Lock()
+			n := len(as.sendCalls)
+			as.sendMu.Unlock()
+			if n > 0 {
+				as.events <- Event{Type: EventResult, Content: "fresh answer", Done: true}
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	sent := make(chan error, 1)
+	sent <- nil
+	done := make(chan struct{})
+	go func() {
+		e.processInteractiveEvents(state, session, e.sessions, key, "first", time.Now(), nil, sent, "first", turnStages{})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queue failed to drain")
+	}
+	as.sendMu.Lock()
+	defer as.sendMu.Unlock()
+	if len(as.sendCalls) != 1 || as.sendCalls[0] != "fresh-message" {
+		t.Fatalf("delivered queued prompts: %+v", as.sendCalls)
+	}
+}
