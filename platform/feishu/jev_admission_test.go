@@ -392,3 +392,35 @@ func TestNativeJevPassesOriginalTopicAndQueueDeadline(t *testing.T) {
 		t.Fatal("native turn not delivered")
 	}
 }
+
+func TestNativeJevStopAcknowledgesWithoutAgentTurn(t *testing.T) {
+	var replies atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/admit":
+			_ = json.NewEncoder(w).Encode(jevAdmitResponse{Reason: "stopped", Reply: "好，我先停下。"})
+		case "/open-apis/auth/v3/tenant_access_token/internal":
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"stop-token","expire":7200}`))
+		case "/open-apis/im/v1/messages/om_stop/reply":
+			replies.Add(1)
+			_, _ = w.Write([]byte(`{"code":0,"data":{"message_id":"ack"}}`))
+		default:
+			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[{"message_id":"om_stop","deleted":false}]}}`))
+		}
+	}))
+	defer srv.Close()
+	pp, err := newPlatform("lark", "https://open.larksuite.com", map[string]any{"app_id": "native-stop", "app_secret": "secret", "jev_native_sre": true, "jev_channel_admission": true, "jev_channel_chats": "all", "jev_response_scope": "channel", "jev_admission_url": srv.URL + "/admit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := pp.(*interactivePlatform)
+	p.client = lark.NewClient("native-stop", "secret", lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client()))
+	ctx := context.WithValue(context.Background(), jevNativeContextKey{}, jevAdmitRequest{SessionKey: "lark:oc_chat:root:root", RootID: "root", MessageType: "text"})
+	if p.admitUnmentionedGroup(ctx, "text", `{"text":"不用了"}`, nil, "oc_chat", "ou_user", "om_stop") {
+		t.Fatal("stop became agent turn")
+	}
+	if replies.Load() != 1 {
+		t.Fatalf("stop acknowledgements: %d", replies.Load())
+	}
+}

@@ -206,7 +206,7 @@ func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content s
 		}
 	}
 	out := requestJevAdmission(ctx, p.jevAdmissionHTTP, p.jevAdmissionURL, payload)
-	if !out.Admitted {
+	if !out.Admitted && !(p.jevNativeSRE && out.Reply != "") {
 		return false
 	}
 	// Recheck after the remote decision: the triggering message may have been
@@ -218,10 +218,17 @@ func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content s
 		slog.Warn(p.tag() + ": jev recall check unavailable; stay quiet")
 		return false
 	}
+	if !recalled && !out.Admitted && p.jevNativeSRE && out.Reply != "" {
+		rc := replyContext{messageID: messageID, chatID: chatID, chatType: "group", sessionKey: payload.SessionKey, threadID: payload.ThreadID}
+		if err := p.Reply(ctx, rc, out.Reply); err != nil {
+			slog.Warn(p.tag()+": native admission acknowledgement failed", "error", err)
+		}
+		return false
+	}
 	if deadline, ok := ctx.Value(jevQueueDeadlineKey{}).(*int64); ok {
 		*deadline = out.QueueDeadlineMS
 	}
-	return !recalled
+	return !recalled && out.Admitted
 }
 
 // extractTextForJev returns text suitable for admission. Empty → caller stays quiet.
