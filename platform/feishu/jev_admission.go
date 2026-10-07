@@ -67,6 +67,7 @@ func jevPayloadContext(ctx context.Context) jevAdmitRequest {
 }
 
 type jevAdmitRequest struct {
+	ThreadContext string `json:"thread_context,omitempty"`
 	SessionKey    string `json:"session_key,omitempty"`
 	RootID        string `json:"root_id,omitempty"`
 	ThreadID      string `json:"thread_id,omitempty"`
@@ -183,6 +184,9 @@ func (p *Platform) isJevThreadEngaged(chatID, rootID, threadID string) bool {
 // Returns true only when Jev explicitly admits the message.
 func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content string, mentions []*larkim.MentionEvent, chatID, userID, messageID string, createdAt ...int64) bool {
 	text := extractTextForJev(msgType, content, mentions, p.getBotOpenID())
+	if text == "" && p.jevScopedAdmission && isAttachmentMsgType(msgType) {
+		text = "[User shared an attachment of type " + msgType + "; use the topic context to judge whether a response is wanted.]"
+	}
 	if text == "" && !p.jevNativeSRE {
 		slog.Debug(p.tag()+": jev admission skip — empty extractable text; stay quiet",
 			"chat_id", chatID, "msg_type", msgType)
@@ -204,6 +208,9 @@ func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content s
 		if m != nil && m.Id != nil && m.Id.OpenId != nil && *m.Id.OpenId != "" && *m.Id.OpenId != p.getBotOpenID() {
 			payload.MentionsOther = true
 		}
+	}
+	if p.jevScopedAdmission && (payload.RootID != "" || payload.ThreadID != "") {
+		payload.ThreadContext = p.jevThreadContext(ctx, payload)
 	}
 	out := requestJevAdmission(ctx, p.jevAdmissionHTTP, p.jevAdmissionURL, payload)
 	if !out.Admitted && !(p.jevNativeSRE && out.Reply != "") {

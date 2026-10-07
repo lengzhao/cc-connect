@@ -122,22 +122,30 @@ func TestNewPlatformParsesJevOptions(t *testing.T) {
 
 func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		messageType string
-		scope       string
-		rootID      string
-		engaged     bool
-		admit       bool
-		wantCalls   int
-		wantRoute   bool
-		wantKey     string
-		wantThread  bool
-		mentioned   bool
-		recalled    bool
-		recallError bool
-		deniedChat  bool
-		quiet       bool
+		scoped         bool
+		channelEnabled bool
+		threadEnabled  bool
+		name           string
+		messageType    string
+		scope          string
+		rootID         string
+		engaged        bool
+		admit          bool
+		wantCalls      int
+		wantRoute      bool
+		wantKey        string
+		wantThread     bool
+		mentioned      bool
+		recalled       bool
+		recallError    bool
+		deniedChat     bool
+		quiet          bool
 	}{
+		{name: "scoped channel disabled", scoped: true, threadEnabled: true, scope: "channel", admit: true},
+		{name: "scoped unengaged thread enabled", scoped: true, threadEnabled: true, scope: "thread", rootID: "om_root", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_root", wantThread: true},
+		{name: "scoped thread disabled even engaged", scoped: true, channelEnabled: true, scope: "channel", rootID: "om_root", engaged: true, admit: true},
+		{name: "scoped channel enabled", scoped: true, channelEnabled: true, scope: "thread", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_message", wantThread: true},
+		{name: "scoped disabled explicit mention still works", scoped: true, scope: "thread", mentioned: true, admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_message", wantThread: true},
 		{name: "quiet blocks explicit mention", scope: "channel", mentioned: true, quiet: true, wantCalls: 1},
 		{name: "channel attachment cannot bypass guards", scope: "channel", rootID: "om_root", messageType: "image", admit: true},
 		{name: "channel withdrawn during admission", scope: "channel", admit: true, wantCalls: 1, recalled: true},
@@ -199,6 +207,9 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 					t.Error(err)
 				}
+				if payload.RootID != tc.rootID {
+					t.Errorf("root ID lost: %q", payload.RootID)
+				}
 				if tc.mentioned && payload.Action != "activity" {
 					t.Error("mention must only record activity")
 				}
@@ -216,6 +227,7 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 				"app_id": "cli_test", "app_secret": "secret",
 				"jev_channel_admission": true, "jev_channel_chats": "oc_test",
 				"jev_admission_url": srv.URL, "jev_response_scope": tc.scope,
+				"jev_scoped_admission": tc.scoped, "jev_channel_enabled": tc.channelEnabled, "jev_thread_enabled": tc.threadEnabled,
 				"require_mention": true, "group_reply_all": true, "thread_isolation": true,
 			})
 			if err != nil {
