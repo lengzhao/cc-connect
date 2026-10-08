@@ -91,6 +91,9 @@ func TestAutomonJWTDelegationBotMentionToHook(t *testing.T) {
 			t.Fatalf("wrong identity: %+v", m)
 		}
 		hook := core.HookEventFromMessage("automon", p, m, core.HookEventMessageReceived, "")
+		if hook.Context["sender_type"] != "app" {
+			t.Fatalf("delegated bot lost original sender type: %+v", hook.Context)
+		}
 		if hook.UserID != "ou_source_bot" || hook.UserEmail != "owner@ambr.io" {
 			t.Fatalf("hook lost delegation: %+v", hook)
 		}

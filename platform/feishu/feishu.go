@@ -108,6 +108,7 @@ func init() {
 }
 
 type replyContext struct {
+	senderType      string // Original Lark sender_type; never inferred from delegated email.
 	queueDeadlineMS int64
 	messageID       string
 	chatID          string
@@ -811,6 +812,10 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 	if event.Event.Operator != nil {
 		userID = event.Event.Operator.OpenID
 	}
+	operatorSenderType := ""
+	if userID != "" {
+		operatorSenderType = "user"
+	}
 	chatID := ""
 	messageID := ""
 	if event.Event.Context != nil {
@@ -900,7 +905,7 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 			return nil, nil
 		}
 
-		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
+		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey, senderType: operatorSenderType}
 		userName, userEmail := p.resolveUserNameAndEmail(userID)
 		h := p.getHandler()
 		go h(p.dispatchPlatform(), &core.Message{
@@ -935,7 +940,7 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 
 	// askq: — AskUserQuestion option selected, forward as user message
 	if strings.HasPrefix(actionVal, "askq:") {
-		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
+		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey, senderType: operatorSenderType}
 		userName, userEmail := p.resolveUserNameAndEmail(userID)
 		h := p.getHandler()
 		go h(p.dispatchPlatform(), &core.Message{
@@ -970,7 +975,7 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 	// cmd: — async command dispatch, with optional in-place card replacement
 	if strings.HasPrefix(actionVal, "cmd:") {
 		cmdText := strings.TrimPrefix(actionVal, "cmd:")
-		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
+		rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey, senderType: operatorSenderType}
 
 		slog.Info(p.tag()+": card action dispatched as command", "cmd", cmdText, "user", userID)
 
@@ -1243,6 +1248,15 @@ func (p *Platform) PromptChannelAttrs(replyCtx any) []string {
 	return attrs
 }
 
+// Unknown/synthetic senders stay absent rather than impersonating a user.
+func normalizeSenderType(value string) string {
+	switch value {
+	case "user", "app":
+		return value
+	}
+	return ""
+}
+
 // HookContext implements core.HookContextProvider.
 func (p *Platform) HookContext(replyCtx any) core.HookContext {
 	rc, ok := replyCtx.(replyContext)
@@ -1257,6 +1271,9 @@ func (p *Platform) HookContext(replyCtx any) core.HookContext {
 	}
 	if rc.messageID != "" {
 		ctx["message_id"] = rc.messageID
+	}
+	if typ := normalizeSenderType(rc.senderType); typ != "" {
+		ctx["sender_type"] = typ
 	}
 	return core.HookContext{Context: ctx}
 }
@@ -1617,6 +1634,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 
 	rctx := replyContext{
 		queueDeadlineMS: queueDeadlineMS,
+		senderType:      normalizeSenderType(stringValue(sender.SenderType)),
 		messageID:       messageID,
 		chatID:          chatID,
 		chatType:        chatType,
@@ -5258,7 +5276,7 @@ func (p *Platform) onBotMenu(event *larkapplication.P2BotMenuV6) error {
 		UserID:     userID,
 		UserName:   userName,
 		UserEmail:  userEmail,
-		ReplyCtx:   replyContext{chatID: userID, sessionKey: sessionKey},
+		ReplyCtx:   replyContext{chatID: userID, sessionKey: sessionKey, senderType: "user"},
 	})
 	return nil
 }

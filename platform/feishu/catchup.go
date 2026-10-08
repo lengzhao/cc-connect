@@ -152,6 +152,10 @@ func (p *Platform) injectCatchupMessage(ctx context.Context, msg *larkim.Message
 	parentID := stringValue(msg.ParentId)
 
 	userID := ""
+	senderType := ""
+	if msg.Sender != nil {
+		senderType = normalizeSenderType(stringValue(msg.Sender.SenderType))
+	}
 	if msg.Sender != nil && msg.Sender.Id != nil {
 		userID = *msg.Sender.Id
 	}
@@ -164,6 +168,7 @@ func (p *Platform) injectCatchupMessage(ctx context.Context, msg *larkim.Message
 	}
 	sessionKey := p.makeSessionKey(eventMsg, chatID, userID)
 	rctx := replyContext{
+		senderType: senderType,
 		messageID:  messageID,
 		chatID:     chatID,
 		chatType:   "group",
