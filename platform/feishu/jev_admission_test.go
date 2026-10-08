@@ -123,6 +123,7 @@ func TestNewPlatformParsesJevOptions(t *testing.T) {
 func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 	for _, tc := range []struct {
 		scoped         bool
+		dynamic        bool
 		channelEnabled bool
 		threadEnabled  bool
 		name           string
@@ -141,6 +142,9 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 		deniedChat     bool
 		quiet          bool
 	}{
+		{name: "dynamic policies can enable default-off channel", scoped: true, dynamic: true, scope: "thread", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_message", wantThread: true},
+		{name: "dynamic policies can disable default-on channel", scoped: true, dynamic: true, channelEnabled: true, scope: "channel", admit: false, wantCalls: 1},
+		{name: "dynamic policies can enable default-off thread", scoped: true, dynamic: true, scope: "thread", rootID: "om_root", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_root", wantThread: true},
 		{name: "scoped channel disabled", scoped: true, threadEnabled: true, scope: "channel", admit: true},
 		{name: "scoped unengaged thread enabled", scoped: true, threadEnabled: true, scope: "thread", rootID: "om_root", admit: true, wantCalls: 1, wantRoute: true, wantKey: "lark:oc_test:root:om_root", wantThread: true},
 		{name: "scoped thread disabled even engaged", scoped: true, channelEnabled: true, scope: "channel", rootID: "om_root", engaged: true, admit: true},
@@ -227,7 +231,7 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 				"app_id": "cli_test", "app_secret": "secret",
 				"jev_channel_admission": true, "jev_channel_chats": "oc_test",
 				"jev_admission_url": srv.URL, "jev_response_scope": tc.scope,
-				"jev_scoped_admission": tc.scoped, "jev_channel_enabled": tc.channelEnabled, "jev_thread_enabled": tc.threadEnabled,
+				"jev_dynamic_policies": tc.dynamic, "jev_scoped_admission": tc.scoped, "jev_channel_enabled": tc.channelEnabled, "jev_thread_enabled": tc.threadEnabled,
 				"require_mention": true, "group_reply_all": true, "thread_isolation": true,
 			})
 			if err != nil {

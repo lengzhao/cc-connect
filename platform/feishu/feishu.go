@@ -145,6 +145,7 @@ type Platform struct {
 	// Jev thread admission: after @ activates a topic, unmentioned follow-ups
 	// in that engaged thread are judged; @ in the thread always answers.
 	// Top-level group messages still require @ (require_mention).
+	jevDynamicPolicies  bool
 	jevScopedAdmission  bool
 	jevChannelEnabled   bool
 	jevThreadEnabled    bool
@@ -347,6 +348,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 	respondToAtEveryoneAndHere, _ := opts["respond_to_at_everyone_and_here"].(bool)
 	shareSessionInChannel, _ := opts["share_session_in_channel"].(bool)
 	threadIsolation, _ := opts["thread_isolation"].(bool)
+	jevDynamicPolicies, _ := opts["jev_dynamic_policies"].(bool)
 	jevScopedAdmission, _ := opts["jev_scoped_admission"].(bool)
 	jevChannelEnabled, _ := opts["jev_channel_enabled"].(bool)
 	jevThreadEnabled, _ := opts["jev_thread_enabled"].(bool)
@@ -469,6 +471,7 @@ func newPlatform(name, domain string, opts map[string]any) (core.Platform, error
 		respondToAtEveryoneAndHere: respondToAtEveryoneAndHere,
 		shareSessionInChannel:      shareSessionInChannel,
 		threadIsolation:            threadIsolation,
+		jevDynamicPolicies:         jevDynamicPolicies,
 		jevScopedAdmission:         jevScopedAdmission,
 		jevChannelEnabled:          jevChannelEnabled,
 		jevThreadEnabled:           jevThreadEnabled,
@@ -1547,7 +1550,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 			if inThread {
 				enabled = p.jevThreadEnabled
 			}
-			if !enabled || !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID, messageID, createTimeMs) {
+			if (!enabled && !p.jevDynamicPolicies) || !p.admitUnmentionedGroup(ctx, msgType, rawContent, msg.Mentions, chatID, userID, messageID, createTimeMs) {
 				return nil
 			}
 		case !p.jevNativeSRE && p.respondToAtEveryoneAndHere && strings.Contains(rawContent, "@_all"):
