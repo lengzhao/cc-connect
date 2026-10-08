@@ -67,6 +67,7 @@ func jevPayloadContext(ctx context.Context) jevAdmitRequest {
 }
 
 type jevAdmitRequest struct {
+	ThreadEngaged bool   `json:"thread_engaged"`
 	ThreadContext string `json:"thread_context,omitempty"`
 	SessionKey    string `json:"session_key,omitempty"`
 	RootID        string `json:"root_id,omitempty"`
@@ -197,6 +198,7 @@ func (p *Platform) admitUnmentionedGroup(ctx context.Context, msgType, content s
 		return false
 	}
 	payload := jevPayloadContext(ctx)
+	payload.ThreadEngaged = p.isJevThreadEngaged(chatID, payload.RootID, payload.ThreadID)
 	payload.Message = text
 	payload.ChannelID = chatID
 	payload.Sender = userID
