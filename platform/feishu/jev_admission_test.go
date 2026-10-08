@@ -207,6 +207,9 @@ func TestJevResponseScopeRoutesGroupMessages(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 					t.Error(err)
 				}
+				if !tc.mentioned && payload.ThreadEngaged != tc.engaged {
+					t.Errorf("thread engagement lost: got %v want %v", payload.ThreadEngaged, tc.engaged)
+				}
 				if payload.RootID != tc.rootID {
 					t.Errorf("root ID lost: %q", payload.RootID)
 				}
