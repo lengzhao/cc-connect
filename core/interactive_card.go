@@ -3,11 +3,15 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"time"
 )
+
+var interactiveCardID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,159}$`)
 
 // Card management authenticates a current caller, but does not bind ownership
 // to that caller's conversation. Ownership is the configured engine/project.
@@ -23,6 +27,9 @@ func (d *decisionService) managementOrigin(token string) (DecisionOrigin, error)
 }
 
 func (d *decisionService) managedCard(id string) (*Decision, error) {
+	if !interactiveCardID.MatchString(id) {
+		return nil, fmt.Errorf("invalid card_id: use 1-160 ASCII letters, digits, dots, underscores or hyphens, starting with a letter or digit")
+	}
 	if d.store != nil {
 		var remote struct {
 			Items []*Decision `json:"items"`
@@ -91,10 +98,22 @@ func (d *decisionService) manageTrusted(ctx context.Context, req interactiveCard
 		return nil, fmt.Errorf("unsupported service card operation")
 	}
 	if req.Action == "create" {
-		if req.CardID != "" || req.Spec.RequestID != "" || req.ExpectedRevision != nil {
-			return nil, fmt.Errorf("create must omit card_id and revision")
+		if req.Spec.RequestID != "" || req.ExpectedRevision != nil {
+			return nil, fmt.Errorf("create must omit request_id and revision")
 		}
-		return d.createMode(ctx, req.Token, req.Spec, "none")
+		if req.CardID != "" {
+			existing, err := d.managedCard(req.CardID)
+			if err == nil {
+				if existing.ReturnMode != "none" {
+					return nil, fmt.Errorf("card_id belongs to an ask_user card")
+				}
+				return existing, nil
+			}
+			if !errors.Is(err, ErrDecisionNotFound) {
+				return nil, err
+			}
+		}
+		return d.createModeWithID(ctx, req.Token, req.Spec, "none", req.CardID)
 	}
 	v, err := d.managedCard(req.CardID)
 	if err != nil {

@@ -64,12 +64,22 @@ func TestSharedCardStoreSurvivesLostWorkspaceAndRunsManagementWithoutReply(t *te
 	t.Setenv("CC_CARD_STORE_URL", server.URL)
 	t.Setenv("CC_CARD_STORE_TOKEN", "fixture")
 	e, p, session, token := decisionFixture(t)
-	v, err := e.decisions.manage(context.Background(), interactiveCardRequest{Token: token, Action: "create", Spec: decisionSpec()})
+	v, err := e.decisions.manage(context.Background(), interactiveCardRequest{Token: token, Action: "create", CardID: "external-release-123", Spec: decisionSpec()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = p.handler(v.ID, "alice", "yes", "approved", v.MessageID); err != nil {
 		t.Fatal(err)
+	}
+	// A second process with an empty local cache must read the shared ID,
+	// not send a second card or overwrite the original interaction.
+	other, otherPlatform, _, otherToken := decisionFixture(t)
+	other.decisions.mu.Lock()
+	delete(other.decisions.items, v.ID)
+	other.decisions.mu.Unlock()
+	duplicate, duplicateErr := other.decisions.manage(context.Background(), interactiveCardRequest{Token: otherToken, Action: "create", CardID: v.ID, Spec: decisionSpec()})
+	if duplicateErr != nil || duplicate.ID != v.ID || len(otherPlatform.cards) != 0 || len(duplicate.Interactions) != 1 {
+		t.Fatalf("shared ID replay: %+v %v", duplicate, duplicateErr)
 	}
 	// Rehydrate using an entirely different local path.
 	e.decisions = newDecisionService(e, t.TempDir()+"/empty-sessions")

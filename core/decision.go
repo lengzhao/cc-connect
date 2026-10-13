@@ -319,6 +319,9 @@ func (d *decisionService) create(ctx context.Context, token string, spec Decisio
 	return d.createMode(ctx, token, spec, "session")
 }
 func (d *decisionService) createMode(ctx context.Context, token string, spec DecisionSpec, mode string) (*Decision, error) {
+	return d.createModeWithID(ctx, token, spec, mode, "")
+}
+func (d *decisionService) createModeWithID(ctx context.Context, token string, spec DecisionSpec, mode, cardID string) (*Decision, error) {
 	d.mu.Lock()
 	var origin DecisionOrigin
 	for _, b := range d.origins {
@@ -411,12 +414,19 @@ func (d *decisionService) createMode(ctx context.Context, token string, spec Dec
 	}
 	hash := sha256.Sum256(raw)
 	id := hex.EncodeToString(hash[:16])
+	if cardID != "" {
+		id = cardID
+	}
 	d.mu.Lock()
 	if d.loadErr != nil {
 		d.mu.Unlock()
 		return nil, d.loadErr
 	}
 	if old := d.items[id]; old != nil {
+		if cardID != "" && (old.OwnerAutomon != d.engine.name || old.ReturnMode != "none") {
+			d.mu.Unlock()
+			return nil, fmt.Errorf("card_id belongs to another card owner or return mode")
+		}
 		copy := *old
 		d.mu.Unlock()
 		if copy.Status == "send_failed" || copy.Status == "send_unknown" {

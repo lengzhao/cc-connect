@@ -162,3 +162,64 @@ func TestInteractiveGroupCardCrossSessionDoesNotResumeWebhook(t *testing.T) {
 		t.Fatal("closed click accepted")
 	}
 }
+
+func TestInteractiveCardCallerIDLifecycle(t *testing.T) {
+	e, p, _, token := decisionFixture(t)
+	ctx := context.Background()
+	req := interactiveCardRequest{Token: token, Action: "create", CardID: "release-123", Spec: decisionSpec()}
+	v, err := e.decisions.manage(ctx, req)
+	if err != nil || v.ID != req.CardID {
+		t.Fatalf("create: %+v %v", v, err)
+	}
+	// Another authenticated session may retry create without sending a second card.
+	next := e.sessions.GetOrCreateActive("test:next")
+	m := &Message{SessionKey: "test:next", Platform: "test", UserID: "alice", MessageID: "next"}
+	e.decisions.remember(p, m, next, e.sessions, m.SessionKey, "")
+	req.Token = e.decisions.tokenFor(m.SessionKey, next.ID)
+	req.Spec.Title = "must not overwrite"
+	v, err = e.decisions.manage(ctx, req)
+	if err != nil || len(p.cards) != 1 || v.Spec.Title == req.Spec.Title {
+		t.Fatalf("duplicate create changed card: %+v %v", v, err)
+	}
+	if _, err = p.handler(v.ID, "alice", "yes", "noted", v.MessageID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.decisions.manage(ctx, interactiveCardRequest{Token: req.Token, Action: "get", CardID: v.ID})
+	if err != nil || got.Status != "answered" || len(got.Interactions) != 1 {
+		t.Fatalf("query: %+v %v", got, err)
+	}
+	rev := got.Revision
+	got, err = e.decisions.manage(ctx, interactiveCardRequest{Token: req.Token, Action: "update", CardID: v.ID, ExpectedRevision: &rev, Spec: decisionSpec()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev = got.Revision
+	got, err = e.decisions.manage(ctx, interactiveCardRequest{Token: req.Token, Action: "close", CardID: v.ID, ExpectedRevision: &rev})
+	if err != nil || got.Status != "closed" {
+		t.Fatalf("close: %+v %v", got, err)
+	}
+	e.decisions = newDecisionService(e, strings.TrimSuffix(e.decisions.path, ".decisions"))
+	got, err = e.decisions.managedCard(req.CardID)
+	if err != nil || got.Status != "closed" || len(got.Interactions) != 1 {
+		t.Fatalf("restart: %+v %v", got, err)
+	}
+}
+
+func TestInteractiveCardCallerIDValidation(t *testing.T) {
+	e, p, _, token := decisionFixture(t)
+	for _, id := range []string{"../escape", "..", "/abs", "a/b", "a?b", "a b", strings.Repeat("a", 161)} {
+		if _, err := e.decisions.manage(context.Background(), interactiveCardRequest{Token: token, Action: "create", CardID: id, Spec: decisionSpec()}); err == nil {
+			t.Fatalf("accepted %q", id)
+		}
+	}
+	if len(p.cards) != 0 {
+		t.Fatal("invalid ID sent card")
+	}
+	ask, err := e.decisions.create(context.Background(), token, decisionSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.decisions.manage(context.Background(), interactiveCardRequest{Token: token, Action: "create", CardID: ask.ID, Spec: decisionSpec()}); err == nil {
+		t.Fatal("reused ask_user identity")
+	}
+}
