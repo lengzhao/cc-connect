@@ -27,6 +27,20 @@ func newCardStore(owner string) (*cardStore, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || token == "" {
 		return nil, fmt.Errorf("invalid card store configuration")
 	}
+	// The host supplies this exact project-to-storage mapping from trusted
+	// configuration. Never infer an alias from a returned card or model input.
+	if raw := os.Getenv("CC_CARD_STORE_OWNER_ALIASES"); raw != "" {
+		var aliases map[string]string
+		if json.Unmarshal([]byte(raw), &aliases) != nil {
+			return nil, fmt.Errorf("invalid card store owner aliases")
+		}
+		if alias, ok := aliases[owner]; ok {
+			if !interactiveCardID.MatchString(alias) {
+				return nil, fmt.Errorf("invalid card store owner alias")
+			}
+			owner = alias
+		}
+	}
 	return &cardStore{base: base, token: token, owner: owner, client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func (s *cardStore) request(ctx context.Context, method, path string, in, out any) error {
@@ -82,9 +96,10 @@ func (d *decisionService) loadRemote() error {
 			return err
 		}
 		for _, v := range data.Items {
-			if v.OwnerAutomon != d.engine.name || v.ID == "" {
+			if v == nil || v.OwnerAutomon != store.owner || v.ID == "" {
 				return fmt.Errorf("invalid remote card owner")
 			}
+			v.OwnerAutomon = d.engine.name
 			switch v.Status {
 			case "sending":
 				v.Status = "send_unknown"
@@ -118,7 +133,8 @@ func (d *decisionService) loadRemote() error {
 func (d *decisionService) persistRemote(v *Decision) error {
 	before := v.StoreRevision
 	v.StoreRevision++
-	payload := map[string]any{"expected_store_revision": before, "snapshot": v}
+	snapshot := d.remoteSnapshot(v)
+	payload := map[string]any{"expected_store_revision": before, "snapshot": snapshot}
 	err := d.store.request(context.Background(), http.MethodPut, d.store.path(v.ID), payload, nil)
 	if err != nil {
 		// The endpoint compares the exact snapshot on retry; never invent a new
@@ -144,7 +160,7 @@ func (d *decisionService) pollCardCommands() {
 	}
 	d.lastCommandPoll = time.Now()
 	d.mu.Unlock()
-	path := "/api/card-commands/" + url.PathEscape(d.engine.name)
+	path := "/api/card-commands/" + url.PathEscape(d.store.owner)
 	var queue struct {
 		Items []struct {
 			ID      string                 `json:"command_id"`
@@ -158,7 +174,7 @@ func (d *decisionService) pollCardCommands() {
 		ctx, cancel := context.WithTimeout(d.engine.ctx, 25*time.Second)
 		v, err := d.manageTrusted(ctx, cmd.Request, DecisionOrigin{}, true)
 		cancel()
-		result := map[string]any{"card": v}
+		result := map[string]any{"card": d.remoteSnapshot(v)}
 		if err != nil {
 			result["error"] = err.Error()
 		}
@@ -180,4 +196,17 @@ func (d *decisionService) runCardCommands() {
 			d.pollCardCommands()
 		}
 	}
+}
+
+// Keep session ownership in the local ID namespace; only the storage boundary
+// uses the configured canonical owner. Copies preserve CAS and card revisions.
+func (d *decisionService) remoteSnapshot(v *Decision) *Decision {
+	if v == nil {
+		return nil
+	}
+	copy := *v
+	if d.store != nil {
+		copy.OwnerAutomon = d.store.owner
+	}
+	return &copy
 }

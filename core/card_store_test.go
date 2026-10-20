@@ -11,6 +11,22 @@ import (
 )
 
 func TestSharedCardStoreSurvivesLostWorkspaceAndRunsManagementWithoutReply(t *testing.T) {
+	for _, alias := range []bool{false, true} {
+		name := "unchanged-owner"
+		if alias {
+			name = "id-project-code-storage"
+		}
+		t.Run(name, func(t *testing.T) { testSharedCardStoreLifecycle(t, alias) })
+	}
+}
+func testSharedCardStoreLifecycle(t *testing.T, alias bool) {
+	owner := "proj"
+	t.Setenv("CC_CARD_STORE_OWNER_ALIASES", "{}")
+	if alias {
+		owner = "canonical-project"
+		t.Setenv("CC_CARD_STORE_OWNER_ALIASES", `{"proj":"canonical-project"}`)
+	}
+
 	var mu sync.Mutex
 	snapshots := map[string]json.RawMessage{}
 	var command map[string]any
@@ -22,8 +38,19 @@ func TestSharedCardStoreSurvivesLostWorkspaceAndRunsManagementWithoutReply(t *te
 			http.Error(w, "unauthorized", 401)
 			return
 		}
+		if !strings.HasPrefix(r.URL.Path, "/api/card-store/"+owner) && !strings.HasPrefix(r.URL.Path, "/api/card-commands/"+owner) {
+			http.Error(w, "wrong owner", 401)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/card-commands/") {
 			if r.Method == http.MethodPut {
+				var result struct {
+					Card *Decision `json:"card"`
+				}
+				if json.NewDecoder(r.Body).Decode(&result) != nil || result.Card == nil || result.Card.OwnerAutomon != owner {
+					http.Error(w, "wrong result owner", 400)
+					return
+				}
 				resultDone = true
 				command = nil
 				json.NewEncoder(w).Encode(map[string]bool{"ok": true})
@@ -51,6 +78,10 @@ func TestSharedCardStoreSurvivesLostWorkspaceAndRunsManagementWithoutReply(t *te
 		json.NewDecoder(r.Body).Decode(&req)
 		var v Decision
 		json.Unmarshal(req.Snapshot, &v)
+		if v.OwnerAutomon != owner {
+			http.Error(w, "wrong snapshot owner", 400)
+			return
+		}
 		var old Decision
 		json.Unmarshal(snapshots[v.ID], &old)
 		if old.StoreRevision != req.Expected {

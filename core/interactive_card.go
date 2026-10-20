@@ -39,7 +39,12 @@ func (d *decisionService) managedCard(id string) (*Decision, error) {
 		}
 		d.mu.Lock()
 		for _, v := range remote.Items {
-			if v.ID == id && v.OwnerAutomon == d.engine.name {
+			if v == nil || v.ID != id || v.OwnerAutomon != d.store.owner {
+				d.mu.Unlock()
+				return nil, fmt.Errorf("invalid remote card owner or identity")
+			}
+			v.OwnerAutomon = d.engine.name
+			{
 				current := d.items[id]
 				if current == nil {
 					d.items[id] = v
