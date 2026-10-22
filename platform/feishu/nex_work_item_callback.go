@@ -81,7 +81,7 @@ func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTrigger
 		},
 	}
 
-	if answer, ok := body["answer"].(map[string]any); ok && answer["fields"] != nil {
+	if answer, ok := body["answer"].(map[string]any); value["hasForm"] == true || (ok && answer["fields"] != nil) {
 		resp.Card = nil
 		resp.Toast.Type = "info"
 		resp.Toast.Content = "正在提交，请以工单处理结果为准。"
