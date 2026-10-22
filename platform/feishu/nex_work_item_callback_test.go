@@ -29,7 +29,7 @@ func TestHandleNexWorkItemCardAction_ReturnsImmediatelyAndRecordsAsync(t *testin
 	defer server.Close()
 
 	p := &Platform{
-		platformName:            "lark",
+		platformName:              "lark",
 		ltsWorkItemCallbackURL:    server.URL + "/api/lark/work-items/callback",
 		ltsWorkItemCallbackAPIKey: "test-key",
 		ltsWorkItemCallbackHTTP:   server.Client(),
@@ -96,5 +96,20 @@ func TestIsNexCallbackValue(t *testing.T) {
 	}
 	if isNexCallbackValue(map[string]any{"action": "approve"}) {
 		t.Fatal("expected false")
+	}
+}
+
+func TestNexWorkItemFormAnswerPreservesFields(t *testing.T) {
+	original := map[string]any{"optionId": "approve"}
+	answer := nexWorkItemFormAnswer(original, map[string]any{"nex_comment": "remark", "note": "hello", "targets": []string{"a"}}).(map[string]any)
+	if answer["optionId"] != "approve" {
+		t.Fatal(answer)
+	}
+	fields := answer["fields"].(map[string]any)
+	if len(fields) != 2 || fields["note"] != "hello" {
+		t.Fatal(fields)
+	}
+	if _, ok := original["fields"]; ok {
+		t.Fatal("mutated original")
 	}
 }

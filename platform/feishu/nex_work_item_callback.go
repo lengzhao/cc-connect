@@ -30,7 +30,7 @@ func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTrigger
 		return nil, false
 	}
 	if strings.TrimSpace(p.ltsWorkItemCallbackURL) == "" {
-		slog.Warn(p.tag()+": nexCallback received but lts_work_item_callback_url is not configured")
+		slog.Warn(p.tag() + ": nexCallback received but lts_work_item_callback_url is not configured")
 		return &callback.CardActionTriggerResponse{
 			Toast: &callback.Toast{Type: "error", Content: "工单回调未配置，请打开 Nex 收件箱操作。"},
 		}, true
@@ -56,7 +56,7 @@ func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTrigger
 		"tenantId":       mapStringValue(value["tenantId"]),
 		"workItemId":     workItemID,
 		"action":         action,
-		"answer":         value["answer"],
+		"answer":         nexWorkItemFormAnswer(value["answer"], event.Event.Action.FormValue),
 		"comment":        comment,
 		"idempotencyKey": idempotencyKey,
 		"messageId":      messageID,
@@ -81,6 +81,11 @@ func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTrigger
 		},
 	}
 
+	if answer, ok := body["answer"].(map[string]any); ok && answer["fields"] != nil {
+		resp.Card = nil
+		resp.Toast.Type = "info"
+		resp.Toast.Content = "正在提交，请以工单处理结果为准。"
+	}
 	go p.postNexWorkItemCallbackAsync(body, messageID)
 
 	slog.Warn(p.tag()+": nex work item card action accepted",
@@ -299,4 +304,25 @@ func resultPresentationForNex(status, label, comment string) (toastType, toastCo
 	default:
 		return "error", "处理失败，请打开 Nex 收件箱", "**你的处理**\n⚠️ 处理失败，请打开 Nex 收件箱操作。"
 	}
+}
+
+// Preserve the server-owned choice and carry only form fields as answer data.
+func nexWorkItemFormAnswer(original any, form map[string]any) any {
+	fields := map[string]any{}
+	for k, v := range form {
+		if k != larkCommentFieldName {
+			fields[k] = v
+		}
+	}
+	if len(fields) == 0 {
+		return original
+	}
+	answer := map[string]any{}
+	if m, ok := original.(map[string]any); ok {
+		for k, v := range m {
+			answer[k] = v
+		}
+	}
+	answer["fields"] = fields
+	return answer
 }
