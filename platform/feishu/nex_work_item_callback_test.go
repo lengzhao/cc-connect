@@ -113,3 +113,37 @@ func TestNexWorkItemFormAnswerPreservesFields(t *testing.T) {
 		t.Fatal("mutated original")
 	}
 }
+
+func TestNativeOverflowRoutesSelectedOption(t *testing.T) {
+	received := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		received <- body
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+	p := &Platform{ltsWorkItemCallbackURL: server.URL, ltsWorkItemCallbackHTTP: server.Client()}
+	value := map[string]any{"nexCallback": true, "workItemId": "wi", "optionRoutes": map[string]any{"reject": map[string]any{"optionId": "reject", "action": "decide", "answer": map[string]any{"optionId": "reject"}}}}
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{Action: &callback.CallBackAction{Value: value, Option: "reject"}}}
+	_, handled := p.handleNexWorkItemCardAction(event)
+	if !handled {
+		t.Fatal("not handled")
+	}
+	select {
+	case body := <-received:
+		if body["action"] != "decide" || body["answer"].(map[string]any)["optionId"] != "reject" || body["idempotencyKey"] != "lark:wi:decide:reject" {
+			t.Fatal(body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no callback")
+	}
+	event.Event.Action.Option = "forged"
+	resp, _ := p.handleNexWorkItemCardAction(event)
+	if resp.Toast.Type != "error" {
+		t.Fatal("unknown option accepted")
+	}
+	if value["action"] != nil {
+		t.Fatal("mutated shared routing")
+	}
+}

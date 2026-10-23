@@ -36,6 +36,20 @@ func (p *Platform) handleNexWorkItemCardAction(event *callback.CardActionTrigger
 		}, true
 	}
 
+	if routes, ok := value["optionRoutes"].(map[string]interface{}); ok {
+		route, ok := routes[event.Event.Action.Option].(map[string]interface{})
+		if !ok {
+			return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "error", Content: "无效的卡片选项，请刷新工单。"}}, true
+		}
+		merged := map[string]interface{}{}
+		for k, v := range value {
+			merged[k] = v
+		}
+		for k, v := range route {
+			merged[k] = v
+		}
+		value = merged
+	}
 	label := mapStringValue(value["label"])
 	action := mapStringValue(value["action"])
 	if label == "" {
